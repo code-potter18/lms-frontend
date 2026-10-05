@@ -36,7 +36,7 @@ interface TrackedOrder {
   id: string;
   orderId: string;
   orderDatetime: string;
-  priority: "STAT" | "URGENT" | "ROUTINE";
+  priority: "URGENT" | "ROUTINE";
   patientId: string;
   patientName: string;
   patientAge: number;
@@ -98,7 +98,7 @@ export default function LabOrders() {
   /* ---------- filters ---------- */
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"ALL" | "COMPLETED" | "IN_PROGRESS" | "PENDING">("ALL");
-  const [priorityFilter, setPriorityFilter] = useState<"ALL" | "STAT" | "URGENT" | "ROUTINE">("ALL");
+  const [priorityFilter, setPriorityFilter] = useState<"ALL" | "URGENT" | "ROUTINE">("ALL");
 
   /* ---------- drawer ---------- */
   const [selectedOrder, setSelectedOrder] = useState<TrackedOrder | null>(null);
@@ -291,8 +291,7 @@ export default function LabOrders() {
 
         const rawP = (order.priority || "Normal").toUpperCase();
         let priority: TrackedOrder["priority"] = "ROUTINE";
-        if (rawP.includes("STAT")) priority = "STAT";
-        else if (rawP.includes("URGENT")) priority = "URGENT";
+        if (rawP.includes("STAT") || rawP.includes("URGENT")) priority = "URGENT";
 
         return {
           id: order.lab_order_id,
@@ -338,12 +337,11 @@ export default function LabOrders() {
     const completed = orders.filter((o) => o.orderStatus === "COMPLETED").length;
     const inProgress = orders.filter((o) => o.orderStatus === "IN_PROGRESS").length;
     const pending = orders.filter((o) => o.orderStatus === "PENDING").length;
-    const stat = orders.filter((o) => o.priority === "STAT").length;
     const totalTests = orders.reduce((a, o) => a + o.totalTests, 0);
     const doneTests = orders.reduce((a, o) => a + o.completedTests, 0);
     const testPct = totalTests > 0 ? Math.round((doneTests / totalTests) * 100) : 0;
     const orderPct = total > 0 ? Math.round((completed / total) * 100) : 0;
-    return { total, completed, inProgress, pending, stat, totalTests, doneTests, testPct, orderPct };
+    return { total, completed, inProgress, pending, totalTests, doneTests, testPct, orderPct };
   }, [orders]);
 
   /* ---------- filtered list ---------- */
@@ -484,7 +482,6 @@ export default function LabOrders() {
                 {/* Priority */}
                 <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value as any)} className="text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500 cursor-pointer">
                   <option value="ALL">Priority: All</option>
-                  <option value="STAT">STAT</option>
                   <option value="URGENT">Urgent</option>
                   <option value="ROUTINE">Routine</option>
                 </select>
@@ -523,7 +520,7 @@ export default function LabOrders() {
                         {/* Order ID */}
                         <td className="py-4 px-5">
                           <span className="font-bold text-slate-900 group-hover:text-[#0b4a8b] block">{o.orderId}</span>
-                          {o.priority === "STAT" ? <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-700 border border-rose-200">STAT</span> : o.priority === "URGENT" ? <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">URGENT</span> : <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500">ROUTINE</span>}
+                          {o.priority === "URGENT" ? <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">URGENT</span> : <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500">ROUTINE</span>}
                           <span className="text-[11px] text-slate-400 block mt-0.5">{new Date(o.orderDatetime).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</span>
                         </td>
                         {/* Patient */}
@@ -602,7 +599,7 @@ export default function LabOrders() {
                 <div>
                   <div className="flex items-center gap-2">
                     <h2 className="text-lg font-extrabold text-slate-900">Order {selectedOrder.orderId}</h2>
-                    {selectedOrder.priority === "STAT" && <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-700 border border-rose-200">STAT</span>}
+                    {selectedOrder.priority === "URGENT" && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">URGENT</span>}
                   </div>
                   <p className="text-xs text-slate-500">{new Date(selectedOrder.orderDatetime).toLocaleString()}</p>
                 </div>
