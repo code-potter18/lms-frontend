@@ -36,7 +36,7 @@ interface TrackedOrder {
   id: string;
   orderId: string;
   orderDatetime: string;
-  priority: "STAT" | "URGENT" | "ROUTINE";
+  priority: "URGENT" | "ROUTINE";
   patientId: string;
   patientName: string;
   patientAge: number;
@@ -98,7 +98,7 @@ export default function LabOrders() {
   /* ---------- filters ---------- */
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"ALL" | "COMPLETED" | "IN_PROGRESS" | "PENDING">("ALL");
-  const [priorityFilter, setPriorityFilter] = useState<"ALL" | "STAT" | "URGENT" | "ROUTINE">("ALL");
+  const [priorityFilter, setPriorityFilter] = useState<"ALL" | "URGENT" | "ROUTINE">("ALL");
 
   /* ---------- drawer ---------- */
   const [selectedOrder, setSelectedOrder] = useState<TrackedOrder | null>(null);
@@ -291,8 +291,7 @@ export default function LabOrders() {
 
         const rawP = (order.priority || "Normal").toUpperCase();
         let priority: TrackedOrder["priority"] = "ROUTINE";
-        if (rawP.includes("STAT")) priority = "STAT";
-        else if (rawP.includes("URGENT")) priority = "URGENT";
+        if (rawP.includes("STAT") || rawP.includes("URGENT")) priority = "URGENT";
 
         return {
           id: order.lab_order_id,
@@ -338,12 +337,11 @@ export default function LabOrders() {
     const completed = orders.filter((o) => o.orderStatus === "COMPLETED").length;
     const inProgress = orders.filter((o) => o.orderStatus === "IN_PROGRESS").length;
     const pending = orders.filter((o) => o.orderStatus === "PENDING").length;
-    const stat = orders.filter((o) => o.priority === "STAT").length;
     const totalTests = orders.reduce((a, o) => a + o.totalTests, 0);
     const doneTests = orders.reduce((a, o) => a + o.completedTests, 0);
     const testPct = totalTests > 0 ? Math.round((doneTests / totalTests) * 100) : 0;
     const orderPct = total > 0 ? Math.round((completed / total) * 100) : 0;
-    return { total, completed, inProgress, pending, stat, totalTests, doneTests, testPct, orderPct };
+    return { total, completed, inProgress, pending, totalTests, doneTests, testPct, orderPct };
   }, [orders]);
 
   /* ---------- filtered list ---------- */
@@ -484,7 +482,6 @@ export default function LabOrders() {
                 {/* Priority */}
                 <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value as any)} className="text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500 cursor-pointer">
                   <option value="ALL">Priority: All</option>
-                  <option value="STAT">STAT</option>
                   <option value="URGENT">Urgent</option>
                   <option value="ROUTINE">Routine</option>
                 </select>
@@ -507,45 +504,24 @@ export default function LabOrders() {
                     <th className="py-3 px-5">Doctor</th>
                     <th className="py-3 px-5 min-w-[260px]">Test Completion</th>
                     <th className="py-3 px-5">Status</th>
+                    <th className="py-3 px-5 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-xs">
                   {isLoading ? (
-                    <tr><td colSpan={5} className="py-16 text-center text-slate-400"><div className="flex flex-col items-center gap-2"><svg className="w-8 h-8 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg><span className="font-medium">Loading orders…</span></div></td></tr>
+                    <tr><td colSpan={6} className="py-16 text-center text-slate-400"><div className="flex flex-col items-center gap-2"><svg className="w-8 h-8 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg><span className="font-medium">Loading orders…</span></div></td></tr>
                   ) : filtered.length === 0 ? (
-                    <tr><td colSpan={5} className="py-16 text-center text-slate-400"><span className="font-semibold text-slate-600 block">No lab orders found</span><span className="text-[11px]">Try changing filters or search query.</span></td></tr>
+                    <tr><td colSpan={6} className="py-16 text-center text-slate-400"><span className="font-semibold text-slate-600 block">No lab orders found</span><span className="text-[11px]">Try changing filters or search query.</span></td></tr>
                   ) : filtered.map((o) => {
                     const isCompleted = o.orderStatus === "COMPLETED";
                     const isInProgress = o.orderStatus === "IN_PROGRESS";
                     return (
                       <tr key={o.id} className="hover:bg-slate-50/80 transition-colors group cursor-pointer" onClick={() => { setSelectedOrder(o); setDrawerOpen(true); }}>
-                        {/* Order ID & Breakdown */}
+                        {/* Order ID */}
                         <td className="py-4 px-5">
-                          <div className="flex items-center gap-2 whitespace-nowrap">
-                            <span className="font-bold text-slate-900 group-hover:text-[#0b4a8b]">{o.orderId}</span>
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); setSelectedOrder(o); setDrawerOpen(true); }}
-                              className="px-2 py-0.5 rounded-lg border border-slate-200 text-slate-700 hover:text-white hover:bg-[#0b4a8b] hover:border-[#0b4a8b] text-[11px] font-bold transition-all cursor-pointer inline-flex items-center gap-1 shadow-2xs"
-                            >
-                              Breakdown
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-                              </svg>
-                            </button>
-                          </div>
-                          <div className="flex items-center gap-2 mt-1">
-                            {o.priority === "STAT" ? (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-700 border border-rose-200">STAT</span>
-                            ) : o.priority === "URGENT" ? (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">URGENT</span>
-                            ) : (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500">ROUTINE</span>
-                            )}
-                            <span className="text-[11px] text-slate-400">
-                              {new Date(o.orderDatetime).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
-                            </span>
-                          </div>
+                          <span className="font-bold text-slate-900 group-hover:text-[#0b4a8b] block">{o.orderId}</span>
+                          {o.priority === "URGENT" ? <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">URGENT</span> : <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500">ROUTINE</span>}
+                          <span className="text-[11px] text-slate-400 block mt-0.5">{new Date(o.orderDatetime).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</span>
                         </td>
                         {/* Patient */}
                         <td className="py-4 px-5">
@@ -590,6 +566,12 @@ export default function LabOrders() {
                             </span>
                           )}
                         </td>
+                        {/* Action */}
+                        <td className="py-4 px-5 text-right">
+                          <button type="button" onClick={(e) => { e.stopPropagation(); setSelectedOrder(o); setDrawerOpen(true); }} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:text-white hover:bg-[#0b4a8b] hover:border-[#0b4a8b] text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1">
+                            Breakdown <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
@@ -617,7 +599,7 @@ export default function LabOrders() {
                 <div>
                   <div className="flex items-center gap-2">
                     <h2 className="text-lg font-extrabold text-slate-900">Order {selectedOrder.orderId}</h2>
-                    {selectedOrder.priority === "STAT" && <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-700 border border-rose-200">STAT</span>}
+                    {selectedOrder.priority === "URGENT" && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">URGENT</span>}
                   </div>
                   <p className="text-xs text-slate-500">{new Date(selectedOrder.orderDatetime).toLocaleString()}</p>
                 </div>
