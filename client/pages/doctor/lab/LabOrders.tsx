@@ -97,7 +97,7 @@ export default function LabOrders() {
 
   /* ---------- filters ---------- */
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<"ALL" | "COMPLETED" | "IN_PROGRESS" | "PENDING" | "STAT">("ALL");
+  const [activeTab, setActiveTab] = useState<"ALL" | "COMPLETED" | "IN_PROGRESS" | "PENDING">("ALL");
   const [priorityFilter, setPriorityFilter] = useState<"ALL" | "STAT" | "URGENT" | "ROUTINE">("ALL");
 
   /* ---------- drawer ---------- */
@@ -352,7 +352,6 @@ export default function LabOrders() {
       if (activeTab === "COMPLETED" && o.orderStatus !== "COMPLETED") return false;
       if (activeTab === "IN_PROGRESS" && o.orderStatus !== "IN_PROGRESS") return false;
       if (activeTab === "PENDING" && o.orderStatus !== "PENDING") return false;
-      if (activeTab === "STAT" && o.priority !== "STAT") return false;
       if (priorityFilter !== "ALL" && o.priority !== priorityFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -476,9 +475,8 @@ export default function LabOrders() {
                     ["COMPLETED", `Completed (${metrics.completed})`],
                     ["IN_PROGRESS", `In Progress (${metrics.inProgress})`],
                     ["PENDING", `Pending (${metrics.pending})`],
-                    ["STAT", `STAT (${metrics.stat})`],
                   ] as const).map(([key, label]) => (
-                    <button key={key} type="button" onClick={() => setActiveTab(key)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${activeTab === key ? (key === "COMPLETED" ? "bg-emerald-600 text-white" : key === "IN_PROGRESS" ? "bg-amber-600 text-white" : key === "STAT" ? "bg-rose-600 text-white" : "bg-white text-slate-900 shadow-xs") : "text-slate-600 hover:text-slate-900"}`}>
+                    <button key={key} type="button" onClick={() => setActiveTab(key)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${activeTab === key ? (key === "COMPLETED" ? "bg-emerald-600 text-white" : key === "IN_PROGRESS" ? "bg-amber-600 text-white" : "bg-white text-slate-900 shadow-xs") : "text-slate-600 hover:text-slate-900"}`}>
                       {label}
                     </button>
                   ))}
