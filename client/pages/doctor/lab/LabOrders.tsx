@@ -232,15 +232,62 @@ export default function LabOrders() {
           });
         }
 
-        const totalTests = tests.length;
-        const completedTests = tests.filter((t) => t.status === "COMPLETED").length;
-        const inProgressTests = tests.filter((t) => t.status === "IN_PROGRESS" || t.status === "VERIFIED").length;
-        const pendingTests = tests.filter((t) => t.status === "PENDING" || t.status === "REJECTED").length;
-        const completionPct = totalTests > 0 ? Math.round((completedTests / totalTests) * 100) : 0;
+        const rawOrderStatus = (order.order_status || "").trim().toUpperCase();
+        const isDbCompleted = rawOrderStatus === "COMPLETED" || rawOrderStatus === "COMPLETE";
+        const isDbInProgress = [
+          "IN_PROGRESS",
+          "IN PROGRESS",
+          "IN-PROGRESS",
+          "PROCESSING",
+          "COLLECTED",
+          "SAMPLE_COLLECTED",
+          "SAMPLE COLLECTED",
+          "TESTING",
+          "RUNNING",
+          "VERIFIED",
+        ].includes(rawOrderStatus);
+
+        let finalTests = tests;
+        let totalTests = finalTests.length;
+        let completedTests = finalTests.filter((t) => t.status === "COMPLETED").length;
+        let inProgressTests = finalTests.filter((t) => t.status === "IN_PROGRESS" || t.status === "VERIFIED").length;
+        let pendingTests = finalTests.filter((t) => t.status === "PENDING" || t.status === "REJECTED").length;
+        let completionPct = totalTests > 0 ? Math.round((completedTests / totalTests) * 100) : 0;
 
         let orderStatus: TrackedOrder["orderStatus"] = "PENDING";
-        if (order.order_status?.toUpperCase() === "COMPLETED" || completionPct === 100) orderStatus = "COMPLETED";
-        else if (completedTests > 0 || inProgressTests > 0) orderStatus = "IN_PROGRESS";
+        if (isDbCompleted || completionPct === 100 || (totalTests > 0 && completedTests === totalTests)) {
+          orderStatus = "COMPLETED";
+          completionPct = 100;
+          completedTests = totalTests;
+          inProgressTests = 0;
+          pendingTests = 0;
+          finalTests = finalTests.map((t) => ({
+            ...t,
+            status: "COMPLETED" as const,
+            statusLabel: "Completed",
+            completedAt: t.completedAt || (order.updated_at ? new Date(order.updated_at).toLocaleString() : new Date().toLocaleString()),
+          }));
+        } else if (
+          isDbInProgress ||
+          completedTests > 0 ||
+          inProgressTests > 0 ||
+          completionPct > 0 ||
+          finalTests.some((t) => !!t.barcode) ||
+          (typeof window !== "undefined" && !!localStorage.getItem(`generated_barcode_${order.lab_order_id}`))
+        ) {
+          orderStatus = "IN_PROGRESS";
+          if (completedTests === 0 && inProgressTests === 0 && isDbInProgress) {
+            inProgressTests = totalTests;
+            pendingTests = 0;
+            finalTests = finalTests.map((t) => ({
+              ...t,
+              status: "IN_PROGRESS" as const,
+              statusLabel: rawOrderStatus === "COLLECTED" ? "Specimen Collected" : "In Progress",
+            }));
+          }
+        } else {
+          orderStatus = "PENDING";
+        }
 
         const rawP = (order.priority || "Normal").toUpperCase();
         let priority: TrackedOrder["priority"] = "ROUTINE";
@@ -270,7 +317,7 @@ export default function LabOrders() {
           pendingTests,
           completionPct,
           orderStatus,
-          tests,
+          tests: finalTests,
         };
       });
 
@@ -471,8 +518,8 @@ export default function LabOrders() {
                   ) : filtered.length === 0 ? (
                     <tr><td colSpan={6} className="py-16 text-center text-slate-400"><span className="font-semibold text-slate-600 block">No lab orders found</span><span className="text-[11px]">Try changing filters or search query.</span></td></tr>
                   ) : filtered.map((o) => {
-                    const full = o.completionPct === 100;
-                    const partial = o.completionPct > 0 && o.completionPct < 100;
+                    const isCompleted = o.orderStatus === "COMPLETED";
+                    const isInProgress = o.orderStatus === "IN_PROGRESS";
                     return (
                       <tr key={o.id} className="hover:bg-slate-50/80 transition-colors group cursor-pointer" onClick={() => { setSelectedOrder(o); setDrawerOpen(true); }}>
                         {/* Order ID */}
@@ -494,10 +541,10 @@ export default function LabOrders() {
                         <td className="py-4 px-5">
                           <div className="space-y-1.5">
                             <div className="flex items-center justify-between">
-                              <span className="font-bold text-slate-800 flex items-center gap-1.5"><span className={`w-1.5 h-1.5 rounded-full ${full ? "bg-emerald-500" : partial ? "bg-amber-500" : "bg-slate-400"}`} />{o.completedTests} of {o.totalTests} Tests Completed</span>
-                              <span className={`font-extrabold text-[11px] ${full ? "text-emerald-700" : partial ? "text-amber-700" : "text-slate-500"}`}>{o.completionPct}%</span>
+                              <span className="font-bold text-slate-800 flex items-center gap-1.5"><span className={`w-1.5 h-1.5 rounded-full ${isCompleted ? "bg-emerald-500" : isInProgress ? "bg-amber-500 animate-pulse" : "bg-slate-400"}`} />{o.completedTests} of {o.totalTests} Tests Completed</span>
+                              <span className={`font-extrabold text-[11px] ${isCompleted ? "text-emerald-700" : isInProgress ? "text-amber-700" : "text-slate-500"}`}>{o.completionPct}%</span>
                             </div>
-                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${full ? "bg-emerald-500" : partial ? "bg-amber-500" : "bg-slate-300"}`} style={{ width: `${o.completionPct}%` }} /></div>
+                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${isCompleted ? "bg-emerald-500" : isInProgress ? "bg-amber-500" : "bg-slate-300"}`} style={{ width: `${o.completionPct}%` }} /></div>
                             <div className="flex flex-wrap gap-1 pt-0.5">
                               {o.tests.map((t) => (
                                 <span key={t.id} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold border ${t.status === "COMPLETED" ? "bg-emerald-50 text-emerald-800 border-emerald-200" : t.status === "IN_PROGRESS" ? "bg-amber-50 text-amber-800 border-amber-200" : t.status === "VERIFIED" ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-slate-50 text-slate-600 border-slate-200"}`} title={`${t.testName} — ${t.statusLabel}`}>
@@ -510,9 +557,19 @@ export default function LabOrders() {
                         </td>
                         {/* Status */}
                         <td className="py-4 px-5">
-                          {full ? <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />Completed</span>
-                          : partial ? <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200"><span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />In Progress</span>
-                          : <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200"><span className="w-1.5 h-1.5 rounded-full bg-slate-400" />Pending</span>}
+                          {isCompleted ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />Completed
+                            </span>
+                          ) : isInProgress ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />In Progress
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />Pending
+                            </span>
+                          )}
                         </td>
                         {/* Action */}
                         <td className="py-4 px-5 text-right">
@@ -558,13 +615,18 @@ export default function LabOrders() {
             {/* Drawer body */}
             <div className="flex-1 overflow-y-auto p-6 space-y-5">
               {/* Progress banner */}
-              <div className={`p-4 rounded-xl border ${selectedOrder.completionPct === 100 ? "bg-emerald-50/70 border-emerald-200" : selectedOrder.completionPct > 0 ? "bg-amber-50/70 border-amber-200" : "bg-slate-50 border-slate-200"}`}>
+              <div className={`p-4 rounded-xl border ${selectedOrder.orderStatus === "COMPLETED" ? "bg-emerald-50/70 border-emerald-200" : selectedOrder.orderStatus === "IN_PROGRESS" ? "bg-amber-50/70 border-amber-200" : "bg-slate-50 border-slate-200"}`}>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Completion</span>
-                  <span className={`text-sm font-extrabold ${selectedOrder.completionPct === 100 ? "text-emerald-700" : selectedOrder.completionPct > 0 ? "text-amber-700" : "text-slate-600"}`}>{selectedOrder.completedTests} of {selectedOrder.totalTests} Tests ({selectedOrder.completionPct}%)</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Status</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${selectedOrder.orderStatus === "COMPLETED" ? "bg-emerald-100 text-emerald-800 border border-emerald-200" : selectedOrder.orderStatus === "IN_PROGRESS" ? "bg-amber-100 text-amber-800 border border-amber-200" : "bg-slate-200 text-slate-700 border border-slate-300"}`}>
+                      {selectedOrder.orderStatus === "COMPLETED" ? "Completed" : selectedOrder.orderStatus === "IN_PROGRESS" ? "In Progress" : "Pending"}
+                    </span>
+                  </div>
+                  <span className={`text-sm font-extrabold ${selectedOrder.orderStatus === "COMPLETED" ? "text-emerald-700" : selectedOrder.orderStatus === "IN_PROGRESS" ? "text-amber-700" : "text-slate-600"}`}>{selectedOrder.completedTests} of {selectedOrder.totalTests} Tests ({selectedOrder.completionPct}%)</span>
                 </div>
                 <div className="w-full h-2.5 bg-white/80 rounded-full overflow-hidden border border-slate-200">
-                  <div className={`h-full rounded-full transition-all duration-500 ${selectedOrder.completionPct === 100 ? "bg-emerald-500" : selectedOrder.completionPct > 0 ? "bg-amber-500" : "bg-slate-300"}`} style={{ width: `${selectedOrder.completionPct}%` }} />
+                  <div className={`h-full rounded-full transition-all duration-500 ${selectedOrder.orderStatus === "COMPLETED" ? "bg-emerald-500" : selectedOrder.orderStatus === "IN_PROGRESS" ? "bg-amber-500" : "bg-slate-300"}`} style={{ width: `${selectedOrder.completionPct}%` }} />
                 </div>
               </div>
 
@@ -614,7 +676,7 @@ export default function LabOrders() {
                         ) : <span className="text-slate-400 italic text-[11px]">No barcode yet</span>}
                         {t.completedAt && <span className="text-[11px] text-slate-500">{t.completedAt}</span>}
                       </div>
-                      {/* Results */}
+                      {/* Findings / Results */}
                       {t.resultSummary && <div className="p-2 rounded-lg bg-emerald-50/60 border border-emerald-100 text-xs text-emerald-950"><span className="text-[10px] font-bold text-emerald-800 uppercase block mb-0.5">Findings:</span>{t.resultSummary}</div>}
                       {t.parameters && t.parameters.length > 0 && (
                         <div className="overflow-x-auto rounded-lg border border-slate-100">
