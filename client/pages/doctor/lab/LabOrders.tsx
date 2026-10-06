@@ -418,7 +418,7 @@ export default function LabOrders() {
             <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-xs flex items-center justify-between relative overflow-hidden">
               <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
               <div className="relative">
-                <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">Totally Completed</span>
+                <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">Order Completed</span>
                 <div className="flex items-baseline gap-2 mt-1"><h3 className="text-2xl font-extrabold text-emerald-950">{metrics.completed}</h3><span className="text-xs font-bold text-emerald-700">{metrics.orderPct}%</span></div>
                 <p className="text-[11px] text-emerald-600/80 mt-0.5">All tests done & signed</p>
               </div>
@@ -429,7 +429,7 @@ export default function LabOrders() {
             {/* In Progress */}
             <div className="bg-white rounded-2xl p-5 border border-amber-200/80 shadow-xs flex items-center justify-between">
               <div>
-                <div className="flex items-center gap-1.5"><span className="text-[11px] font-semibold text-amber-700 uppercase tracking-wider">In Progress</span><span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /></div>
+                <div className="flex items-center gap-1.5"><span className="text-[11px] font-semibold text-amber-700 uppercase tracking-wider">Order In Progress</span><span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /></div>
                 <h3 className="text-2xl font-extrabold text-amber-950 mt-1">{metrics.inProgress}</h3>
                 <p className="text-[11px] text-amber-600/80 mt-0.5">Partial completion</p>
               </div>
@@ -440,7 +440,7 @@ export default function LabOrders() {
             {/* Pending */}
             <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs flex items-center justify-between">
               <div>
-                <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Pending</span>
+                <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Order Pending</span>
                 <h3 className="text-2xl font-extrabold text-slate-900 mt-1">{metrics.pending}</h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">0% tests completed</p>
               </div>
@@ -470,9 +470,9 @@ export default function LabOrders() {
                 <div className="flex items-center gap-1 p-1 bg-slate-100/90 rounded-xl overflow-x-auto">
                   {([
                     ["ALL", `All (${metrics.total})`],
-                    ["COMPLETED", `Completed (${metrics.completed})`],
-                    ["IN_PROGRESS", `In Progress (${metrics.inProgress})`],
-                    ["PENDING", `Pending (${metrics.pending})`],
+                    ["COMPLETED", `Order Completed (${metrics.completed})`],
+                    ["IN_PROGRESS", `Order In Progress (${metrics.inProgress})`],
+                    ["PENDING", `Order Pending (${metrics.pending})`],
                   ] as const).map(([key, label]) => (
                     <button key={key} type="button" onClick={() => setActiveTab(key)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${activeTab === key ? (key === "COMPLETED" ? "bg-emerald-600 text-white" : key === "IN_PROGRESS" ? "bg-amber-600 text-white" : "bg-white text-slate-900 shadow-xs") : "text-slate-600 hover:text-slate-900"}`}>
                       {label}
