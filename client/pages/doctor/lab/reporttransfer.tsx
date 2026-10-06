@@ -4,6 +4,7 @@ import { getUser, remove } from "@/utils/token";
 import { toast } from "@/hooks/use-toast";
 import LabNav from "./labnav";
 import { LabNotificationBell } from "@/components/hms/LabNotificationBell";
+import { UserProfileDropdown } from "@/components/ui/User_profile_dropdown";
 import { getDisplayBarcode } from "./reportgeneration";
 import { labReportApi, LabReportRecord } from "@/api/labReport.api";
 import { labOrderApi, labOrderItemApi, LabOrderRecord, LabOrderItemRecord } from "@/api/labOrder.api";
@@ -1268,49 +1269,40 @@ export default function ReportTransfer() {
           <>
             {/* TopNavbar */}
             <header
-              className="h-20 bg-white border-b border-slate-100 px-10 flex items-center justify-end sticky top-0 z-10"
+              className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-8 py-4 flex items-center justify-between"
               data-purpose="dashboard-header"
             >
-              <div className="flex items-center gap-6">
-                {/* Lab Notification Bell with Live Alerts */}
-                <LabNotificationBell size="md" />
-
-                {/* Role Label & Profile Avatar & Logout */}
-                <div className="flex items-center gap-3 pl-1">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-[#0b57d0] text-white font-bold text-xs flex items-center justify-center shadow-xs">
-                      {displayName.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex flex-col text-left">
-                      <span className="text-xs font-semibold text-slate-800 leading-tight">
-                        {displayName}
-                      </span>
-                      <span className="text-[10px] text-slate-500 leading-tight">
-                        {displayRole}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    title="Sign Out"
-                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                      />
-                    </svg>
-                  </button>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-[#0b4a8b]">
+                  <svg className="w-5 h-5 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
+                  </svg>
                 </div>
+                <div>
+                  <h1 className="text-xl font-bold text-slate-900 tracking-tight">Report Transfer</h1>
+                  <p className="text-xs text-slate-500">Dispatch completed diagnostic reports to consulting doctors and wards</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={fetchRealData}
+                  disabled={isLoading}
+                  className="p-2 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-600 hover:text-slate-900 shadow-xs transition-all cursor-pointer disabled:opacity-50"
+                  title="Refresh"
+                >
+                  <svg className={`w-4 h-4 ${isLoading ? "animate-spin text-blue-600" : ""}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                  </svg>
+                </button>
+                <LabNotificationBell size="md" />
+                <UserProfileDropdown
+                  userName={displayName}
+                  userSubtext={displayRole}
+                  onLogout={handleLogout}
+                  profilePath="/lab/profile"
+                  hideNotifications
+                />
               </div>
             </header>
 
