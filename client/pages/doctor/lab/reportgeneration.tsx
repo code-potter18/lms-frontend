@@ -2197,64 +2197,51 @@ export default function ReportGeneration() {
             <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
               {/* StatCardsRow */}
               <section
-                className="grid grid-cols-1 sm:grid-cols-2 gap-5"
+                className="grid grid-cols-1 sm:grid-cols-2 gap-4"
                 data-purpose="kpi-metric-cards"
               >
                 {/* Card 1: Report Generated */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#def7ec] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#059669] stroke-[2.5]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        d="M5 13l4 4L19 7"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#059669]">
+                <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-xs flex items-center justify-between relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
+                  <div className="relative">
+                    <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
                       Report Generated
                     </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
+                    <h3 className="text-2xl font-extrabold text-emerald-950 mt-1">
                       {generatedCount}
                     </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
+                    <p className="text-[11px] text-emerald-600/80 mt-0.5">
                       Reports generated successfully
                     </p>
+                  </div>
+                  <div className="w-11 h-11 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 relative">
+                    <svg className="w-5 h-5 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                    </svg>
                   </div>
                 </div>
 
                 {/* Card 2: Report Pending */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#e0edff] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#2563eb] stroke-[2.2]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#2563eb]">
-                      Report Pending
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
+                <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs flex items-center justify-between relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-20 h-20 bg-blue-50/50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
+                  <div className="relative">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                        Report Pending
+                      </span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                    </div>
+                    <h3 className="text-2xl font-extrabold text-slate-900 mt-1">
                       {pendingReportCount}
                     </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
+                    <p className="text-[11px] text-slate-400 mt-0.5">
                       Awaiting report generation
                     </p>
+                  </div>
+                  <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 relative">
+                    <svg className="w-5 h-5 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                    </svg>
                   </div>
                 </div>
               </section>
