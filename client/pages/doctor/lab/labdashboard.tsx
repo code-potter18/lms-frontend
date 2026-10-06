@@ -1739,7 +1739,7 @@ export default function LabDashboard() {
                     className="text-2xl font-bold text-slate-800 tracking-tight"
                     data-purpose="page-title"
                   >
-                    Sample Registration & Tests
+                    Sample Registration
                   </h1>
                   {/* Top Right Actions: Search and Filter */}
                   <div
@@ -1933,9 +1933,6 @@ export default function LabDashboard() {
                         <th className="py-5 px-6 font-bold" scope="col">
                           REQUESTED BY
                         </th>
-                        <th className="py-5 px-6 font-bold" scope="col">
-                          TESTS
-                        </th>
                         <th
                           className="py-5 px-6 font-bold leading-tight"
                           scope="col"
@@ -1956,7 +1953,7 @@ export default function LabDashboard() {
                     <tbody className="divide-y divide-slate-100 text-[14px] text-slate-600">
                       {isLoading ? (
                         <tr>
-                          <td colSpan={6} className="py-14 text-center text-slate-500">
+                          <td colSpan={5} className="py-14 text-center text-slate-500">
                             <div className="flex flex-col items-center justify-center gap-3">
                               <div className="w-8 h-8 border-3 border-[#0b57d0] border-t-transparent rounded-full animate-spin"></div>
                               <span className="text-sm font-medium text-slate-600">
@@ -1968,7 +1965,7 @@ export default function LabDashboard() {
                       ) : filteredTests.length === 0 ? (
                         <tr>
                           <td
-                            colSpan={6}
+                            colSpan={5}
                             className="py-10 text-center text-slate-400 text-sm"
                           >
                             No test records found matching your search.
@@ -1990,9 +1987,6 @@ export default function LabDashboard() {
                             </td>
                             <td className="py-5 px-6 whitespace-nowrap">
                               {test.requestedBy}
-                            </td>
-                            <td className="py-5 px-6 whitespace-nowrap">
-                              {test.tests}
                             </td>
                             <td className="py-5 px-6 leading-snug whitespace-nowrap">
                               {test.date ? (
