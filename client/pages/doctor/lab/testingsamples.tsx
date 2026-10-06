@@ -2047,7 +2047,7 @@ export default function TestingSamples() {
           <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
           {/* StatCardsRow */}
           <section
-            className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5"
+            className="grid grid-cols-1 sm:grid-cols-2 gap-5"
             data-purpose="kpi-metric-cards"
           >
             {/* Card 1: Test Completed */}
@@ -2104,64 +2104,6 @@ export default function TestingSamples() {
                 </h3>
                 <p className="text-[12px] text-slate-400 font-normal mt-0.5">
                   Results pending verification
-                </p>
-              </div>
-            </div>
-
-            {/* Card 3: Test Overdue */}
-            <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-              <div className="w-14 h-14 rounded-full bg-[#fef3c7] flex items-center justify-center shrink-0">
-                <svg
-                  className="w-6 h-6 text-[#d97706] stroke-[2.2]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </div>
-              <div>
-                <span className="text-[13px] font-semibold text-[#d97706]">
-                  Test Overdue
-                </span>
-                <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                  {overdueCount}
-                </h3>
-                <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                  Tests past the expected time
-                </p>
-              </div>
-            </div>
-
-            {/* Card 4: Repeat Test Required */}
-            <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-              <div className="w-14 h-14 rounded-full bg-[#fee2e2] flex items-center justify-center shrink-0">
-                <svg
-                  className="w-6 h-6 text-[#dc2626] stroke-[2.2]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </div>
-              <div>
-                <span className="text-[13px] font-semibold text-[#dc2626]">
-                  Repeat Test Required
-                </span>
-                <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                  {flaggedCount}
-                </h3>
-                <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                  Tests need to be repeated
                 </p>
               </div>
             </div>
