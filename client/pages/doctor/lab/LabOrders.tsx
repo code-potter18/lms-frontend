@@ -519,9 +519,17 @@ export default function LabOrders() {
                       <tr key={o.id} className="hover:bg-slate-50/80 transition-colors group cursor-pointer" onClick={() => { setSelectedOrder(o); setDrawerOpen(true); }}>
                         {/* Order ID */}
                         <td className="py-4 px-5">
-                          <span className="font-bold text-slate-900 group-hover:text-[#0b4a8b] block">{o.orderId}</span>
-                          {o.priority === "URGENT" ? <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">URGENT</span> : <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500">ROUTINE</span>}
-                          <span className="text-[11px] text-slate-400 block mt-0.5">{new Date(o.orderDatetime).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                          <div className="flex items-center gap-2 whitespace-nowrap">
+                            <span className="font-bold text-slate-900 group-hover:text-[#0b4a8b]">{o.orderId}</span>
+                            {o.priority === "URGENT" ? (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">URGENT</span>
+                            ) : (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500">ROUTINE</span>
+                            )}
+                            <span className="text-[11px] text-slate-400">
+                              {new Date(o.orderDatetime).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
+                            </span>
+                          </div>
                         </td>
                         {/* Patient */}
                         <td className="py-4 px-5">
