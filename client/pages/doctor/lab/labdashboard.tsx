@@ -723,9 +723,9 @@ export default function LabDashboard() {
     <div className="min-h-screen flex bg-[#f8fafd] text-[#1e293b] antialiased selection:bg-blue-100 font-sans">
       {/* Global Lab Navigation Sidebar */}
       <LabNav
-        activeTab="Dashboard"
+        activeTab="Sample Registration"
         onTabChange={(tab) => {
-          if (tab === "Dashboard") {
+          if (tab === "Sample Registration") {
             handleBackToDashboard();
           }
         }}
@@ -750,7 +750,7 @@ export default function LabDashboard() {
                     type="button"
                     onClick={handleBackToDashboard}
                     className="p-1.5 -ml-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
-                    title="Back to Dashboard"
+                    title="Back to Sample Registration"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
@@ -1739,7 +1739,7 @@ export default function LabDashboard() {
                     className="text-2xl font-bold text-slate-800 tracking-tight"
                     data-purpose="page-title"
                   >
-                    Tests Details
+                    Sample Registration & Tests
                   </h1>
                   {/* Top Right Actions: Search and Filter */}
                   <div

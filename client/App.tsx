@@ -591,6 +591,15 @@ const App = () => (
                 path="/lab/dashboard"
                 element={
                   <ProtectedRoute>
+                    <LabOrders />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/lab/sample-registration"
+                element={
+                  <ProtectedRoute>
                     <LabDashboard />
                   </ProtectedRoute>
                 }

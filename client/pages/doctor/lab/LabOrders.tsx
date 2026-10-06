@@ -371,7 +371,7 @@ export default function LabOrders() {
 
   return (
     <div className="flex h-screen bg-[#F8FAFC] font-sans antialiased overflow-hidden">
-      <LabNav activeTab="Lab Orders" />
+      <LabNav activeTab="Dashboard" />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto pl-64">
         {/* ---- Header ---- */}
@@ -383,7 +383,7 @@ export default function LabOrders() {
               </svg>
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900 tracking-tight">Lab Orders & Progress Tracking</h1>
+              <h1 className="text-xl font-bold text-slate-900 tracking-tight">Lab Dashboard</h1>
               <p className="text-xs text-slate-500">Track test completion per order and overall completed orders</p>
             </div>
           </div>

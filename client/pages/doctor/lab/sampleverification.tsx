@@ -3076,17 +3076,17 @@ export default function SampleVerification() {
                                   No Specimen Barcodes Generated Yet
                                 </h4>
                                 <p className="text-sm text-slate-500 mb-4 leading-relaxed">
-                                  Specimens appear here only after barcode labels have been generated for patients in the Lab Dashboard.
+                                  Specimens appear here only after barcode labels have been generated for patients in Sample Registration.
                                 </p>
                                 <button
                                   type="button"
-                                  onClick={() => navigate("/lab/dashboard")}
+                                  onClick={() => navigate("/lab/sample-registration")}
                                   className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#0052cc] hover:bg-blue-700 text-white rounded-lg text-sm font-semibold shadow-sm transition-colors cursor-pointer"
                                 >
                                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                                   </svg>
-                                  <span>Go to Lab Dashboard to Generate Barcodes</span>
+                                  <span>Go to Sample Registration to Generate Barcodes</span>
                                 </button>
                               </div>
                             </div>
