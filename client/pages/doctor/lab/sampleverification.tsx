@@ -2665,7 +2665,7 @@ export default function SampleVerification() {
             <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
             {/* StatCardsRow */}
             <section
-              className="grid grid-cols-1 sm:grid-cols-2 gap-4"
+              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4"
               data-purpose="kpi-metric-cards"
             >
               {/* Card 1: Sample Verified */}
