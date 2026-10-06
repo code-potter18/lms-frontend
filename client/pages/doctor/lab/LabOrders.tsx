@@ -541,12 +541,20 @@ export default function LabOrders() {
                             </div>
                             <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${isCompleted ? "bg-emerald-500" : isInProgress ? "bg-amber-500" : "bg-slate-300"}`} style={{ width: `${o.completionPct}%` }} /></div>
                             <div className="flex flex-wrap gap-1 pt-0.5">
-                              {o.tests.map((t) => (
+                              {o.tests.slice(0, 3).map((t) => (
                                 <span key={t.id} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold border ${t.status === "COMPLETED" ? "bg-emerald-50 text-emerald-800 border-emerald-200" : t.status === "IN_PROGRESS" ? "bg-amber-50 text-amber-800 border-amber-200" : t.status === "VERIFIED" ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-slate-50 text-slate-600 border-slate-200"}`} title={`${t.testName} — ${t.statusLabel}`}>
                                   {t.testCode}
                                   {t.status === "COMPLETED" ? <svg className="w-2.5 h-2.5 text-emerald-600" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg> : t.status === "IN_PROGRESS" ? <span className="w-1 h-1 rounded-full bg-amber-500" /> : null}
                                 </span>
                               ))}
+                              {o.tests.length > 3 && (
+                                <span
+                                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200 transition-colors"
+                                  title={o.tests.slice(3).map((t) => `${t.testCode} (${t.testName})`).join(", ")}
+                                >
+                                  +{o.tests.length - 3} more
+                                </span>
+                              )}
                             </div>
                           </div>
                         </td>
