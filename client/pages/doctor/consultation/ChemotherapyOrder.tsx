@@ -112,6 +112,40 @@ const dilutionToHydrationRow = (
   guidance: dilution.comment ?? "",
 });
 
+/* The Dilution tab's template row: a protocol DILUTION DETAILS entry
+   (item-attached or protocol-level) as a table row. The volume and its unit
+   travel together in `volume` ("500 mL"), the one column the plan item
+   stores, and `dilutionSolution` / `administrationDetail` carry the diluent
+   and the comment. An item-attached dilution without a medicine of its own
+   is the dilution of its item's drug, so it takes that drug's name. */
+const protocolDilutionToDrug = (
+  dilution: RegimenProtocolDilution,
+  index: number,
+  item?: RegimenProtocolItem
+): Drug => ({
+  id: index,
+  name:
+    dilution.medicine_master?.medicine_name ||
+    dilution.drug_brand_name ||
+    (!dilution.medicine_id || dilution.medicine_id === item?.medicine_id
+      ? item?.medicine_master?.medicine_name ||
+        item?.medicine_master?.generic_name
+      : "") ||
+    "",
+  form: dilution.form ?? "",
+  dose: dilution.dose != null ? String(Number(dilution.dose)) : "",
+  unit: dilution.dose_unit ?? "",
+  volume: [
+    dilution.dilution_volume != null ? String(Number(dilution.dilution_volume)) : "",
+    dilution.dilution_volume_unit ?? "",
+  ]
+    .filter(Boolean)
+    .join(" "),
+  medicineId: dilution.medicine_id ?? item?.medicine_id ?? undefined,
+  dilutionSolution: dilution.diluent ?? null,
+  administrationDetail: dilution.comment ?? null,
+});
+
 const planHydrationToRow = (
   record: PlanHydrationRecord,
   index: number
@@ -178,7 +212,7 @@ const hydrationPayload = (rows: HydrationRow[]) =>
 /* Marks a Drug Name value that is a typed name, not a medicine. */
 const CUSTOM_DRUG_VALUE = "__custom_drug__";
 
-type RowKind = "drug" | "premedication" | "supportive";
+type RowKind = "drug" | "premedication" | "supportive" | "dilution";
 
 const ChemotherapyOrder: React.FC<{
   embedded?: boolean;
@@ -238,6 +272,7 @@ const ChemotherapyOrder: React.FC<{
     []
   );
   const [supportiveDrugs, setSupportiveDrugs] = useState<Drug[]>([]);
+  const [dilutionDrugs, setDilutionDrugs] = useState<Drug[]>([]);
 
   const userTouched = useRef({
     cycleDay: false,
@@ -245,6 +280,7 @@ const ChemotherapyOrder: React.FC<{
     drugs: false,
     premedication: false,
     supportive: false,
+    dilution: false,
     hydration: false,
   });
 
@@ -646,6 +682,28 @@ const ChemotherapyOrder: React.FC<{
       .sort((a, b) => (a.drug_sequence ?? 0) - (b.drug_sequence ?? 0))
       .map(planItemToDrug);
 
+  /* A saved order's Dilution rows. An order saved while the template
+     listed every item-attached dilution twice stored each one twice; an
+     exact repeat of an earlier row is dropped (the next save of the day
+     stores the list without it). */
+  const savedDilutionRows = (items: ChemotherapyPlanItem[]) => {
+    const seen = new Set<string>();
+    return planItemsForRole(items, "DILUTION").filter((drug) => {
+      const key = JSON.stringify([
+        drug.medicineId ?? drug.name.trim().toLowerCase(),
+        drug.form,
+        drug.dose,
+        drug.unit,
+        drug.volume,
+        drug.dilutionSolution ?? "",
+        drug.administrationDetail ?? "",
+      ]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
   const templateHydration = () =>
     (protocolRef.current?.protocol_dilutions ?? [])
       .filter((dilution) => !!dilution.hydration_stage)
@@ -657,6 +715,62 @@ const ChemotherapyOrder: React.FC<{
         return (a.diluent ?? "").localeCompare(b.diluent ?? "");
       })
       .map(dilutionToHydrationRow);
+
+  /* The Dilution tab's template for the selected cycle day: the protocol
+     dilutions attached to the items of THIS day (a dilution inherits its
+     item's day), plus the protocol-level dilutions, which carry no day of
+     their own and so apply to every day of the protocol.
+     protocol_dilutions holds EVERY active dilution of the protocol (with its
+     medicine), item-attached ones included, and each item's
+     chemotherapy_protocol_dilutions repeats those (without the medicine) -
+     so each dilution is read once, by protocol_dilution_id, preferring the
+     protocol_dilutions copy. */
+  const templateDilutions = (dayNumber: number | null): Drug[] => {
+    const items = protocolRef.current?.chemotherapy_regimen_protocol_items ?? [];
+    const itemById = new Map(items.map((item) => [item.protocol_item_id, item]));
+
+    const byId = new Map<string, RegimenProtocolDilution>();
+    for (const dilution of protocolRef.current?.protocol_dilutions ?? []) {
+      byId.set(dilution.protocol_dilution_id, dilution);
+    }
+    for (const item of items) {
+      for (const dilution of item.chemotherapy_protocol_dilutions ?? []) {
+        if (byId.has(dilution.protocol_dilution_id)) continue;
+        byId.set(dilution.protocol_dilution_id, {
+          ...dilution,
+          protocol_item_id: dilution.protocol_item_id ?? item.protocol_item_id,
+        });
+      }
+    }
+
+    /* The items of this day (a same-as-day-1 day uses day 1's). */
+    const dayItemIds = new Set(
+      dayNumber != null
+        ? resolveProtocolDayItems(protocolDaysRef.current, dayNumber).map(
+            (item) => item.protocol_item_id
+          )
+        : []
+    );
+
+    const all = [...byId.values()];
+    /* Detached protocol-level rows first, then the day's own, so a whole
+       protocol's dilutions always read the same way. */
+    const protocolLevel = all.filter((dilution) => !dilution.protocol_item_id);
+    const attached = all.filter(
+      (dilution) =>
+        !!dilution.protocol_item_id && dayItemIds.has(dilution.protocol_item_id)
+    );
+
+    return [...protocolLevel, ...attached].map((dilution, index) =>
+      protocolDilutionToDrug(
+        dilution,
+        index,
+        dilution.protocol_item_id
+          ? itemById.get(dilution.protocol_item_id)
+          : undefined
+      )
+    );
+  };
 
   /* Keeps a saved cycle day order (from a load or a save) and its header. */
   const cacheOrder = (order: ChemoPlanOrder | null | undefined) => {
@@ -735,6 +849,7 @@ const ChemotherapyOrder: React.FC<{
       setDrugs([]);
       setPremedicationDrugs([]);
       setSupportiveDrugs([]);
+      setDilutionDrugs([]);
       setHydrationRows([]);
       if (loadingOrderKeysRef.current.has(key)) return;
       loadingOrderKeysRef.current.add(key);
@@ -766,6 +881,17 @@ const ChemotherapyOrder: React.FC<{
       setDrugs(planItemsForRole(items, "PRIMARY"));
       setPremedicationDrugs(planItemsForRole(items, "PREMEDICATION"));
       setSupportiveDrugs(planItemsForRole(items, "SUPPORTIVE"));
+      /* A saved day that has no dilution rows of its own still shows the
+         protocol's rows for that day, the same way an unsaved day does. */
+      {
+        const savedDilutions = savedDilutionRows(items);
+        const hasRealDilutions =
+          savedDilutions.length > 0 &&
+          savedDilutions.some((d) => (d.name ?? "").trim());
+        setDilutionDrugs(
+          hasRealDilutions ? savedDilutions : templateDilutions(dayNumber)
+        );
+      }
       setHydrationRows(
         saved.hydration_saved
           ? (saved.chemotherapy_plan_hydration ?? []).map(planHydrationToRow)
@@ -799,6 +925,7 @@ const ChemotherapyOrder: React.FC<{
           .map(toDrugFromItem)
       );
     }
+    setDilutionDrugs(templateDilutions(dayNumber));
     setHydrationRows(templateHydration());
   };
 
@@ -817,6 +944,7 @@ const ChemotherapyOrder: React.FC<{
         drugs?: Drug[];
         premedicationDrugs?: Drug[];
         supportiveDrugs?: Drug[];
+        dilutionDrugs?: Drug[];
         discussion?: string;
         postChemoInstructions?: string;
         additionalNotes?: string;
@@ -871,6 +999,14 @@ const ChemotherapyOrder: React.FC<{
         setSupportiveDrugs(data.supportiveDrugs.map(normalizeLegacyDraftDrug));
         userTouched.current.supportive = true;
       }
+
+      if (
+        Array.isArray(data.dilutionDrugs) &&
+        data.dilutionDrugs.length > 0
+      ) {
+        setDilutionDrugs(data.dilutionDrugs.map(normalizeLegacyDraftDrug));
+        userTouched.current.dilution = true;
+      }
     } catch (error) {
       console.error("Failed to restore chemotherapy order draft:", error);
     }
@@ -890,6 +1026,7 @@ const ChemotherapyOrder: React.FC<{
         supportiveDrugs: userTouched.current.supportive
           ? supportiveDrugs
           : [],
+        dilutionDrugs: userTouched.current.dilution ? dilutionDrugs : [],
         discussion,
         postChemoInstructions,
         additionalNotes,
@@ -908,6 +1045,7 @@ const ChemotherapyOrder: React.FC<{
     drugs,
     premedicationDrugs,
     supportiveDrugs,
+    dilutionDrugs,
     discussion,
     postChemoInstructions,
     additionalNotes,
@@ -925,6 +1063,7 @@ const ChemotherapyOrder: React.FC<{
     "Supportive",
     "Hydration",
     "Admin Instructions",
+    "Dilution",
   ];
 
   /* Number of days selectable for the current cycle, driven by the
@@ -1069,7 +1208,9 @@ const ChemotherapyOrder: React.FC<{
         drugs,
         premedicationDrugs,
         supportiveDrugs,
-        dosingInputs
+        dosingInputs,
+        null,
+        dilutionDrugs
       );
 
       const planStartDate =
@@ -1080,7 +1221,7 @@ const ChemotherapyOrder: React.FC<{
         toIsoDate(new Date().toISOString());
 
       /* The rows are the order of the displayed cycle day, saved with
-         every tab (Hydration included). */
+         every tab (Dilution and Hydration included). */
       const result = await createChemotherapyPlanForPatient(
         resolvedPatientId,
         planStartDate,
@@ -1332,19 +1473,26 @@ const ChemotherapyOrder: React.FC<{
       ? drugs
       : kind === "premedication"
         ? premedicationDrugs
-        : supportiveDrugs;
+        : kind === "supportive"
+          ? supportiveDrugs
+          : dilutionDrugs;
 
   const setRowsOf = (kind: RowKind, rows: Drug[]) => {
     if (kind === "drug") setDrugs(rows);
     else if (kind === "premedication") setPremedicationDrugs(rows);
-    else setSupportiveDrugs(rows);
+    else if (kind === "supportive") setSupportiveDrugs(rows);
+    else setDilutionDrugs(rows);
   };
 
-  /* All three tables, with one of them replaced. */
+  /* Every drug table, with one of them replaced. The other groups have to
+     be carried in full: savePlanOrder replaces the whole cycle day order,
+     so a Dilution tab edit that left the other arrays out would erase
+     their saved rows. */
   const withRows = (kind: RowKind, rows: Drug[]): Record<RowKind, Drug[]> => ({
     drug: kind === "drug" ? rows : drugs,
     premedication: kind === "premedication" ? rows : premedicationDrugs,
     supportive: kind === "supportive" ? rows : supportiveDrugs,
+    dilution: kind === "dilution" ? rows : dilutionDrugs,
   });
 
   const touch = (kind: RowKind) => {
@@ -1393,7 +1541,9 @@ const ChemotherapyOrder: React.FC<{
           next.drug,
           next.premedication,
           next.supportive,
-          dosingInputs
+          dosingInputs,
+          null,
+          next.dilution
         ),
         hydration: hydrationPayload(hydration),
         dosing: orderDosingFromSnapshot(buildDosingSnapshot(dosingInputs)),
@@ -1429,6 +1579,7 @@ const ChemotherapyOrder: React.FC<{
     void removeRow("premedication", id);
   const handleDeleteSupportive = (id: number) =>
     void removeRow("supportive", id);
+  const handleDeleteDilution = (id: number) => void removeRow("dilution", id);
 
   /* An Admin Instructions row is a drug of the order: removing it removes
      the drug. */
@@ -1436,7 +1587,13 @@ const ChemotherapyOrder: React.FC<{
     if (
       window.confirm(
         `Remove ${drug.name || "this drug"} from this order? It is removed from its ${
-          kind === "drug" ? "Chemotherapy Orders" : kind === "premedication" ? "Premedication" : "Supportive"
+          kind === "drug"
+            ? "Chemotherapy Orders"
+            : kind === "premedication"
+              ? "Premedication"
+              : kind === "supportive"
+                ? "Supportive"
+                : "Dilution"
         } list too.`
       )
     ) {
@@ -1525,6 +1682,11 @@ const ChemotherapyOrder: React.FC<{
   const handleEditSupportive = (id: number) => {
     const drug = supportiveDrugs.find((item) => item.id === id);
     if (drug) startEdit("supportive", drug);
+  };
+
+  const handleEditDilution = (id: number) => {
+    const drug = dilutionDrugs.find((item) => item.id === id);
+    if (drug) startEdit("dilution", drug);
   };
 
   const cancelEdit = () => {
@@ -1653,9 +1815,9 @@ const ChemotherapyOrder: React.FC<{
     : [];
 
   /* Copies a previous cycle day's whole order - Chemotherapy Orders,
-     Premedication, Supportive, Hydration and Admin Instructions - into the
-     displayed cycle day and saves it. Patient Dose is recalculated from
-     today's vitals. */
+     Premedication, Supportive, Dilution, Hydration and Admin Instructions -
+     into the displayed cycle day and saves it. Patient Dose is recalculated
+     from today's vitals. */
   const copyFromOrder = async (source: ChemoPlanOrderHeader) => {
     setCopyMenuOpen(false);
     if (copying || savingEdit || editingRow || orderLocked || !planIdRef.current) {
@@ -1666,7 +1828,7 @@ const ChemotherapyOrder: React.FC<{
     if (
       displayedOrder &&
       !window.confirm(
-        `Replace the saved ${target} order with a copy of ${from}? Its Chemotherapy Orders, Premedication, Supportive, Hydration and Admin Instructions are all replaced.`
+        `Replace the saved ${target} order with a copy of ${from}? Its Chemotherapy Orders, Premedication, Supportive, Dilution, Hydration and Admin Instructions are all replaced.`
       )
     ) {
       return;
@@ -1681,10 +1843,16 @@ const ChemotherapyOrder: React.FC<{
         throw new Error(`${from} has no saved order to copy.`);
       }
       const items = order.chemotherapy_plan_items ?? [];
+      const dilution = savedDilutionRows(items);
+      const hasRealDilutions =
+        dilution.length > 0 && dilution.some((d) => (d.name ?? "").trim());
       const next: Record<RowKind, Drug[]> = {
         drug: planItemsForRole(items, "PRIMARY"),
         premedication: planItemsForRole(items, "PREMEDICATION"),
         supportive: planItemsForRole(items, "SUPPORTIVE"),
+        dilution: hasRealDilutions
+          ? dilution
+          : templateDilutions(source.cycle_day),
       };
       const hydration = order.hydration_saved
         ? (order.chemotherapy_plan_hydration ?? []).map(planHydrationToRow)
@@ -1693,10 +1861,12 @@ const ChemotherapyOrder: React.FC<{
       userTouched.current.drugs = true;
       userTouched.current.premedication = true;
       userTouched.current.supportive = true;
+      userTouched.current.dilution = true;
       userTouched.current.hydration = true;
       setDrugs(next.drug);
       setPremedicationDrugs(next.premedication);
       setSupportiveDrugs(next.supportive);
+      setDilutionDrugs(next.dilution);
       setHydrationRows(hydration);
     } catch (error: any) {
       console.error("Failed to copy the cycle day order:", error);
@@ -2079,11 +2249,13 @@ const ChemotherapyOrder: React.FC<{
       </div>
     );
 
-  /* Admin Instructions: one row per drug of the order (all three tabs). */
+  /* Admin Instructions: one row per row of the order (every drug tab),
+     in the same order the Summary page lists them. */
   const adminRows: { kind: RowKind; drug: Drug }[] = [
     ...drugs.map((drug) => ({ kind: "drug" as const, drug })),
     ...premedicationDrugs.map((drug) => ({ kind: "premedication" as const, drug })),
     ...supportiveDrugs.map((drug) => ({ kind: "supportive" as const, drug })),
+    ...dilutionDrugs.map((drug) => ({ kind: "dilution" as const, drug })),
   ];
 
   const tablesLoading = planLoading || orderLoading;
@@ -3434,6 +3606,184 @@ const ChemotherapyOrder: React.FC<{
               </table>
             </div>
             {renderAddMedicineButton(addHydrationRow)}
+          </div>
+        ) : activeTab === "Dilution" ? (
+          <div className="p-8">
+            {renderRowError()}
+            <p className="mb-4 text-sm text-gray-500">
+              Dilution details for the selected protocol day - the diluent
+              and volume each agent is prepared in. A row added or changed
+              here is saved on this patient's cycle day order only.
+            </p>
+
+            <div className="overflow-x-auto rounded-lg border border-gray-200">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {[
+                      "Drug Name",
+                      "Form",
+                      "Dose",
+                      "Unit",
+                      "Diluent",
+                      "Dilution Volume",
+                      "Guidance",
+                    ].map((label, index) => (
+                      <th
+                        key={label}
+                        className={`${
+                          index === 0 ? "py-4 pl-6 pr-3" : "px-3 py-4"
+                        } text-left text-xs font-semibold uppercase tracking-wider text-gray-500`}
+                      >
+                        {label}
+                      </th>
+                    ))}
+
+                    <th className="px-6 py-4 text-right text-xs font-semibold uppercase tracking-wider text-gray-500">
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-gray-200 bg-white">
+                  {tablesLoading && (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="px-6 py-8 text-center text-sm text-gray-500"
+                      >
+                        Loading dilution details
+                      </td>
+                    </tr>
+                  )}
+
+                  {!tablesLoading &&
+                    !planError &&
+                    dilutionDrugs.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          className="px-6 py-8 text-center text-sm text-gray-500"
+                        >
+                          No dilution details found for this protocol day.
+                        </td>
+                      </tr>
+                    )}
+
+                  {planError && (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="px-6 py-8 text-center text-sm text-red-500"
+                      >
+                        {planError}
+                      </td>
+                    </tr>
+                  )}
+
+                  {dilutionDrugs.map((drug) => {
+                    const isEditingRow =
+                      editingRow?.kind === "dilution" &&
+                      editingRow.view === "row" &&
+                      editingRow.id === drug.id;
+
+                    if (isEditingRow && editDraft) {
+                      return (
+                        <tr
+                          key={drug.id}
+                          className="align-top bg-blue-50/40 transition-colors"
+                        >
+                          <td className="py-3 pl-6 pr-3">
+                            {renderDrugNameEditor()}
+                          </td>
+
+                          <td className="px-3 py-3">
+                            {renderEditInput("form", "Form")}
+                          </td>
+
+                          <td className="px-3 py-3">
+                            {renderEditInput("dose", "Dose")}
+                          </td>
+
+                          <td className="px-3 py-3">
+                            {renderEditInput("unit", "Unit")}
+                          </td>
+
+                          <td className="px-3 py-3">
+                            {renderEditInput(
+                              "dilutionSolution",
+                              "e.g. NS 0.9%"
+                            )}
+                          </td>
+
+                          <td className="px-3 py-3">
+                            {renderEditInput(
+                              "volume",
+                              "500 mL"
+                            )}
+                          </td>
+
+                          <td className="px-3 py-3">
+                            {renderEditTextarea(
+                              "administrationDetail",
+                              "Guidance"
+                            )}
+                          </td>
+
+                          <td className="whitespace-nowrap px-6 py-3 text-right text-sm font-medium">
+                            {renderEditActions(saveEditedDrug)}
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return (
+                      <tr
+                        key={drug.id}
+                        className="align-top transition-colors hover:bg-gray-50"
+                      >
+                        <td className="whitespace-nowrap py-5 pl-6 pr-3 text-base font-medium text-gray-900">
+                          {drug.name}
+                        </td>
+
+                        <td className="whitespace-nowrap px-3 py-5 text-base text-gray-500">
+                          {drug.form || "—"}
+                        </td>
+
+                        <td className="whitespace-nowrap px-3 py-5 text-base text-gray-900">
+                          {drug.dose || "—"}
+                        </td>
+
+                        <td className="whitespace-nowrap px-3 py-5 text-base text-blue-500">
+                          {drug.unit || "—"}
+                        </td>
+
+                        <td className="whitespace-nowrap px-3 py-5 text-base text-gray-500">
+                          {drug.dilutionSolution || "—"}
+                        </td>
+
+                        <td className="whitespace-nowrap px-3 py-5 text-base text-gray-500">
+                          {drug.volume || "—"}
+                        </td>
+
+                        <td className="px-3 py-5 text-sm text-gray-700">
+                          {drug.administrationDetail || "—"}
+                        </td>
+
+                        <td className="whitespace-nowrap px-6 py-5 text-right text-sm font-medium">
+                          {renderRowActions(
+                            drug.name || "dilution row",
+                            () => handleEditDilution(drug.id),
+                            () => handleDeleteDilution(drug.id)
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {renderAddMedicineButton(() => addMedicineRow("dilution"))}
           </div>
         ) : (
           /* Other Tabs */

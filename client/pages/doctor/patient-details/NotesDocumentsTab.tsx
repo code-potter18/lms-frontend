@@ -9,8 +9,13 @@ import {
   savePatientDocument,
   deletePatientDocument,
   downloadDocument,
-  downloadAllDocuments,
 } from "../../../utils/patientDocuments";
+import { downloadPatientDocumentsDocx, downloadDocumentAsDocx } from "../../../utils/patientDocumentsDocx";
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import mammoth from 'mammoth';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 import {
   type SummaryPlanItem,
   type SummaryPlan,
@@ -260,6 +265,271 @@ function mapEncounterToClinicalNote(
   };
 }
 
+
+function isImageFile(doc: PatientDocumentItem): boolean {
+  if ((doc.type || "").toLowerCase().startsWith("image/")) return true;
+  const ext = (doc.name || "").split(".").pop()?.toLowerCase() ?? "";
+  return ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff"].includes(ext);
+}
+
+function isPdfFile(doc: PatientDocumentItem): boolean {
+  if ((doc.type || "").toLowerCase().includes("pdf")) return true;
+  return (doc.name || "").toLowerCase().endsWith(".pdf");
+}
+
+function isDocxFile(doc: PatientDocumentItem): boolean {
+  const type = (doc.type || "").toLowerCase();
+  if (type.includes("wordprocessingml") || type.includes("msword")) return true;
+  const ext = (doc.name || "").split(".").pop()?.toLowerCase() ?? "";
+  return ["doc", "docx"].includes(ext);
+}
+
+const BATCHES_KEY = (pid: string) => `hms_docBatches_${pid}`;
+
+function restoreBatchGroups(
+  items: PatientDocumentItem[],
+  patientId: string
+): { ids: string[]; label: string }[] {
+  const existingIds = new Set(items.map(d => d.id));
+  try {
+    const raw = localStorage.getItem(BATCHES_KEY(patientId));
+    if (raw) {
+      const stored: { ids: string[]; label: string }[] = JSON.parse(raw);
+      const filtered = stored
+        .map(g => ({ ...g, ids: g.ids.filter(id => existingIds.has(id)) }))
+        .filter(g => g.ids.length > 0);
+      const covered = new Set(filtered.flatMap(g => g.ids));
+      const orphans = items.filter(d => !covered.has(d.id));
+      return [...filtered, ...orphans.map(d => ({ ids: [d.id], label: d.name }))];
+    }
+  } catch {}
+  return items.map(d => ({ ids: [d.id], label: d.name }));
+}
+
+function persistBatchGroups(
+  groups: { ids: string[]; label: string }[],
+  patientId: string
+) {
+  try {
+    localStorage.setItem(BATCHES_KEY(patientId), JSON.stringify(groups));
+  } catch {}
+}
+
+/* Shared A4 page style */
+const PAGE_BOX_STYLE: React.CSSProperties = {
+  width: 794,
+  minHeight: 900,
+  boxShadow: "0 4px 16px rgba(0,0,0,0.18),0 0 0 1px rgba(0,0,0,0.06)",
+  padding: "64px 88px",
+  display: "flex",
+  flexDirection: "column",
+};
+
+/* Image page — one image in A4 Word frame */
+const WordImagePage: React.FC<{ doc: PatientDocumentItem; pageNum: number }> = ({ doc, pageNum }) => {
+  const [src, setSrc] = React.useState<string | null>(doc.url ?? null);
+
+  React.useEffect(() => {
+    if (!doc.blob) return;
+    const u = URL.createObjectURL(doc.blob);
+    setSrc(u);
+    return () => URL.revokeObjectURL(u);
+  }, [doc.blob]);
+
+  const ext = (doc.name || "").split(".").pop()?.toUpperCase() ?? "";
+  return (
+    <div className="mx-auto bg-white" style={PAGE_BOX_STYLE}>
+      <div style={{ borderLeft: "4px solid #2B579A", paddingLeft: 14, marginBottom: 28 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 700, color: "#2B579A", marginBottom: 3, lineHeight: 1.3 }}>{doc.name}</h2>
+        <p style={{ fontSize: 11, color: "#94A3B8", margin: 0 }}>{ext}&nbsp;·&nbsp;{doc.info ?? ""}&nbsp;·&nbsp;Page {pageNum}</p>
+      </div>
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {src
+          ? <img src={src} alt={doc.name} style={{ maxWidth: "100%", maxHeight: 580, objectFit: "contain" }} />
+          : <span style={{ color: "#94A3B8", fontSize: 13 }}><i className="fa-solid fa-spinner fa-spin mr-1" />Loading…</span>}
+      </div>
+    </div>
+  );
+};
+
+/* PDF pages — renders each PDF page as a canvas image in its own A4 Word frame */
+const WordPdfContent: React.FC<{ doc: PatientDocumentItem }> = ({ doc }) => {
+  const [pages, setPages] = React.useState<string[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let blobUrl: string | null = null;
+    const renderPdf = async (src: string) => {
+      try {
+        const pdfDoc = await pdfjsLib.getDocument({ url: src }).promise;
+        const imgs: string[] = [];
+        for (let p = 1; p <= pdfDoc.numPages; p++) {
+          const page = await pdfDoc.getPage(p);
+          const viewport = page.getViewport({ scale: 2 });
+          const canvas = document.createElement("canvas");
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          await page.render({ canvasContext: canvas.getContext("2d")!, canvas, viewport }).promise;
+          imgs.push(canvas.toDataURL("image/jpeg", 0.9));
+        }
+        setPages(imgs);
+      } catch (err) {
+        console.error("PDF render error:", err);
+        setError("Could not render this PDF.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (doc.blob) { blobUrl = URL.createObjectURL(doc.blob); renderPdf(blobUrl); }
+    else if (doc.url) { renderPdf(doc.url); }
+    else { setError("No source available."); setLoading(false); }
+    return () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
+  }, [doc]);
+
+  if (loading) {
+    return (
+      <div className="mx-auto bg-white" style={{ ...PAGE_BOX_STYLE, alignItems: "center", justifyContent: "center" }}>
+        <i className="fa-solid fa-spinner fa-spin text-2xl text-blue-400" />
+        <p style={{ color: "#94A3B8", marginTop: 12, fontSize: 13 }}>Rendering PDF pages…</p>
+      </div>
+    );
+  }
+  if (error || pages.length === 0) {
+    return (
+      <div className="mx-auto bg-white" style={{ ...PAGE_BOX_STYLE, alignItems: "center", justifyContent: "center" }}>
+        <i className="fa-solid fa-file-pdf" style={{ fontSize: 48, color: "#EF4444" }} />
+        <p style={{ color: "#64748B", marginTop: 12, fontSize: 14 }}>{doc.name}</p>
+        <p style={{ color: "#94A3B8", fontSize: 12 }}>{error ?? "No pages to display."}</p>
+      </div>
+    );
+  }
+  return (
+    <>
+      {pages.map((imgSrc, i) => (
+        <div key={i} className="mx-auto bg-white" style={PAGE_BOX_STYLE}>
+          <div style={{ borderLeft: "4px solid #2B579A", paddingLeft: 14, marginBottom: 28 }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: "#2B579A", marginBottom: 3, lineHeight: 1.3 }}>{doc.name}</h2>
+            <p style={{ fontSize: 11, color: "#94A3B8", margin: 0 }}>PDF&nbsp;·&nbsp;Page {i + 1} of {pages.length}</p>
+          </div>
+          <div style={{ flex: 1, display: "flex", alignItems: "flex-start", justifyContent: "center" }}>
+            <img src={imgSrc} alt={`${doc.name} – page ${i + 1}`} style={{ maxWidth: "100%", objectFit: "contain" }} />
+          </div>
+        </div>
+      ))}
+    </>
+  );
+};
+
+/* DOCX page — converts .doc/.docx to HTML with mammoth, shown in A4 Word frame */
+const WordDocxContent: React.FC<{ doc: PatientDocumentItem; pageNum: number }> = ({ doc, pageNum }) => {
+  const [html, setHtml] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const convert = async (buf: ArrayBuffer) => {
+      try {
+        const result = await mammoth.convertToHtml({ arrayBuffer: buf });
+        setHtml(result.value);
+      } catch (err) {
+        console.error("DOCX render error:", err);
+        setError("Could not render this document.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (doc.blob) {
+      doc.blob.arrayBuffer().then(convert);
+    } else if (doc.url) {
+      fetch(doc.url).then(r => r.arrayBuffer()).then(convert)
+        .catch(() => { setError("Could not load document."); setLoading(false); });
+    } else {
+      setError("No source available."); setLoading(false);
+    }
+  }, [doc]);
+
+  const ext = (doc.name || "").split(".").pop()?.toUpperCase() ?? "";
+  return (
+    <div className="mx-auto bg-white" style={PAGE_BOX_STYLE}>
+      <div style={{ borderLeft: "4px solid #2B579A", paddingLeft: 14, marginBottom: 28 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 700, color: "#2B579A", marginBottom: 3, lineHeight: 1.3 }}>{doc.name}</h2>
+        <p style={{ fontSize: 11, color: "#94A3B8", margin: 0 }}>{ext}&nbsp;·&nbsp;{doc.info ?? ""}&nbsp;·&nbsp;Page {pageNum}</p>
+      </div>
+      <div style={{ flex: 1, overflow: "auto" }}>
+        {loading && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#94A3B8", padding: 24 }}>
+            <i className="fa-solid fa-spinner fa-spin" /><span style={{ fontSize: 13 }}>Loading document…</span>
+          </div>
+        )}
+        {!loading && error && (
+          <div style={{ textAlign: "center", color: "#94A3B8", padding: 40 }}>
+            <i className="fa-solid fa-file-word" style={{ fontSize: 48, color: "#CBD5E1", display: "block", marginBottom: 12 }} />
+            <p style={{ fontSize: 13, margin: 0 }}>{error}</p>
+          </div>
+        )}
+        {!loading && html && (
+          <div
+            style={{ fontFamily: "Calibri,'Times New Roman',serif", fontSize: 13, lineHeight: 1.7, color: "#1E293B" }}
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
+        )}
+        {!loading && !error && !html && (
+          <div style={{ textAlign: "center", color: "#94A3B8", padding: 40 }}>
+            <i className="fa-solid fa-file-word" style={{ fontSize: 48, color: "#CBD5E1", display: "block", marginBottom: 12 }} />
+            <p style={{ fontSize: 13, margin: 0 }}>Document is empty.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* Full-screen Word view — all uploaded documents, one per page */
+const WordImagesView: React.FC<{
+  documents: PatientDocumentItem[];
+  label?: string;
+  onClose: () => void;
+  onDownload: (doc: PatientDocumentItem) => void;
+}> = ({ documents, label, onClose, onDownload }) => {
+  const docs = documents;
+  if (docs.length === 0) return null;
+  const title = label || (docs.length === 1 ? docs[0].name : `Documents (${docs.length} files)`);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+      <div className="relative flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" style={{ fontFamily: "Calibri,'Segoe UI',Arial,sans-serif" }}>
+        {/* Word title bar */}
+        <div className="flex flex-shrink-0 items-center justify-between gap-3 px-4 py-2" style={{ background: "#2B579A" }}>
+          <div className="flex min-w-0 items-center gap-2">
+            <i className="fa-solid fa-file-word flex-shrink-0 text-lg text-white" />
+            <span className="truncate text-sm font-semibold text-white">{title}</span>
+          </div>
+          <button type="button" onClick={onClose} title="Close"
+            className="rounded px-2 py-1 text-white/70 hover:bg-white/20 hover:text-white">
+            <i className="fa-solid fa-xmark text-base" />
+          </button>
+        </div>
+        {/* Ribbon */}
+        <div className="flex flex-shrink-0 items-center border-b border-slate-200 bg-[#f3f3f3] px-4 py-1">
+          <span className="select-none text-[11px] text-slate-500">
+            {docs.length} page{docs.length !== 1 ? "s" : ""} · 1 file per page
+          </span>
+        </div>
+        {/* Scrollable pages */}
+        <div className="flex-1 overflow-y-auto" style={{ background: "#e8e9ea", padding: "24px 16px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+            {docs.map((doc, i) => {
+              if (isPdfFile(doc)) return <WordPdfContent key={doc.id} doc={doc} />;
+              if (isDocxFile(doc)) return <WordDocxContent key={doc.id} doc={doc} pageNum={i + 1} />;
+              return <WordImagePage key={doc.id} doc={doc} pageNum={i + 1} />;
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const NotesDocumentsTab: React.FC<{
   embedded?: boolean;
   patientId?: string;
@@ -308,7 +578,22 @@ const NotesDocumentsTab: React.FC<{
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [isUploadingDoc, setIsUploadingDoc] = useState(false);
   const [docSuccessMsg, setDocSuccessMsg] = useState<string | null>(null);
-  const [previewDoc, setPreviewDoc] = useState<PatientDocumentItem | null>(null);
+  const [isDownloadingWord, setIsDownloadingWord] = useState(false);
+  const [isExportingDocs, setIsExportingDocs] = useState(false);
+  const [imageBatchGroups, setImageBatchGroups] = useState<{ ids: string[]; label: string }[]>([]);
+  const [wordView, setWordView] = useState<{ docs: PatientDocumentItem[]; label: string } | null>(null);
+  const [stagedBatchLabel, setStagedBatchLabel] = useState("");
+  const [stagedFiles, setStagedFiles] = useState<{ file: File; name: string }[]>([]);
+  const [renamingDocId, setRenamingDocId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  const handleRenameDoc = (docId: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (trimmed) {
+      setDocuments(prev => prev.map(d => d.id === docId ? { ...d, name: trimmed } : d));
+    }
+    setRenamingDocId(null);
+  };
 
   /* Load stored patient documents from IndexedDB */
   useEffect(() => {
@@ -319,7 +604,12 @@ const NotesDocumentsTab: React.FC<{
     let cancelled = false;
     loadPatientDocuments(patientId)
       .then((items) => {
-        if (!cancelled) setDocuments(items);
+        if (!cancelled) {
+          setDocuments(items);
+          if (items.length > 0 && patientId) {
+            setImageBatchGroups(restoreBatchGroups(items, patientId));
+          }
+        }
       })
       .catch((err) => {
         console.warn("Failed to load patient documents:", err);
@@ -456,41 +746,54 @@ const NotesDocumentsTab: React.FC<{
   const prescriptionsCount = chemoPlanCurrentItems(notesPlan).length;
   const activities = notesActivities;
 
-  const handleFileUpload = async (files: FileList | File[] | null) => {
+  const stageFiles = (files: FileList | File[] | null) => {
     if (!files || files.length === 0) return;
+    setStagedFiles(Array.from(files).map(f => ({ file: f, name: f.name })));
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleSubmitUpload = async () => {
+    if (stagedFiles.length === 0 || isUploadingDoc) return;
     setIsUploadingDoc(true);
     const targetPatientId = patientId || "unknown";
-
     const newItems: PatientDocumentItem[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (!file) continue;
+    for (const staged of stagedFiles) {
+      const renamedFile = new File(
+        [staged.file],
+        staged.name.trim() || staged.file.name,
+        { type: staged.file.type }
+      );
       try {
-        const savedDoc = await savePatientDocument(targetPatientId, file);
+        const savedDoc = await savePatientDocument(targetPatientId, renamedFile);
         newItems.push(savedDoc);
       } catch (err) {
-        console.error("Failed to save document:", file.name, err);
+        console.error("Failed to save document:", staged.name, err);
       }
     }
-
+    const batchLabel = stagedBatchLabel.trim();
+    setStagedFiles([]);
+    setStagedBatchLabel("");
     if (newItems.length > 0) {
-      setDocuments((prev) => [...newItems, ...prev]);
-      setSelectedFile(files[0]);
+      setDocuments(prev => [...newItems, ...prev]);
+      setSelectedFile(stagedFiles[0]?.file ?? null);
       setDocSuccessMsg(
         `${newItems.length === 1 ? `"${newItems[0].name}"` : `${newItems.length} documents`} uploaded to Document Library!`
       );
       setTimeout(() => setDocSuccessMsg(null), 4000);
+      const newBatchIds = newItems.map(d => d.id);
+      const newBatch = { ids: newBatchIds, label: batchLabel };
+      setImageBatchGroups(prev => {
+        const updated = [...prev, newBatch];
+        if (targetPatientId !== "unknown") persistBatchGroups(updated, targetPatientId);
+        return updated;
+      });
+      setWordView({ docs: newItems, label: batchLabel });
     }
     setIsUploadingDoc(false);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
   };
 
-  const handleFileChange = (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    handleFileUpload(event.target.files);
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    stageFiles(event.target.files);
   };
 
   const handleSelectFiles = () => {
@@ -514,7 +817,7 @@ const NotesDocumentsTab: React.FC<{
     e.stopPropagation();
     setIsDraggingFile(false);
     if (e.dataTransfer?.files?.length) {
-      handleFileUpload(e.dataTransfer.files);
+      stageFiles(e.dataTransfer.files);
     }
   };
 
@@ -522,17 +825,51 @@ const NotesDocumentsTab: React.FC<{
     downloadDocument(doc);
   };
 
-  const handleView = (doc: PatientDocumentItem) => {
-    setPreviewDoc(doc);
+  /* Card Download gives a Word file (content + logos converted); types
+     Word cannot represent fall back to the original file download. */
+  const handleDownloadAsWord = async (doc: PatientDocumentItem) => {
+    if (isDownloadingWord) return;
+    setIsDownloadingWord(true);
+    try {
+      const converted = await downloadDocumentAsDocx(doc);
+      if (converted) {
+        setDocSuccessMsg(`"${doc.name}" downloaded as Word (.docx)`);
+        setTimeout(() => setDocSuccessMsg(null), 4000);
+      } else {
+        downloadDocument(doc);
+      }
+    } catch (err) {
+      console.error("Word download failed:", err);
+      downloadDocument(doc);
+    } finally {
+      setIsDownloadingWord(false);
+    }
   };
+
 
   const handleDeleteDoc = async (docId: string, docName: string) => {
     if (window.confirm(`Are you sure you want to remove "${docName}" from Document Library?`)) {
       await deletePatientDocument(docId);
       setDocuments((prev) => prev.filter((d) => d.id !== docId));
-      if (previewDoc?.id === docId) {
-        setPreviewDoc(null);
-      }
+      setImageBatchGroups(prev => {
+        const updated = prev
+          .map(g => ({ ...g, ids: g.ids.filter(id => id !== docId) }))
+          .filter(g => g.ids.length > 0);
+        if (patientId) persistBatchGroups(updated, patientId);
+        return updated;
+      });
+    }
+  };
+
+  const handleExportDocuments = async () => {
+    if (documents.length === 0 || isExportingDocs) return;
+    setIsExportingDocs(true);
+    try {
+      await downloadPatientDocumentsDocx(documents, { patientId });
+    } catch (err) {
+      console.error("Failed to export documents summary:", err);
+    } finally {
+      setIsExportingDocs(false);
     }
   };
 
@@ -634,9 +971,7 @@ const NotesDocumentsTab: React.FC<{
     setTimeout(() => setEditSuccessMsg(null), 3000);
   };
 
-  const handleSave = () => {
-    console.log("Save Notes & Changes clicked");
-  };
+  
 
   /* =========================================================
      CONTENT (TAB NAVIGATION + TWO COLUMN LAYOUT)
@@ -1205,86 +1540,91 @@ const NotesDocumentsTab: React.FC<{
           <section className="mb-8">
 
             <div className="mb-4 flex items-end justify-between">
-              <h3 className="text-lg font-semibold text-slate-900">
-                Document Library
-              </h3>
-
-              <button
-                type="button"
-                className="flex items-center text-sm font-medium text-blue-600 transition-colors hover:text-blue-800"
-              >
-                View All Documents
-                <i className="fa-solid fa-arrow-right ml-1" />
-              </button>
+              <h3 className="text-lg font-semibold text-slate-900">Document Library</h3>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-3">
-              {documents.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-400 md:col-span-3">
-                  No documents uploaded for this patient yet. Use the upload
-                  panel to add files.
+            {documents.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-400">
+                No documents uploaded for this patient yet. Use the upload panel to add files.
+              </div>
+            ) : (() => {
+              return (
+                <div className="grid gap-4 md:grid-cols-3">
+                  {/* One card per upload batch */}
+                  {imageBatchGroups.map(({ ids: batchIds, label: batchLabel }, batchIndex) => {
+                    const batchDocs = batchIds
+                      .map(id => documents.find(d => d.id === id))
+                      .filter((d): d is PatientDocumentItem => !!d);
+                    if (batchDocs.length === 0) return null;
+                    const displayTitle = batchLabel || (batchDocs.length === 1 ? batchDocs[0].name : `Documents (${batchDocs.length} files)`);
+                    return (
+                      <div key={batchIndex} className="group relative rounded-xl border border-blue-100 bg-white p-4 shadow-sm transition-all hover:shadow-md">
+                        <div className="mb-3 flex items-center gap-2">
+                          <span className="text-2xl text-blue-600">
+                            <i className="fa-solid fa-file-word" />
+                          </span>
+                          {batchDocs.length > 1 && (
+                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-bold text-blue-700">
+                              {batchDocs.length} files
+                            </span>
+                          )}
+                        </div>
+                        <h4 className="mb-1 text-sm font-bold text-slate-900">
+                          {displayTitle}
+                        </h4>
+                        <div className="mb-3 space-y-1">
+                          {batchDocs.map(batchDoc => (
+                            <div key={batchDoc.id} className="flex items-center justify-between gap-1">
+                              <i className={`fa-solid ${isPdfFile(batchDoc) ? "fa-file-pdf text-red-400" : isImageFile(batchDoc) ? "fa-file-image text-blue-400" : "fa-file text-slate-400"} flex-shrink-0 text-[10px]`} />
+                              {renamingDocId === batchDoc.id ? (
+                                <input
+                                  autoFocus
+                                  className="min-w-0 flex-1 rounded border border-blue-300 px-1 py-0.5 text-xs text-slate-800 outline-none focus:ring-1 focus:ring-blue-400"
+                                  value={renameValue}
+                                  onChange={e => setRenameValue(e.target.value)}
+                                  onBlur={() => handleRenameDoc(batchDoc.id, renameValue)}
+                                  onKeyDown={e => {
+                                    if (e.key === "Enter") handleRenameDoc(batchDoc.id, renameValue);
+                                    if (e.key === "Escape") setRenamingDocId(null);
+                                  }}
+                                />
+                              ) : (
+                                <span
+                                  className="min-w-0 flex-1 cursor-text truncate text-xs text-slate-700 hover:text-blue-600"
+                                  title={`Click to rename: ${batchDoc.name}`}
+                                  onClick={() => { setRenamingDocId(batchDoc.id); setRenameValue(batchDoc.name); }}
+                                >
+                                  {batchDoc.name}
+                                </span>
+                              )}
+                              <button type="button" onClick={() => handleDeleteDoc(batchDoc.id, batchDoc.name)}
+                                className="flex-shrink-0 text-slate-300 transition-colors hover:text-red-500"
+                                title={`Delete ${batchDoc.name}`}>
+                                <i className="fa-solid fa-trash-can text-xs" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <button type="button" onClick={() => setWordView({ docs: batchDocs, label: batchLabel })}
+                          className="flex w-full items-center justify-center gap-1.5 rounded bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100">
+                          <i className="fa-regular fa-eye text-xs" />
+                          View in Word
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
-              ) : (
-                documents.map((document) => (
-                <div
-                  key={document.id}
-                  className={`group relative rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:shadow-md ${document.hover}`}
-                >
-                  {/* Delete button */}
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteDoc(document.id, document.name)}
-                    className="absolute right-3 top-3 text-slate-300 hover:text-red-500 transition-colors"
-                    title={`Delete ${document.name}`}
-                    aria-label={`Delete ${document.name}`}
-                  >
-                    <i className="fa-solid fa-trash-can text-sm" />
-                  </button>
+              );
+            })()}
 
-                  {/* Icon */}
-                  <div
-                    className={`mb-3 text-2xl ${document.color}`}
-                  >
-                    <i className={`fa-solid ${document.icon}`} />
-                  </div>
-
-                  {/* Name */}
-                  <h4
-                    className="mb-1 truncate text-sm font-bold text-slate-900"
-                    title={document.name}
-                  >
-                    {document.name}
-                  </h4>
-
-                  {/* Details */}
-                  <p className="mb-4 text-xs text-slate-500">
-                    {document.info}
-                  </p>
-
-                  {/* Buttons */}
-                  <div className="flex space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => handleView(document)}
-                      className="flex-1 rounded bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100 flex items-center justify-center gap-1.5"
-                    >
-                      <i className="fa-regular fa-eye text-xs" />
-                      View
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleDownload(document)}
-                      className="flex-1 rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 flex items-center justify-center gap-1.5"
-                    >
-                      <i className="fa-solid fa-download text-xs" />
-                      Download
-                    </button>
-                  </div>
-                </div>
-              ))
-              )}
-            </div>
+            {wordView && (
+              <WordImagesView
+                documents={wordView.docs}
+                label={wordView.label}
+                onClose={() => setWordView(null)}
+                onDownload={handleDownload}
+              />
+            )}
           </section>
 
           {/* =================================================
@@ -1371,61 +1711,116 @@ const NotesDocumentsTab: React.FC<{
           {/* =================================================
               UPLOAD DOCUMENT
           ================================================== */}
-          <div
-            onClick={handleSelectFiles}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-all ${
-              isDraggingFile
-                ? "border-blue-500 bg-blue-100/70 shadow-md ring-2 ring-blue-400"
-                : "border-blue-300 bg-blue-50/50 hover:bg-blue-50"
-            }`}
-          >
+          {stagedFiles.length > 0 ? (
+            /* ── Staging panel: rename files before uploading ── */
+            <div className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
+              <h4 className="mb-3 text-sm font-bold text-slate-900">
+                {stagedFiles.length} file{stagedFiles.length !== 1 ? "s" : ""} selected
+              </h4>
+              <div className="mb-3">
+                <label className="mb-1 block text-xs font-medium text-slate-600">Word document name</label>
+                <input
+                  className="w-full rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
+                  placeholder="e.g. Scan Reports"
+                  value={stagedBatchLabel}
+                  onChange={e => setStagedBatchLabel(e.target.value)}
+                />
+              </div>
+              <p className="mb-2 text-xs text-slate-400">Rename individual files if needed:</p>
+              <div className="mb-4 space-y-2">
+                {stagedFiles.map((sf, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <i className="fa-solid fa-file flex-shrink-0 text-sm text-slate-400" />
+                    <input
+                      className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
+                      value={sf.name}
+                      onChange={e => setStagedFiles(prev => prev.map((f, j) => j === i ? { ...f, name: e.target.value } : f))}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setStagedFiles(prev => prev.filter((_, j) => j !== i))}
+                      className="flex-shrink-0 text-slate-300 hover:text-red-500"
+                      title="Remove this file"
+                    >
+                      <i className="fa-solid fa-xmark text-sm" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setStagedFiles([]); setStagedBatchLabel(""); }}
+                  className="flex-1 rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSubmitUpload}
+                  disabled={isUploadingDoc}
+                  className="flex-1 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isUploadingDoc ? (
+                    <><i className="fa-solid fa-spinner fa-spin mr-1" />Uploading…</>
+                  ) : "Submit"}
+                </button>
+              </div>
+              {docSuccessMsg && (
+                <p className="mt-3 rounded bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
+                  <i className="fa-solid fa-circle-check mr-1.5" />
+                  {docSuccessMsg}
+                </p>
+              )}
+            </div>
+          ) : (
+            /* ── Default dropzone ── */
             <div
-              className={`mb-3 flex h-12 w-12 items-center justify-center rounded-full text-xl transition-transform ${
-                isDraggingFile ? "scale-110 bg-blue-600 text-white" : "bg-blue-100 text-blue-600"
+              onClick={handleSelectFiles}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-all ${
+                isDraggingFile
+                  ? "border-blue-500 bg-blue-100/70 shadow-md ring-2 ring-blue-400"
+                  : "border-blue-300 bg-blue-50/50 hover:bg-blue-50"
               }`}
             >
-              <i className={`fa-solid ${isUploadingDoc ? "fa-spinner fa-spin" : "fa-file-arrow-up"}`} />
-            </div>
-
-            <h4 className="mb-1 text-base font-bold text-slate-900">
-              {isUploadingDoc ? "Uploading..." : "Upload Document"}
-            </h4>
-
-            <p className="mb-4 px-4 text-xs text-slate-500">
-              Drag & Drop or click to browse files (PDF, JPG, PNG, DOCX)
-            </p>
-
-            <button
-              type="button"
-              disabled={isUploadingDoc}
-              onClick={(event) => {
-                event.stopPropagation();
-                handleSelectFiles();
-              }}
-              className="rounded-md border border-blue-600 bg-white px-6 py-2 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:opacity-50"
-            >
-              {isUploadingDoc ? "Uploading..." : "Select Files"}
-            </button>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx,.txt"
-              className="hidden"
-              onChange={handleFileChange}
-            />
-
-            {docSuccessMsg && (
-              <p className="mt-3 max-w-full rounded bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
-                <i className="fa-solid fa-circle-check mr-1.5" />
-                {docSuccessMsg}
+              <div
+                className={`mb-3 flex h-12 w-12 items-center justify-center rounded-full text-xl transition-transform ${
+                  isDraggingFile ? "scale-110 bg-blue-600 text-white" : "bg-blue-100 text-blue-600"
+                }`}
+              >
+                <i className="fa-solid fa-file-arrow-up" />
+              </div>
+              <h4 className="mb-1 text-base font-bold text-slate-900">Upload Document</h4>
+              <p className="mb-4 px-4 text-xs text-slate-500">
+                Drag & Drop or click to browse files (PDF, JPG, PNG, DOCX)
               </p>
-            )}
-          </div>
+              <button
+                type="button"
+                onClick={e => { e.stopPropagation(); handleSelectFiles(); }}
+                className="rounded-md border border-blue-600 bg-white px-6 py-2 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-50"
+              >
+                Select Files
+              </button>
+              {docSuccessMsg && (
+                <p className="mt-3 max-w-full rounded bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
+                  <i className="fa-solid fa-circle-check mr-1.5" />
+                  {docSuccessMsg}
+                </p>
+              )}
+            </div>
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx,.txt"
+            className="hidden"
+            onChange={handleFileChange}
+          />
 
           {/* =================================================
               RECENT ACTIVITY
@@ -1735,101 +2130,6 @@ const NotesDocumentsTab: React.FC<{
         </div>
       )}
 
-      {/* =======================================================
-          DOCUMENT PREVIEW MODAL
-      ======================================================== */}
-      {previewDoc && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-          onClick={() => setPreviewDoc(null)}
-        >
-          <div
-            className="relative flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl bg-white shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-              <div className="flex items-center space-x-3 overflow-hidden">
-                <div className={`text-2xl ${previewDoc.color}`}>
-                  <i className={`fa-solid ${previewDoc.icon}`} />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="truncate text-base font-bold text-slate-900" title={previewDoc.name}>
-                    {previewDoc.name}
-                  </h3>
-                  <p className="text-xs text-slate-500">{previewDoc.info}</p>
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={() => window.open(previewDoc.url, "_blank")}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                  title="Open in new window"
-                >
-                  <i className="fa-solid fa-up-right-from-square text-xs" />
-                  Open in New Tab
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDownload(previewDoc)}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
-                  title="Download file"
-                >
-                  <i className="fa-solid fa-download text-xs" />
-                  Download
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreviewDoc(null)}
-                  className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
-                  aria-label="Close preview"
-                >
-                  <i className="fa-solid fa-xmark text-base" />
-                </button>
-              </div>
-            </div>
-
-            {/* Modal Body */}
-            <div className="flex-1 overflow-auto bg-slate-100 p-4 min-h-[300px] flex items-center justify-center">
-              {previewDoc.type.includes("pdf") || previewDoc.name.toLowerCase().endsWith(".pdf") ? (
-                <iframe
-                  src={previewDoc.url}
-                  className="h-[70vh] w-full rounded-lg border border-slate-200 bg-white"
-                  title={previewDoc.name}
-                />
-              ) : previewDoc.type.startsWith("image/") ||
-                /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(previewDoc.name) ? (
-                <img
-                  src={previewDoc.url}
-                  alt={previewDoc.name}
-                  className="max-h-[70vh] max-w-full rounded-lg object-contain shadow-sm"
-                />
-              ) : (
-                <div className="py-12 text-center">
-                  <div className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white shadow-sm text-3xl ${previewDoc.color}`}>
-                    <i className={`fa-solid ${previewDoc.icon}`} />
-                  </div>
-                  <h4 className="text-base font-semibold text-slate-900 mb-1">{previewDoc.name}</h4>
-                  <p className="text-xs text-slate-500 mb-4">{previewDoc.info}</p>
-                  <p className="text-xs text-slate-400 max-w-md mx-auto mb-5">
-                    Direct in-browser preview is not supported for this file type. Click below to download and view it locally.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => handleDownload(previewDoc)}
-                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                  >
-                    <i className="fa-solid fa-download" />
-                    Download File
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 
@@ -1880,7 +2180,7 @@ const NotesDocumentsTab: React.FC<{
             SCROLLABLE CONTENT
         ======================================================== */}
         <main className="relative flex-1 overflow-y-auto bg-slate-50">
-          <div className="mx-auto max-w-7xl px-6 pb-28 pt-6">
+          <div className="mx-auto max-w-7xl px-6 pb-6 pt-6">
             {content}
           </div>
         </main>
@@ -1896,34 +2196,15 @@ const NotesDocumentsTab: React.FC<{
 
           <div className="flex space-x-3">
 
-            {/* Download All */}
-            <button
-              type="button"
-              disabled={documents.length === 0}
-              onClick={() => downloadAllDocuments(documents)}
-              className="flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <i className="fa-solid fa-download mr-2" />
-              Download All
-            </button>
-
             {/* Export */}
             <button
               type="button"
-              onClick={() => console.log("Export Documents")}
-              className="flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              onClick={handleExportDocuments}
+              disabled={documents.length === 0 || isExportingDocs}
+              className="flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <i className="fa-solid fa-file-export mr-2" />
-              Export Documents
-            </button>
-
-            {/* Save */}
-            <button
-              type="button"
-              onClick={handleSave}
-              className="rounded-md bg-[#0052cc] px-6 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
-            >
-              Save Notes & Changes
+              {isExportingDocs ? "Exporting…" : "Export Documents"}
             </button>
           </div>
         </div>

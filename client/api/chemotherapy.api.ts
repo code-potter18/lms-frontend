@@ -237,6 +237,7 @@ export interface ChemoPlanItem {
   maximum_dose?: string | number | null;
   minimum_dose?: string | number | null;
   remarks?: string | null;
+  duration?: string | null;
   medicine_master?: {
     medicine_id?: string;
     medicine_name?: string | null;
@@ -245,6 +246,22 @@ export interface ChemoPlanItem {
     dosage_form?: string | null;
     unit?: string | null;
   } | null;
+}
+
+/* One discharge medicine to save on a patient's plan. medicine_id when the
+   drug came from the master list, otherwise drug_name (typed for this
+   patient only - nothing is added to medicine_master). */
+export interface ChemoDischargeMedicinePayload {
+  medicine_id?: string | null;
+  drug_name?: string | null;
+  drug_sequence: number;
+  drug_type?: string | null;
+  dosage?: number | null;
+  dosage_unit?: string | null;
+  frequency?: string | null;
+  administration_detail?: string | null;
+  duration?: string | null;
+  remarks?: string | null;
 }
 
 /* A cycle day's hydration row (chemotherapy_plan_hydration). */
@@ -415,6 +432,32 @@ export const chemotherapyApi = {
     API.put<{ success: boolean; message: string; data: ChemoPlanOrder }>(
       `/chemotherapy/plans/${planId}/orders/${cycleNumber}/${cycleDay}`,
       payload
+    ),
+  /* This patient's discharge (take-home) medicines. Stored on their chemo
+     plan as plan items with drug_role DISCHARGE: a drug from medicine_master
+     is kept by medicine_id, a typed name in drug_name. The regimen protocol's
+     discharge instructions and medicine_master are never written. */
+  listPlanDischargeMedicines: (planId: string) =>
+    API.get<{ success: boolean; message: string; data: ChemoPlanItem[] }>(
+      `/chemotherapy/plans/${planId}/discharge-medicines`
+    ),
+  addPlanDischargeMedicine: (planId: string, payload: ChemoDischargeMedicinePayload) =>
+    API.post<{ success: boolean; message: string; data: ChemoPlanItem[] }>(
+      `/chemotherapy/plans/${planId}/discharge-medicines`,
+      payload
+    ),
+  updatePlanDischargeMedicine: (
+    planId: string,
+    planItemId: string,
+    payload: Partial<ChemoDischargeMedicinePayload>
+  ) =>
+    API.put<{ success: boolean; message: string; data: ChemoPlanItem[] }>(
+      `/chemotherapy/plans/${planId}/discharge-medicines/${planItemId}`,
+      payload
+    ),
+  removePlanDischargeMedicine: (planId: string, planItemId: string) =>
+    API.delete<{ success: boolean; message: string; data: ChemoPlanItem[] }>(
+      `/chemotherapy/plans/${planId}/discharge-medicines/${planItemId}`
     ),
   /* Consultation submit: completes the order(s) saved in this encounter. */
   completePlanOrders: (planId: string, encounterNo: string) =>

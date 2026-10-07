@@ -373,16 +373,22 @@ export const primaryDoseFields = (drug: Drug, inputs: DosingInputs) => {
 };
 
 /* Plan items for the Chemotherapy Order tables. PRIMARY rows carry
-   primaryDoseFields; premedication / supportive rows keep their entered
-   dose. Every row carries its form + administration columns, and the
+   primaryDoseFields; premedication / supportive / dilution rows keep their
+   entered dose. Every row carries its form + administration columns, and the
    displayed protocol day so the saved order can be shown again for it.
-   A row is a medicine_master drug or a typed drug name (drug_name). */
+   A row is a medicine_master drug or a typed drug name (drug_name).
+   Each group owns its own drug_sequence band (primary 1..n, premedication
+   90+, supportive 100+, dilution 110+) so the saved order reads in tab
+   order. */
 export const buildPlanItemsFromOrder = (
   primary: Drug[],
   premedication: Drug[],
   supportive: Drug[],
   inputs: DosingInputs,
-  administrationDay?: number | null
+  administrationDay?: number | null,
+  /* The Dilution tab's rows. Last parameter so the existing call sites
+     (which pass administrationDay) keep working. */
+  dilution: Drug[] = []
 ): OrderPlanItem[] => {
   const day = administrationDay ? { administration_day: administrationDay } : {};
   const items: OrderPlanItem[] = [];
@@ -427,6 +433,7 @@ export const buildPlanItemsFromOrder = (
 
   pushPlain(premedication, "PREMEDICATION", 90);
   pushPlain(supportive, "SUPPORTIVE", 100);
+  pushPlain(dilution, "DILUTION", 110);
 
   return items;
 };

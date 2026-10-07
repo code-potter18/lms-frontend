@@ -55,6 +55,23 @@ const withSelected = (names: string[], selected: string[]) => [
   ),
 ];
 
+/* Standard General Examination findings and the encounter column each is
+   stored in (a positive finding is saved as a boolean). */
+const GENERAL_EXAM_FLAGS = [
+  { label: "Icterus", field: "general_examination_icterus" },
+  { label: "Pallor", field: "general_examination_pallor" },
+  { label: "Clubbing", field: "general_examination_clubbing" },
+  { label: "Cyanosis", field: "general_examination_cyanosis" },
+  { label: "Oedema", field: "general_examination_oedema" },
+  {
+    label: "Lymphadenopathy",
+    field: "general_examination_lymphadenopathy",
+  },
+] as const;
+
+const hasGeneralExamFinding = (selected: string[], label: string) =>
+  selected.some((value) => value.toLowerCase() === label.toLowerCase());
+
 interface ConsultationStepProps {
   consultationState: ConsultationState | null;
   patient: PatientRecord | null;
@@ -146,13 +163,10 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
   >({});
   const [additionalInstructions, setAdditionalInstructions] = useState("");
 
-  const [generalExamIcterus, setGeneralExamIcterus] = useState(false);
-  const [generalExamPallor, setGeneralExamPallor] = useState(false);
-  const [generalExamClubbing, setGeneralExamClubbing] = useState(false);
-  const [generalExamCyanosis, setGeneralExamCyanosis] = useState(false);
-  const [generalExamOedema, setGeneralExamOedema] = useState(false);
-  const [generalExamLymphadenopathy, setGeneralExamLymphadenopathy] =
-    useState(false);
+  /* Standard General Examination findings (one row of checkbox -> one
+     multi-select field). Persisted as per-finding booleans, so the
+     selection is kept as the finding names. */
+  const [generalExamFindings, setGeneralExamFindings] = useState<string[]>([]);
   /* Extra General Examination findings (general_examination_master). */
   const [generalExamOthers, setGeneralExamOthers] = useState<string[]>([]);
   const [generalExamOptions, setGeneralExamOptions] = useState<
@@ -207,13 +221,10 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
     setSystemicRespiratory(encounter?.respiratory_examination ?? "");
     setSystemicClinicalFindings(encounter?.clinical_findings ?? "");
 
-    setGeneralExamIcterus(!!encounter?.general_examination_icterus);
-    setGeneralExamPallor(!!encounter?.general_examination_pallor);
-    setGeneralExamClubbing(!!encounter?.general_examination_clubbing);
-    setGeneralExamCyanosis(!!encounter?.general_examination_cyanosis);
-    setGeneralExamOedema(!!encounter?.general_examination_oedema);
-    setGeneralExamLymphadenopathy(
-      !!encounter?.general_examination_lymphadenopathy
+    setGeneralExamFindings(
+      GENERAL_EXAM_FLAGS.filter((flag) =>
+        Boolean(encounter?.[flag.field as keyof EncounterRecord])
+      ).map((flag) => flag.label)
     );
     setGeneralExamOthers(
       (encounter?.general_examination_others ?? []).map(
@@ -641,15 +652,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         },
         { label: "Diet Type", value: dietType },
       ],
-      generalExamination: [
-        ...(generalExamIcterus ? ["Icterus"] : []),
-        ...(generalExamPallor ? ["Pallor"] : []),
-        ...(generalExamClubbing ? ["Clubbing"] : []),
-        ...(generalExamCyanosis ? ["Cyanosis"] : []),
-        ...(generalExamOedema ? ["Oedema"] : []),
-        ...(generalExamLymphadenopathy ? ["Lymphadenopathy"] : []),
-        ...generalExamOthers,
-      ],
+      generalExamination: [...generalExamFindings, ...generalExamOthers],
       systemicExamination: [
         { label: "CNS", value: systemicCns },
         { label: "CVS", value: systemicCvs },
@@ -814,12 +817,17 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
     }
 
     /* General Examination (positive findings persisted as booleans). */
-    payload.general_examination_icterus = generalExamIcterus;
-    payload.general_examination_pallor = generalExamPallor;
-    payload.general_examination_clubbing = generalExamClubbing;
-    payload.general_examination_cyanosis = generalExamCyanosis;
-    payload.general_examination_oedema = generalExamOedema;
-    payload.general_examination_lymphadenopathy = generalExamLymphadenopathy;
+    GENERAL_EXAM_FLAGS.forEach((flag) => {
+      payload[
+        flag.field as
+          | "general_examination_icterus"
+          | "general_examination_pallor"
+          | "general_examination_clubbing"
+          | "general_examination_cyanosis"
+          | "general_examination_oedema"
+          | "general_examination_lymphadenopathy"
+      ] = hasGeneralExamFinding(generalExamFindings, flag.label);
+    });
     payload.general_examination_others = generalExamOthers.map((name) => {
       const match = generalExamOptions.find(
         (option) => option.name.toLowerCase() === name.toLowerCase()
@@ -1413,32 +1421,16 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       General Examination
     </div>
 
-    <div className="grid w-full grid-cols-3 gap-x-6 gap-y-4 pt-2">
-
-      {[
-        { label: "Icterus", checked: generalExamIcterus, onChange: setGeneralExamIcterus },
-        { label: "Pallor", checked: generalExamPallor, onChange: setGeneralExamPallor },
-        { label: "Clubbing", checked: generalExamClubbing, onChange: setGeneralExamClubbing },
-        { label: "Cyanosis", checked: generalExamCyanosis, onChange: setGeneralExamCyanosis },
-        { label: "Oedema", checked: generalExamOedema, onChange: setGeneralExamOedema },
-        { label: "Lymphadenopathy", checked: generalExamLymphadenopathy, onChange: setGeneralExamLymphadenopathy },
-      ].map((item) => (
-        <label
-          key={item.label}
-          className="flex items-center gap-3 cursor-pointer select-none"
-        >
-          <input
-            type="checkbox"
-            checked={item.checked}
-            onChange={(e) => item.onChange(e.target.checked)}
-            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-          />
-          <span className="text-sm font-medium text-slate-700">
-            {item.label}
-          </span>
-        </label>
-      ))}
-
+    <div className="flex flex-col gap-2 pt-2">
+      <label className="text-xs font-bold leading-4 text-slate-500">
+        Findings
+      </label>
+      <MultiSelectDropdown
+        options={GENERAL_EXAM_FLAGS.map((flag) => flag.label)}
+        value={generalExamFindings}
+        onValueChange={setGeneralExamFindings}
+        placeholder="Select findings"
+      />
     </div>
 
     {/* Other findings: search general_examination_master; "+ Add" adds a

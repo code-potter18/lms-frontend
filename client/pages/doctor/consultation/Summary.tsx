@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { jsPDF } from "jspdf";
-import autoTable, { type RowInput, type Styles } from "jspdf-autotable";
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import type { Styles } from 'jspdf-autotable';
 import API, { getActiveBranchId } from "../../../api/axios";
 import { appointmentApi } from "../../../api/appointment.api";
 import { getUser } from "../../../utils/token";
 import { clinicalDetailsApi } from "../../../api/clinicalDetails.api";
 import { patientApi } from "../../../api/patient.api";
+import { employeeApi } from "../../../api/employee.api";
+import { branchApi } from "../../../api/branch.api";
 import { encounterApi } from "../../../api/encounter.api";
 import {
   chemotherapyApi,
@@ -94,6 +97,7 @@ type SummaryPlanItem = {
   calculated_dose_unit?: string | null;
   formulation: string | null;
   dilution_volume: string | null;
+  dilution_solution?: string | null;
   administration_route: string | null;
   frequency: string | null;
   remarks: string | null;
@@ -160,6 +164,7 @@ type SummaryPlan = {
   created_at?: string | null;
   updated_at?: string | null;
   employees?: {
+    employee_id?: string | null;
     first_name?: string | null;
     last_name?: string | null;
   } | null;
@@ -203,10 +208,12 @@ type PremedRow = {
 
 type DischargeRow = {
   drug: string;
+  form: string;
   dose: string;
   frequency: string;
   instruction: string;
   duration: string;
+  comment: string;
 };
 
 /* A row of the order's Hydration tab. */
@@ -236,14 +243,16 @@ const DRUG_ROLE_CATEGORY: Record<string, string> = {
   PREMEDICATION: "Premedication",
   SUPPORTIVE: "Supportive",
   POSTMEDICATION: "Post-medication",
+  DILUTION: "Dilution",
 };
-const DRUG_ROLE_ORDER = ["PRIMARY", "PREMEDICATION", "SUPPORTIVE", "POSTMEDICATION"];
+const DRUG_ROLE_ORDER = ["PRIMARY", "PREMEDICATION", "SUPPORTIVE", "POSTMEDICATION", "DILUTION"];
 
 const CATEGORY_BADGE: Record<string, string> = {
   Chemotherapy: "bg-indigo-50 text-indigo-700 ring-indigo-200",
   Premedication: "bg-sky-50 text-sky-700 ring-sky-200",
   Supportive: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   "Post-medication": "bg-amber-50 text-amber-700 ring-amber-200",
+  Dilution: "bg-violet-50 text-violet-700 ring-violet-200",
 };
 
 /* "500 mL" from a volume + unit (either may be missing). */
@@ -310,6 +319,10 @@ const Summary: React.FC<{
   const [protocolDetail, setProtocolDetail] =
     useState<RegimenProtocolDetail | null>(null);
   const [patientName, setPatientName] = useState("");
+  const [patientMeta, setPatientMeta] = useState({ age: "", gender: "" });
+  /* Printed summary signature (the plan's doctor) and footer contact. */
+  const [doctorInfo, setDoctorInfo] = useState({ name: "", regNo: "" });
+  const [branchContact, setBranchContact] = useState("");
 
   const [summaryAllergies, setSummaryAllergies] = useState<string[]>([]);
   const [summarySymptoms, setSummarySymptoms] = useState<string[]>([]);
@@ -555,12 +568,42 @@ const Summary: React.FC<{
           .filter(Boolean)
           .join(" ");
         setPatientName(name);
+        setPatientMeta({
+          age: p?.patient_age != null ? String(p.patient_age) : "",
+          gender: (p?.patient_gender ?? "").charAt(0).toUpperCase(),
+        });
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [resolvedPatientId]);
+
+  /* Printed summary: the branch contact line for the footer. */
+  useEffect(() => {
+    const branchId = getActiveBranchId() ?? getUser()?.branch_id;
+    if (!branchId) return;
+    let cancelled = false;
+    branchApi
+      .getById(String(branchId))
+      .then((response) => {
+        if (cancelled) return;
+        const branch = response.data.data;
+        setBranchContact(
+          [
+            branch?.branch_name,
+            branch?.emergency_no && `Emergency - ${branch.emergency_no}`,
+            branch?.branch_email && `Email - ${branch.branch_email}`,
+          ]
+            .filter(Boolean)
+            .join(", ")
+        );
+      })
+      .catch((error) => console.error("Failed to load branch contact:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!resolvedPatientId) return;
@@ -592,6 +635,31 @@ const Summary: React.FC<{
       cancelled = true;
     };
   }, [resolvedPatientId]);
+
+  /* The logged-in doctor signs the printed summary (else the plan's doctor). */
+  const signingDoctorId = getUser()?.employee_id ?? plan?.employees?.employee_id ?? "";
+  useEffect(() => {
+    if (!signingDoctorId) return;
+    let cancelled = false;
+    employeeApi
+      .getOne(String(signingDoctorId))
+      .then((response) => {
+        if (cancelled) return;
+        const detail = response.data.data;
+        const employee = detail?.employee;
+        const name = [employee?.first_name, employee?.last_name]
+          .filter(Boolean)
+          .join(" ");
+        setDoctorInfo({
+          name: name ? `Dr ${name.replace(/^dr\.?\s+/i, "")}` : "",
+          regNo: employee?.license_no || detail?.doctorProfile?.license_no || "",
+        });
+      })
+      .catch((error) => console.error("Failed to load doctor details:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [signingDoctorId]);
 
   /* This visit's cycle day order(s): those saved in its encounter. The
      current order is usually one of them; any other is fetched. */
@@ -734,6 +802,7 @@ const Summary: React.FC<{
               item.medicine_master?.medicine_name ||
               item.medicine_master?.generic_name ||
               "",
+            form: item.drug_from || item.medicine_master?.dosage_form || "",
             dose:
               item.patient_dose != null && item.patient_dose !== ""
                 ? `${item.patient_dose} ${
@@ -747,6 +816,9 @@ const Summary: React.FC<{
               item.composition ||
               "",
             duration: item.duration || "",
+            /* Shown separately only when not already used as the instruction. */
+            comment:
+              item.comment && item.administration_detail ? item.comment : "",
           }))
         );
       })
@@ -973,231 +1045,423 @@ const Summary: React.FC<{
     return `${cycleLabel}${status}`;
   })();
 
-  const handleDownloadSummary = () => {
-    const doc = new jsPDF({
-      orientation: "landscape",
-      unit: "pt",
-      format: "a4",
-    });
-
-    doc.setFontSize(16);
-    doc.setTextColor(20, 30, 40);
-    doc.text("Chemotherapy Summary", 40, 44);
-
-    doc.setFontSize(9);
-    doc.setTextColor(100, 116, 139);
-    const infoLine = [
-      `Patient: ${patientName || resolvedPatientId}`,
-      cancerType && `Cancer Type: ${cancerType}`,
-      stage && `Stage: ${stage}`,
-      context && `Context: ${context}`,
-      protocol && `Protocol: ${protocol}`,
-      duration && `Duration: ${duration}`,
-      current && `Current: ${current}`,
-    ]
-      .filter(Boolean)
-      .join("   |   ");
-    doc.text(infoLine, 40, 60);
-
-    const tableStyles = {
-      fontSize: 8,
-      cellPadding: 5,
-      textColor: [30, 41, 59] as [number, number, number],
-      lineColor: [226, 232, 240] as [number, number, number],
-      lineWidth: 0.5,
-    };
-    const headStyles = {
-      fillColor: [0, 71, 133] as [number, number, number],
-      textColor: [255, 255, 255] as [number, number, number],
-      fontSize: 8.5,
-      fontStyle: "bold" as const,
-    };
-
-    let y = 88;
+  /* Printed / downloaded summary, laid out like the hospital's chemo
+     sheets: the day's administration schedule + dilution table, the
+     discharge advice, then the full drug list - each section with the
+     patient header, the doctor's signature and the contact footer. */
+  const handleDownloadSummary = (mode: "download" | "print" = "download") => {
+    const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
+    const marginX = 40;
+    /* Room below for the signature (every page) and the contact footer. */
+    const contentBottom = pageHeight - 110;
+    const BLACK: [number, number, number] = [17, 17, 17];
+    const GREY: [number, number, number] = [100, 100, 100];
 
-    /* A titled section table: an accent bar + title (with an optional
-       right-aligned note such as the cycle day), and a muted "none" row
-       when the list is empty. stageColumn colours PRE / POST. */
-    const renderTable = (
-      title: string,
-      head: string[],
-      body: string[][],
-      options: {
-        note?: string;
-        empty?: string;
-        columnStyles?: Record<number, Partial<Styles>>;
-        stageColumn?: number;
-      } = {}
-    ) => {
-      /* Keep a section title together with the start of its table. */
-      if (y > pageHeight - 110) {
-        doc.addPage();
-        y = 40;
-      }
-      doc.setFillColor(0, 71, 133);
-      doc.rect(40, y - 9, 3, 12, "F");
-      doc.setFontSize(11);
-      doc.setTextColor(49, 46, 129);
-      doc.text(title, 49, y);
-      if (options.note) {
-        doc.setFontSize(8.5);
-        doc.setTextColor(100, 116, 139);
-        doc.text(options.note, pageWidth - 40, y, { align: "right" });
-      }
-      y += 8;
-      const rows: RowInput[] =
-        body.length > 0
-          ? body.map((row) => row.map((cell) => cell || "-"))
-          : [
-              [
-                {
-                  content: options.empty ?? "None recorded",
-                  colSpan: head.length,
-                  styles: {
-                    halign: "center",
-                    fontStyle: "italic",
-                    textColor: [148, 163, 184],
-                  },
-                },
-              ],
-            ];
-      autoTable(doc, {
-        startY: y,
-        head: [head],
-        body: rows,
-        styles: { ...tableStyles, valign: "top", overflow: "linebreak" },
-        headStyles,
-        alternateRowStyles: { fillColor: [247, 249, 251] },
-        columnStyles: options.columnStyles,
-        margin: { left: 40, right: 40, bottom: 40 },
-        didParseCell: (data) => {
-          if (
-            options.stageColumn !== undefined &&
-            body.length > 0 &&
-            data.section === "body" &&
-            data.column.index === options.stageColumn
-          ) {
-            data.cell.styles.fontStyle = "bold";
-            data.cell.styles.textColor =
-              data.cell.raw === "POST" ? [180, 83, 9] : [29, 78, 216];
-          }
-        },
+    const sheetTitle = protocol || "Chemotherapy Summary";
+    const firstOrder = visitOrders[0];
+    const cycleDay = firstOrder
+      ? `${firstOrder.cycle_number}/${firstOrder.cycle_day}`
+      : "";
+    const today = new Date();
+    const doa = `${String(today.getDate()).padStart(2, "0")}/${String(
+      today.getMonth() + 1
+    ).padStart(2, "0")}/${today.getFullYear()}`;
+    const ageSex = [patientMeta.age, patientMeta.gender].filter(Boolean).join("/");
+    const patientLabel = `${(patientName || resolvedPatientId).toUpperCase()}${
+      ageSex ? ` (${ageSex})` : ""
+    }`;
+    const bsaLabel = measurements.bsa ? `${measurements.bsa} m²` : "";
+
+    /* Patient header. "full" adds intent / cycle / BSA / cancer type (the
+       first page of a section); continuation pages get name, UHID and DOA. */
+    const drawHeader = (title: string, full: boolean) => {
+      let y = 50;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.setTextColor(...BLACK);
+      doc.text(title, pageWidth / 2, y, { align: "center" });
+      y += 30;
+
+      const rows: [string, string, string, string][] = full
+        ? [
+            ["Patient Name", patientLabel, "UHID", resolvedPatientId],
+            ["Intent of Treatment", context, "DOA", doa],
+            ["Cycle/Day", cycleDay, "BSA", bsaLabel],
+            ["Cancer Type", cancerType, "", ""],
+          ]
+        : [
+            ["Patient Name", patientLabel, "UHID", resolvedPatientId],
+            ["DOA", doa, "", ""],
+          ];
+      doc.setFontSize(10);
+      rows.forEach(([leftLabel, leftValue, rightLabel, rightValue]) => {
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(...GREY);
+        doc.text(leftLabel, marginX, y);
+        if (rightLabel) doc.text(rightLabel, 330, y);
+        doc.setTextColor(...BLACK);
+        doc.text(`:  ${leftValue || "-"}`, 150, y, { maxWidth: 175 });
+        if (rightLabel) doc.text(`:  ${rightValue || "-"}`, 430, y);
+        y += 18;
       });
-      y = (doc as any).lastAutoTable?.finalY ?? y;
-      y += 24;
+      return y + 8;
     };
 
-    renderTable(
-      "Chemotherapy Orders",
-      ["Drug Name", "Form", "Dose", "Unit"],
-      chemotherapyOrders.map((row) => [
+    /* Bottom-right signature, drawn on every page just above the footer
+       (content stops at contentBottom, so it never overlaps). */
+    const drawSignature = () => {
+      if (!doctorInfo.name && !doctorInfo.regNo) return;
+      const sigY = pageHeight - 90;
+      const sigX = pageWidth - marginX - 100;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(...BLACK);
+      if (doctorInfo.name) doc.text(doctorInfo.name, sigX, sigY, { align: "center" });
+      if (doctorInfo.regNo) {
+        doc.setTextColor(...GREY);
+        doc.text(`Reg No. ${doctorInfo.regNo}`, sigX, sigY + 16, { align: "center" });
+      }
+    };
+
+    const tableTheme = {
+      theme: "grid" as const,
+      styles: {
+        font: "helvetica",
+        fontSize: 9.5,
+        cellPadding: 6,
+        textColor: BLACK,
+        lineColor: [225, 225, 225] as [number, number, number],
+        lineWidth: 0.5,
+        valign: "middle" as const,
+        overflow: "linebreak" as const,
+      },
+      headStyles: {
+        fillColor: [243, 243, 243] as [number, number, number],
+        textColor: BLACK,
+        fontStyle: "normal" as const,
+        fontSize: 10,
+      },
+    };
+
+    /* A grid table that redraws the short patient header on every page
+       it spills onto. */
+    const drawTable = (
+      title: string,
+      startY: number,
+      head: string[],
+      body: string[][],
+      columnStyles?: Record<number, Partial<Styles>>
+    ) => {
+      autoTable(doc, {
+        ...tableTheme,
+        startY,
+        head: [head],
+        body: body.map((row) => row.map((cell) => cell || "-")),
+        columnStyles,
+        margin: { left: marginX, right: marginX, top: 132, bottom: 110 },
+        didDrawPage: (data) => {
+          if (data.pageNumber > 1) drawHeader(title, false);
+        },
+      });
+      return (doc as any).lastAutoTable?.finalY ?? startY;
+    };
+
+    const sectionHeading = (text: string, y: number) => {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.setTextColor(...BLACK);
+      doc.text(text, marginX, y);
+      return y + 12;
+    };
+
+    /* ---------- Section 1: day schedule + dilution ---------- */
+    let y = drawHeader(sheetTitle, true);
+
+    const ensureSpace = (needed: number) => {
+      if (y + needed > contentBottom) {
+        doc.addPage();
+        y = drawHeader(sheetTitle, false);
+      }
+    };
+    const writeLines = (text: string, bold = false, gapAfter = 4) => {
+      doc.setFont("helvetica", bold ? "bold" : "normal");
+      doc.setFontSize(bold ? 12 : 10.5);
+      doc.setTextColor(...BLACK);
+      const lines = doc.splitTextToSize(text, pageWidth - marginX * 2) as string[];
+      ensureSpace(lines.length * 15);
+      doc.text(lines, marginX, y);
+      y += lines.length * 15 + gapAfter;
+    };
+
+    writeLines(
+      `Day ${firstOrder?.cycle_day ?? 1}:  ${doa}`,
+      true,
+      6
+    );
+
+    /* The protocol diluent for a drug, when the plan item has none. */
+    const diluentFor = (item: SummaryPlanItem) => {
+      if (item.dilution_solution) return item.dilution_solution;
+      const medicineId = item.medicine_id ?? item.medicine_master?.medicine_id;
+      return (
+        (protocolDetail?.protocol_dilutions ?? []).find(
+          (dilution) =>
+            !dilution.hydration_stage &&
+            dilution.diluent &&
+            ((medicineId && dilution.medicine_id === medicineId) ||
+              dilution.medicine_master?.medicine_name === planItemName(item))
+        )?.diluent ?? ""
+      );
+    };
+    const formPrefix = (item: SummaryPlanItem) => {
+      const form = item.formulation || item.medicine_master?.dosage_form || "";
+      return /inj/i.test(form) || !form ? "Inj." : `${form}.`;
+    };
+    const infusionLabel = (item: SummaryPlanItem) => {
+      const minutes = item.infusion_duration_minutes;
+      if (minutes == null) return "";
+      return minutes % 60 === 0
+        ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`
+        : `${minutes} mins`;
+    };
+
+    const scheduleItems = [...planItems]
+      .filter((item) =>
+        ["PREMEDICATION", "PRIMARY"].includes((item.drug_role ?? "").toUpperCase())
+      )
+      /* Premedications first, then the chemotherapy drugs. */
+      .sort(
+        (a, b) =>
+          (a.drug_role === "PREMEDICATION" ? 0 : 1) -
+            (b.drug_role === "PREMEDICATION" ? 0 : 1) ||
+          (a.drug_sequence ?? 0) - (b.drug_sequence ?? 0)
+      );
+    const hydrationLine = (row: HydrationSummaryRow) =>
+      [[row.agent, row.volume, row.diluent].filter(Boolean).join(" "), row.guidance]
+        .filter(Boolean)
+        .join(" - ");
+
+    hydrationRows
+      .filter((row) => row.stage === "PRE")
+      .forEach((row) => writeLines(hydrationLine(row)));
+
+    scheduleItems.forEach((item, index) => {
+      const name = planItemName(item);
+      const protocolDose =
+        item.protocol_dose != null
+          ? `${item.protocol_dose} ${item.protocol_dose_unit ?? ""}`.trim()
+          : "";
+      let line = `${index + 1}. ${formPrefix(item)} ${name}`;
+      if ((item.drug_role ?? "").toUpperCase() === "PRIMARY") {
+        const patientDose =
+          item.calculated_dose != null
+            ? `${Number(item.calculated_dose)} ${
+                item.calculated_dose_unit || item.protocol_dose_unit || ""
+              }`.trim()
+            : "";
+        const diluent = diluentFor(item);
+        const duration = infusionLabel(item);
+        line += ` (${protocolDose})`;
+        if (patientDose) line += ` - ${patientDose}`;
+        if (item.dilution_volume) {
+          line += ` in ${item.dilution_volume} ml${diluent ? ` of ${diluent}` : ""}`;
+        } else if (diluent) {
+          line += ` in ${diluent}`;
+        }
+        if (duration) line += ` over (${duration})`;
+        if (item.infusion_type) line += ` ${item.infusion_type}`;
+      } else {
+        line += `${protocolDose ? ` (${protocolDose})` : ""}${
+          item.administration_route ? ` ${item.administration_route}` : ""
+        }${item.infusion_type ? ` ${item.infusion_type}` : ""}`;
+      }
+      writeLines(line, false, item.administration_detail ? 0 : 8);
+      if (item.administration_detail) writeLines(item.administration_detail, false, 8);
+    });
+
+    hydrationRows
+      .filter((row) => row.stage === "POST")
+      .forEach((row) => writeLines(hydrationLine(row)));
+
+    if (scheduleItems.length === 0) {
+      writeLines("No chemotherapy ordered for this visit.");
+    }
+
+    /* Dilution: the protocol's vial-wise dilutions, else this visit's
+       chemotherapy drugs. */
+    const dilutionRows: string[][] = (() => {
+      const protocolRows = (protocolDetail?.protocol_dilutions ?? []).filter(
+        (dilution) => !dilution.hydration_stage
+      );
+      if (protocolRows.length > 0) {
+        return protocolRows.map((dilution, index) => [
+          String(index + 1),
+          dilution.medicine_master?.medicine_name || dilution.drug_brand_name || "",
+          dilution.form ?? "",
+          volumeLabel(dilution.dose, dilution.dose_unit),
+          volumeLabel(dilution.dilution_volume, dilution.dilution_volume_unit),
+          dilution.diluent ?? "",
+        ]);
+      }
+      return chemotherapyOrders.map((row, index) => [
+        String(index + 1),
         row.drug,
         row.form,
-        row.dose,
-        row.unit,
-      ])
-    );
-    renderTable(
-      "Premedication",
-      ["Drug Name", "Dose", "Route", "Time"],
-      premedications.map((row) => [row.drug, row.dose, row.route, row.time])
-    );
-    renderTable(
-      "Hydration",
-      ["Stage", "Agent", "Diluent", "Volume", "Guidance"],
-      hydrationRows.map((row) => [
-        row.stage,
-        row.agent,
-        row.diluent,
-        row.volume,
-        row.guidance,
-      ]),
-      {
-        note: visitCycleDay,
-        empty: "No hydration ordered for this visit",
-        stageColumn: 0,
-        columnStyles: {
-          0: { cellWidth: 55 },
-          1: { cellWidth: 150 },
-          2: { cellWidth: 140 },
-          3: { cellWidth: 80 },
-        },
-      }
-    );
-    renderTable(
-      "Administration Instructions",
-      [
-        "Drug Name",
-        "Category",
-        "Route",
-        "Infusion",
-        "Frequency",
-        "Timing",
-        "Admin Detail",
-        "Remarks",
-      ],
-      adminInstructionRows.map((row) => [
-        row.drug,
-        row.category,
-        row.route,
-        row.infusion,
-        row.frequency,
-        row.timing,
-        row.detail,
-        row.remarks,
-      ]),
-      {
-        note: visitCycleDay,
-        empty: "No administration instructions for this visit",
-        columnStyles: {
-          0: { cellWidth: 115, fontStyle: "bold" },
-          1: { cellWidth: 78 },
-          2: { cellWidth: 50 },
-          3: { cellWidth: 82 },
-          4: { cellWidth: 70 },
-          5: { cellWidth: 80 },
-          7: { cellWidth: 110 },
-        },
-      }
-    );
-    renderTable(
-      "Discharge Medication",
-      ["Drug Name", "Dose", "Frequency", "Instruction", "Duration"],
-      dischargeMedications.map((row) => [
-        row.drug,
-        row.dose,
-        row.frequency,
-        row.instruction,
-        row.duration,
-      ])
-    );
+        [row.dose, row.unit].filter(Boolean).join(" "),
+        row.volume ? `${row.volume} ml` : "",
+        "",
+      ]);
+    })();
 
-    y += 8;
-    if (y > pageHeight - 50) {
-      doc.addPage();
-      y = 40;
+    if (dilutionRows.length > 0) {
+      y += 14;
+      ensureSpace(60);
+      y = sectionHeading("Dilution", y);
+      y = drawTable(
+        sheetTitle,
+        y,
+        ["Sr.", "Drug Name", "Form", "Dose in mg", "Dilution in ml", "Diluent"],
+        dilutionRows,
+        { 0: { cellWidth: 32 } }
+      );
     }
-    doc.setFontSize(9);
-    doc.setTextColor(15, 23, 42);
-    doc.text(`Next Visit Date: ${nextVisitDate || ""}`, 40, y);
-    doc.text(`Next Cycle: ${nextCycle || ""}`, 300, y);
 
-    /* Footer on every page: when it was generated, and page x of n. */
-    const generatedAt = new Date().toLocaleString();
+    /* ---------- Section 2: discharge advice ---------- */
+    const dischargeTitle = `DISCHARGE ADVICE - ${sheetTitle}`;
+    doc.addPage();
+    y = drawHeader(dischargeTitle, true);
+    y = sectionHeading("On Discharge Medication", y + 6);
+    y = drawTable(
+      dischargeTitle,
+      y,
+      ["Sr.", "DF", "Drug Name", "Dosage", "Freq", "Instruction", "Dur.", "Comment"],
+      dischargeMedications.length > 0
+        ? dischargeMedications.map((row, index) => [
+            String(index + 1),
+            row.form,
+            row.drug,
+            row.dose,
+            row.frequency,
+            row.instruction,
+            row.duration,
+            row.comment,
+          ])
+        : [["", "", "No discharge medication", "", "", "", "", ""]],
+      { 0: { cellWidth: 32 } }
+    );
+
+    /* Post-chemo instructions: this visit's post-medications, then the
+       next visit. */
+    const postMeds = planItems.filter(
+      (item) => (item.drug_role ?? "").toUpperCase() === "POSTMEDICATION"
+    );
+    const postLines = [
+      ...postMeds.map((item, index) =>
+        [
+          `${index + 1}. ${planItemName(item)}`,
+          item.protocol_dose != null
+            ? `${item.protocol_dose} ${item.protocol_dose_unit ?? ""}`.trim()
+            : "",
+          item.frequency ? `- ${item.frequency}` : "",
+          item.administration_detail ? `(${item.administration_detail})` : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
+      ),
+      nextVisitDate || nextCycle
+        ? `Next visit: ${[nextVisitDate, nextCycle].filter(Boolean).join(" - ")}`
+        : "",
+    ].filter(Boolean);
+    if (postLines.length > 0) {
+      y += 30;
+      const reset = () => drawHeader(dischargeTitle, false);
+      if (y + 40 > contentBottom) {
+        doc.addPage();
+        y = reset();
+      }
+      y = sectionHeading("Post Chemo Instructions", y) + 4;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10.5);
+      doc.setTextColor(...BLACK);
+      postLines.forEach((text) => {
+        const lines = doc.splitTextToSize(text, pageWidth - marginX * 2) as string[];
+        if (y + lines.length * 15 > contentBottom) {
+          doc.addPage();
+          y = reset();
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(10.5);
+          doc.setTextColor(...BLACK);
+        }
+        doc.text(lines, marginX, y);
+        y += lines.length * 15;
+      });
+    }
+
+    /* ---------- Section 3: every drug of the visit ---------- */
+    if (adminInstructionRows.length > 0) {
+      doc.addPage();
+      y = drawHeader(sheetTitle, false);
+      const doseOf = (item: SummaryPlanItem) =>
+        item.calculated_dose != null
+          ? `${Number(item.calculated_dose)} ${item.calculated_dose_unit ?? ""}`.trim()
+          : item.protocol_dose != null
+            ? `${item.protocol_dose} ${item.protocol_dose_unit ?? ""}`.trim()
+            : "";
+      const sortedItems = [...planItems].sort(
+        (a, b) =>
+          roleRank(a.drug_role) - roleRank(b.drug_role) ||
+          (a.drug_sequence ?? 0) - (b.drug_sequence ?? 0)
+      );
+      y = drawTable(
+        sheetTitle,
+        y,
+        ["Sr.", "Drug Name", "Form", "Dose", "Route", "Category"],
+        sortedItems.map((item, index) => {
+          const category =
+            DRUG_ROLE_CATEGORY[(item.drug_role ?? "").toUpperCase()] ?? item.drug_role ?? "";
+          return [
+            String(index + 1),
+            planItemName(item),
+            item.formulation || item.medicine_master?.dosage_form || "",
+            doseOf(item),
+            item.administration_route ?? "",
+            category ? `${category} Medication` : "",
+          ];
+        }),
+        { 0: { cellWidth: 32 } }
+      );
+    }
+
+    /* Footer on every page: doctor's signature, contact strip + page x / n. */
     const pageCount = doc.getNumberOfPages();
     for (let page = 1; page <= pageCount; page++) {
       doc.setPage(page);
-      doc.setDrawColor(226, 232, 240);
-      doc.setLineWidth(0.5);
-      doc.line(40, pageHeight - 30, pageWidth - 40, pageHeight - 30);
-      doc.setFontSize(7.5);
-      doc.setTextColor(148, 163, 184);
-      doc.text(`Generated ${generatedAt}`, 40, pageHeight - 18);
-      doc.text(`Page ${page} of ${pageCount}`, pageWidth - 40, pageHeight - 18, {
+      drawSignature();
+      doc.setFillColor(243, 243, 243);
+      doc.rect(marginX, pageHeight - 58, pageWidth - marginX * 2, 44, "F");
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.setTextColor(...GREY);
+      if (branchContact) {
+        doc.text(`Contact: ${branchContact}`, marginX + 14, pageHeight - 40, {
+          maxWidth: pageWidth - marginX * 2 - 90,
+        });
+      }
+      doc.setFontSize(9);
+      doc.text(`Page ${page} / ${pageCount}`, pageWidth - marginX - 14, pageHeight - 24, {
         align: "right",
       });
+    }
+
+    if (mode === "print") {
+      // Open the same PDF in a new tab with the print dialog triggered.
+      doc.autoPrint();
+      const printUrl = URL.createObjectURL(doc.output("blob"));
+      window.open(printUrl, "_blank");
+      setTimeout(() => URL.revokeObjectURL(printUrl), 60_000);
+      return;
     }
 
     const blob = doc.output("blob");
@@ -2355,7 +2619,15 @@ const Summary: React.FC<{
           {summarySubmitMessage}
         </div>
       )}
-      <div className="mb-8 flex flex-wrap justify-end gap-4">
+      <div className="mb-8 flex flex-wrap items-center gap-4">
+        <button
+          type="button"
+          onClick={() => handleDownloadSummary("print")}
+          className="mr-auto rounded-md border border-[#5624D0] bg-white px-8 py-3 font-medium text-[#5624D0] shadow-sm transition-colors hover:bg-[#5624D0]/5"
+        >
+          Print
+        </button>
+
         <button
           type="button"
           onClick={handleSubmitSummary}
@@ -2367,10 +2639,10 @@ const Summary: React.FC<{
 
         <button
           type="button"
-          onClick={handleDownloadSummary}
+          onClick={() => handleDownloadSummary("download")}
           className="rounded-md bg-[#5624D0] px-8 py-3 font-medium text-white shadow-sm transition-colors hover:bg-[#4a1fb5]"
         >
-          Print / Download Summary
+          Download Summary
         </button>
       </div>
     </>

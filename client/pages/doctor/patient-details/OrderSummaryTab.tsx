@@ -560,7 +560,7 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
 
   const diagnosisOrderEntries = buildOrderEntries([
     ["Cancer Type", osd?.cancer_types?.cancer_type ?? savedPlan?.cancer_type],
-    ["Subtype", osd?.cancer_subtypes?.subtype_name ?? savedPlan?.cancer_subtype],
+    ["Subtype", osd?.histopathology || osd?.cancer_subtypes?.subtype_name || savedPlan?.cancer_subtype],
     ["Clinical Stage", osd?.clinical_stage ?? savedPlan?.cancer_stage],
     ["Staging System", osd?.staging_system],
     ["T Stage", osd?.t_stage],
@@ -620,7 +620,7 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
 {/* BEGIN: Recent Details Sections (fetched for the selected patient) */}
 {diagnosisOrderEntries.length > 0 && (
 <section className="mb-6 overflow-hidden rounded-[16px] shadow-sm border border-[#e2e8f0] bg-white">
-  <SectionHeader icon="fa-solid fa-file-medical" title={`Diagnosis & Staging — ${[osd?.cancer_types?.cancer_type, osd?.cancer_subtypes?.subtype_name].filter(Boolean).join(" — ") || orderTherapy || "—"}`} badge={osd?.clinical_stage || savedPlan?.cancer_stage || "—"} />
+  <SectionHeader icon="fa-solid fa-file-medical" title={`Diagnosis & Staging — ${[osd?.cancer_types?.cancer_type, osd?.histopathology || osd?.cancer_subtypes?.subtype_name].filter(Boolean).join(" — ") || orderTherapy || "—"}`} badge={osd?.clinical_stage || savedPlan?.cancer_stage || "—"} />
   {renderOrderEntryGrid(diagnosisOrderEntries)}
 </section>
 )}

@@ -802,6 +802,7 @@ const HistoryTab: React.FC<{
   };
 
   const stagingDiagnosisName = (record: StagingDetailRecord) =>
+    record.histopathology ||
     record.cancer_subtypes?.subtype_name ||
     record.pre_diagnosis ||
     record.cancer_types?.cancer_type ||

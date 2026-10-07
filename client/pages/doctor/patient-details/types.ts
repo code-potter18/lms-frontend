@@ -103,15 +103,6 @@ export interface ChemoMatchingProtocol {
    FULL STAGING DETAIL RECORDS (GET /oncology/staging-details/:id)
    Every field the backend can return for the selected patient.
    ============================================================ */
-export interface StagingPatientBio {
-  patient_id?: string;
-  patient_first_name?: string | null;
-  patient_last_name?: string | null;
-  patient_dob?: string | null;
-  patient_age?: number | string | null;
-  patient_gender?: string | null;
-}
-
 export interface StagingIhcRecord {
   ihc_id?: string;
   er_status?: string | null;
@@ -213,10 +204,12 @@ export interface StagingDetailRecord {
   updated_at?: string | null;
   cancer_types?: { cancer_type?: string | null } | null;
   cancer_subtypes?: { subtype_name?: string | null } | null;
+  /* The doctor's own wording of the histopathology for this patient;
+     null = the subtype's name. */
+  histopathology?: string | null;
   ihc_results?: StagingIhcRecord | null;
   molecular_results?: StagingMolecularRecord | null;
   derived_fields?: StagingDerivedRecord | null;
-  patient_bio_data?: StagingPatientBio | null;
   employees?: {
     first_name?: string | null;
     last_name?: string | null;

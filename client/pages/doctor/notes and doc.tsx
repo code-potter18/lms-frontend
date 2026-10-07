@@ -12,6 +12,8 @@ import {
   downloadDocument,
   downloadAllDocuments,
 } from "../../utils/patientDocuments";
+import { downloadPatientDocumentsDocx, downloadDocumentAsDocx } from "../../utils/patientDocumentsDocx";
+import WordLibraryPreview from "../../components/hms/WordLibraryPreview";
 
 interface ClinicalNoteRecord {
   id: string;
@@ -299,6 +301,8 @@ const PatientNotesDocuments: React.FC<{
   const [isUploadingDoc, setIsUploadingDoc] = useState(false);
   const [docSuccessMsg, setDocSuccessMsg] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<PatientDocumentItem | null>(null);
+  const [isDownloadingWord, setIsDownloadingWord] = useState(false);
+  const [isExportingDocs, setIsExportingDocs] = useState(false);
 
   /* Load stored patient documents from IndexedDB */
   useEffect(() => {
@@ -490,6 +494,8 @@ const PatientNotesDocuments: React.FC<{
         `${newItems.length === 1 ? `"${newItems[0].name}"` : `${newItems.length} documents`} uploaded to Document Library!`
       );
       setTimeout(() => setDocSuccessMsg(null), 4000);
+      /* The upload lands straight in the combined Word view */
+      setPreviewDoc(newItems[0]);
     }
     setIsUploadingDoc(false);
     if (fileInputRef.current) {
@@ -532,6 +538,27 @@ const PatientNotesDocuments: React.FC<{
     downloadDocument(doc);
   };
 
+  /* Card Download gives a Word file (content + logos converted); types
+     Word cannot represent fall back to the original file download. */
+  const handleDownloadAsWord = async (doc: PatientDocumentItem) => {
+    if (isDownloadingWord) return;
+    setIsDownloadingWord(true);
+    try {
+      const converted = await downloadDocumentAsDocx(doc);
+      if (converted) {
+        setDocSuccessMsg(`"${doc.name}" downloaded as Word (.docx)`);
+        setTimeout(() => setDocSuccessMsg(null), 4000);
+      } else {
+        downloadDocument(doc);
+      }
+    } catch (err) {
+      console.error("Word download failed:", err);
+      downloadDocument(doc);
+    } finally {
+      setIsDownloadingWord(false);
+    }
+  };
+
   const handleView = (doc: PatientDocumentItem) => {
     setPreviewDoc(doc);
   };
@@ -543,6 +570,18 @@ const PatientNotesDocuments: React.FC<{
       if (previewDoc?.id === docId) {
         setPreviewDoc(null);
       }
+    }
+  };
+
+  const handleExportDocuments = async () => {
+    if (documents.length === 0 || isExportingDocs) return;
+    setIsExportingDocs(true);
+    try {
+      await downloadPatientDocumentsDocx(documents, { patientId: resolvedPatientId });
+    } catch (err) {
+      console.error("Failed to export documents summary:", err);
+    } finally {
+      setIsExportingDocs(false);
     }
   };
 
@@ -1318,10 +1357,12 @@ const PatientNotesDocuments: React.FC<{
 
                           <button
                             type="button"
-                            onClick={() => handleDownload(document)}
-                            className="flex-1 rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 flex items-center justify-center gap-1.5"
+                            onClick={() => handleDownloadAsWord(document)}
+                            disabled={isDownloadingWord}
+                            title="Download as Word (.docx)"
+                            className="flex-1 rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 flex items-center justify-center gap-1.5 disabled:cursor-wait disabled:opacity-60"
                           >
-                            <i className="fa-solid fa-download text-xs" />
+                            <i className={`fa-solid ${isDownloadingWord ? "fa-spinner fa-spin" : "fa-download"} text-xs`} />
                             Download
                           </button>
                         </div>
@@ -1665,11 +1706,12 @@ const PatientNotesDocuments: React.FC<{
             {/* Export */}
             <button
               type="button"
-              onClick={() => console.log("Export Documents")}
-              className="flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              onClick={handleExportDocuments}
+              disabled={documents.length === 0 || isExportingDocs}
+              className="flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <i className="fa-solid fa-file-export mr-2" />
-              Export Documents
+              {isExportingDocs ? "Exporting…" : "Export Documents"}
             </button>
 
             {/* Save */}
@@ -1879,96 +1921,12 @@ const PatientNotesDocuments: React.FC<{
           DOCUMENT PREVIEW MODAL
       ======================================================== */}
       {previewDoc && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-          onClick={() => setPreviewDoc(null)}
-        >
-          <div
-            className="relative flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl bg-white shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-              <div className="flex items-center space-x-3 overflow-hidden">
-                <div className={`text-2xl ${previewDoc.color}`}>
-                  <i className={`fa-solid ${previewDoc.icon}`} />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="truncate text-base font-bold text-slate-900" title={previewDoc.name}>
-                    {previewDoc.name}
-                  </h3>
-                  <p className="text-xs text-slate-500">{previewDoc.info}</p>
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={() => window.open(previewDoc.url, "_blank")}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                  title="Open in new window"
-                >
-                  <i className="fa-solid fa-up-right-from-square text-xs" />
-                  Open in New Tab
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDownload(previewDoc)}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
-                  title="Download file"
-                >
-                  <i className="fa-solid fa-download text-xs" />
-                  Download
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreviewDoc(null)}
-                  className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
-                  aria-label="Close preview"
-                >
-                  <i className="fa-solid fa-xmark text-base" />
-                </button>
-              </div>
-            </div>
-
-            {/* Modal Body */}
-            <div className="flex-1 overflow-auto bg-slate-100 p-4 min-h-[300px] flex items-center justify-center">
-              {previewDoc.type.includes("pdf") || previewDoc.name.toLowerCase().endsWith(".pdf") ? (
-                <iframe
-                  src={previewDoc.url}
-                  className="h-[70vh] w-full rounded-lg border border-slate-200 bg-white"
-                  title={previewDoc.name}
-                />
-              ) : previewDoc.type.startsWith("image/") ||
-                /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(previewDoc.name) ? (
-                <img
-                  src={previewDoc.url}
-                  alt={previewDoc.name}
-                  className="max-h-[70vh] max-w-full rounded-lg object-contain shadow-sm"
-                />
-              ) : (
-                <div className="py-12 text-center">
-                  <div className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white shadow-sm text-3xl ${previewDoc.color}`}>
-                    <i className={`fa-solid ${previewDoc.icon}`} />
-                  </div>
-                  <h4 className="text-base font-semibold text-slate-900 mb-1">{previewDoc.name}</h4>
-                  <p className="text-xs text-slate-500 mb-4">{previewDoc.info}</p>
-                  <p className="text-xs text-slate-400 max-w-md mx-auto mb-5">
-                    Direct in-browser preview is not supported for this file type. Click below to download and view it locally.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => handleDownload(previewDoc)}
-                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                  >
-                    <i className="fa-solid fa-download" />
-                    Download File
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <WordLibraryPreview
+          documents={documents}
+          highlightDocId={previewDoc.id}
+          onClose={() => setPreviewDoc(null)}
+          onDownloadOriginal={handleDownload}
+        />
       )}
     </div>
   );

@@ -343,7 +343,7 @@ const AppointmentDetails: React.FC = () => {
     // 1. Chemo plan staging detail
     const osd = chemoPlan?.oncology_staging_detail;
     const cancerType = osd?.cancer_types?.cancer_type || chemoPlan?.cancer_type;
-    const subtype = osd?.cancer_subtypes?.subtype_name || chemoPlan?.cancer_subtype;
+    const subtype = osd?.histopathology || osd?.cancer_subtypes?.subtype_name || chemoPlan?.cancer_subtype;
     const stage = osd?.clinical_stage || chemoPlan?.cancer_stage || osd?.derived_fields?.ajcc_stage;
     const icd = osd?.icd10_code || osd?.derived_fields?.icd10_auto;
 
