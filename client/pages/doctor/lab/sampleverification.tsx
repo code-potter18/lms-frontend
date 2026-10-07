@@ -237,7 +237,6 @@ export default function SampleVerification() {
     "ALL" | "PENDING" | "VERIFIED" | "REJECTED"
   >("ALL");
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
-  const [barcodeInput, setBarcodeInput] = useState("");
 
   // Real backend data fetch
   const fetchRealData = useCallback(async () => {
@@ -560,27 +559,6 @@ export default function SampleVerification() {
           console.error("Failed to update sample rejection in backend:", err);
         }
       }
-    }
-  };
-
-  const handleBarcodeScan = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!barcodeInput.trim()) return;
-    const match = samples.find(
-      (s) =>
-        s.barcode.toLowerCase() === barcodeInput.trim().toLowerCase() ||
-        s.sampleId.toLowerCase() === barcodeInput.trim().toLowerCase()
-    );
-    if (match) {
-      handleVerifySample(match.id);
-      handleSelectSample(match);
-      setBarcodeInput("");
-    } else {
-      toast({
-        title: "Barcode Not Found",
-        description: `No sample matching "${barcodeInput}" found in queue.`,
-        variant: "destructive",
-      });
     }
   };
 
@@ -2647,17 +2625,6 @@ export default function SampleVerification() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={fetchRealData}
-                  disabled={isLoading}
-                  className="p-2 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-600 hover:text-slate-900 shadow-xs transition-all cursor-pointer disabled:opacity-50"
-                  title="Refresh"
-                >
-                  <svg className={`w-4 h-4 ${isLoading ? "animate-spin text-blue-600" : ""}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                  </svg>
-                </button>
                 <LabNotificationBell size="md" />
                 <UserProfileDropdown userName={displayName} userSubtext={displayRole} onLogout={handleLogout} profilePath="/lab/profile" hideNotifications />
               </div>
@@ -2736,26 +2703,6 @@ export default function SampleVerification() {
                   className="flex flex-wrap items-center gap-3 w-full md:w-auto"
                   data-purpose="search-and-filter-group"
                 >
-                  {/* Barcode Quick Scan Input */}
-                  <form
-                    onSubmit={handleBarcodeScan}
-                    className="relative flex items-center"
-                  >
-                    <input
-                      type="text"
-                      value={barcodeInput}
-                      onChange={(e) => setBarcodeInput(e.target.value)}
-                      placeholder="Scan / Type Barcode..."
-                      className="w-48 pl-3 pr-14 py-2.5 bg-white text-sm font-mono text-slate-800 placeholder-slate-400 border border-slate-300 rounded-lg focus:outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500 transition-colors"
-                    />
-                    <button
-                      type="submit"
-                      className="absolute right-1.5 px-3 py-1 bg-[#00875A] hover:bg-[#00744E] text-white text-xs font-semibold rounded-md shadow-2xs transition-colors cursor-pointer"
-                    >
-                      Verify
-                    </button>
-                  </form>
-
                   {/* Search Input Container */}
                   <div
                     className="relative flex-1 md:w-72"
@@ -2901,30 +2848,6 @@ export default function SampleVerification() {
                       </div>
                     )}
                   </div>
-
-                  {/* Refresh Button */}
-                  <button
-                    type="button"
-                    onClick={fetchRealData}
-                    disabled={isLoading}
-                    className="inline-flex items-center gap-2 px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 transition-colors shadow-2xs disabled:opacity-60 cursor-pointer"
-                    title="Refresh data from server"
-                  >
-                    <svg
-                      className={`w-4 h-4 text-slate-600 ${isLoading ? "animate-spin" : ""}`}
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                      />
-                    </svg>
-                    <span className="hidden sm:inline">Refresh</span>
-                  </button>
                 </div>
               </header>
               {/* END: HeaderSection */}

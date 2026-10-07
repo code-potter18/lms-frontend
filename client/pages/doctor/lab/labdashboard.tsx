@@ -56,8 +56,6 @@ const INITIAL_TESTS: TestRecord[] = [
     mobile: "9876543210",
     email: "ramesh.kumar@email.com",
     address: "21, Green Park, New Delhi",
-    avatarUrl:
-      "https://lh3.googleusercontent.com/aida-public/AB6AXuDZMXzSl6vglUzJD1gAtLBuVl-m0g78QhYN9DT2s4axXvsVF82ZoFg_e5GxLjiZDhnS_LCQBU1bXTcjI_IstH-1TKAp8NAkWDpDvk5la7NP5MMg7eM-ZWrolAkpPd_DNMuf3szKtBzWSI2V5QdexlZROSy6nTOMNHXQnoesquILMCgFS255HcumKzzzKill-Gw8swiaNe_Vz9PziNeTCel7jUe1uns_cHrWeeZvYPD1ZxYYXSwepHyeIg",
   },
   {
     id: "2",
@@ -75,8 +73,6 @@ const INITIAL_TESTS: TestRecord[] = [
     mobile: "9812345678",
     email: "priya.sharma@email.com",
     address: "45, Vasant Vihar, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "3",
@@ -94,8 +90,6 @@ const INITIAL_TESTS: TestRecord[] = [
     mobile: "9823456789",
     email: "praveen.singh@email.com",
     address: "12, Model Town, Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "4",
@@ -113,8 +107,6 @@ const INITIAL_TESTS: TestRecord[] = [
     mobile: "9834567890",
     email: "naziya.k@email.com",
     address: "88, Jamia Nagar, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "5",
@@ -132,8 +124,6 @@ const INITIAL_TESTS: TestRecord[] = [
     mobile: "9845678901",
     email: "baskar.m@email.com",
     address: "14, Lajpat Nagar, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "6",
@@ -151,8 +141,6 @@ const INITIAL_TESTS: TestRecord[] = [
     mobile: "9856789012",
     email: "ajay.verma@email.com",
     address: "56, Karol Bagh, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "7",
@@ -170,8 +158,6 @@ const INITIAL_TESTS: TestRecord[] = [
     mobile: "9867890123",
     email: "gopal.das@email.com",
     address: "78, Rohini Sector 9, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "8",
@@ -187,8 +173,6 @@ const INITIAL_TESTS: TestRecord[] = [
     mobile: "9878901234",
     email: "ramya.n@email.com",
     address: "33, Saket, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80",
   },
 ];
 
@@ -204,6 +188,16 @@ const calculateAge = (dobString?: string): number => {
     }
   }
   return 38;
+};
+
+// Helper to extract patient initials for avatar placeholder
+const getPatientInitials = (name?: string): string => {
+  if (!name) return "P";
+  const clean = name.replace(/^Dr\.\s*/i, "").trim();
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "P";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
 interface SampleBarcodeItem {
@@ -315,11 +309,18 @@ export default function LabDashboard() {
         });
 
         const mappedTests: TestRecord[] = orders.map((order, idx) => {
+          const pBio = order.patient_history?.patient_bio_data;
           const pId =
+            pBio?.patient_id ||
             order.patient_history?.patient_id ||
             order.patient_history_id ||
             `P000${120 + idx}`;
-          const patient = patientMap.get(pId);
+          const patient =
+            pBio ||
+            patientMap.get(pId) ||
+            (order.patient_history?.patient_id
+              ? patientMap.get(order.patient_history.patient_id)
+              : undefined);
           const orderItems = orderItemsMap.get(order.lab_order_id) || [];
 
           // Test names summary
@@ -509,7 +510,6 @@ export default function LabDashboard() {
     "lft",
     "kft",
   ]);
-  const [isExcludedSelected, setIsExcludedSelected] = useState<boolean>(false);
 
   // Step 3: Sample Barcode states
   const [sampleBarcodes, setSampleBarcodes] = useState<SampleBarcodeItem[]>(INITIAL_SAMPLES);
@@ -639,7 +639,10 @@ export default function LabDashboard() {
     address: "",
   });
 
-  const handleSelectPatient = (patient: TestRecord) => {
+  const [imageLoadError, setImageLoadError] = useState<boolean>(false);
+
+  const handleSelectPatient = async (patient: TestRecord) => {
+    setImageLoadError(false);
     setSelectedPatient(patient);
     setCurrentStep(1);
 
@@ -660,7 +663,6 @@ export default function LabDashboard() {
       setSampleBarcodes(INITIAL_SAMPLES);
     }
 
-    setIsExcludedSelected(false);
     setPrintSuccessMessage(null);
     setPatientFormData({
       patientId: patient.patientId,
@@ -671,13 +673,44 @@ export default function LabDashboard() {
       email: patient.email,
       address: patient.address,
     });
+
+    // Actively fetch real patient details and photo from backend
+    if (patient.patientId) {
+      try {
+        const res = await patientApi.getById(patient.patientId);
+        const data = (res?.data as any)?.data || res?.data;
+        if (data) {
+          const photoUrl = data.patient_photo_url || (data as any).photo || null;
+          if (photoUrl) {
+            setSelectedPatient((prev) => (prev ? { ...prev, avatarUrl: photoUrl } : null));
+          }
+          const realName = [data.patient_first_name, data.patient_middle_name, data.patient_last_name]
+            .filter(Boolean)
+            .join(" ");
+          setPatientFormData((prev) => ({
+            ...prev,
+            fullName: realName || prev.fullName,
+            dob: data.patient_dob ? new Date(data.patient_dob).toLocaleDateString("en-GB") : prev.dob,
+            gender: data.patient_gender || prev.gender,
+            mobile: data.patient_primary_mobile || prev.mobile,
+            email: data.patient_email || prev.email,
+            address:
+              data.current_address ||
+              data.Patient_address ||
+              [data.patient_area, data.patient_district, data.patient_state].filter(Boolean).join(", ") ||
+              prev.address,
+          }));
+        }
+      } catch {
+        // Keep current data if not found by custom ID
+      }
+    }
   };
 
   const handleBackToDashboard = () => {
     setSelectedPatient(null);
     setCurrentStep(1);
     setSelectedValidTests(["cbc", "lft", "kft"]);
-    setIsExcludedSelected(false);
     setSampleBarcodes(INITIAL_SAMPLES);
     setPrintSuccessMessage(null);
   };
@@ -924,14 +957,21 @@ export default function LabDashboard() {
 
                           {/* Patient Portrait Thumbnail */}
                           <div className="flex-shrink-0 ml-4">
-                            <img
-                              alt={selectedPatient.patientName}
-                              className="w-16 h-16 rounded-full object-cover ring-2 ring-[#0b57d0]/20 shadow-sm"
-                              src={
-                                selectedPatient.avatarUrl ||
-                                "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80"
-                              }
-                            />
+                            {selectedPatient.avatarUrl && !imageLoadError ? (
+                              <img
+                                alt={selectedPatient.patientName}
+                                className="w-16 h-16 rounded-full object-cover ring-2 ring-[#0b57d0]/20 shadow-sm"
+                                src={selectedPatient.avatarUrl}
+                                onError={() => setImageLoadError(true)}
+                              />
+                            ) : (
+                              <div
+                                className="w-16 h-16 rounded-full bg-[#E8F0FE] text-[#00488D] border border-blue-200/60 ring-2 ring-[#0b57d0]/20 shadow-sm flex items-center justify-center font-bold text-xl select-none"
+                                title={selectedPatient.patientName}
+                              >
+                                {getPatientInitials(selectedPatient.patientName)}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </section>
@@ -1207,14 +1247,11 @@ export default function LabDashboard() {
                               <th className="py-4 px-6 w-1/3" scope="col">
                                 Test Name
                               </th>
-                              <th className="py-4 px-6 w-1/4" scope="col">
+                              <th className="py-4 px-6 w-1/3" scope="col">
                                 Sample Type
                               </th>
-                              <th className="py-4 px-6 w-1/4" scope="col">
+                              <th className="py-4 px-6" scope="col">
                                 Priority
-                              </th>
-                              <th className="py-4 px-6 text-center w-28" scope="col">
-                                Status
                               </th>
                             </tr>
                           </thead>
@@ -1237,11 +1274,6 @@ export default function LabDashboard() {
                                 </td>
                                 <td className="py-4 px-6 text-slate-700">{testItem.sampleType}</td>
                                 <td className="py-4 px-6 text-slate-700">{testItem.priority}</td>
-                                <td className="py-4 px-6 text-center">
-                                  <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-semibold bg-emerald-100/70 text-emerald-800">
-                                    READY
-                                  </span>
-                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -1249,85 +1281,6 @@ export default function LabDashboard() {
                       </div>
                     </section>
                     {/* END: ValidTestsSection */}
-
-                    {/* BEGIN: ExcludedTestsSection */}
-                    <section className="space-y-3 pt-2" data-purpose="excluded-tests-group">
-                      {/* Header & Description */}
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-red-600">
-                            <svg
-                              className="w-6 h-6 stroke-red-600 fill-none stroke-[2]"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
-                          </span>
-                          <h2 className="text-xl font-bold text-red-600 tracking-tight">
-                            Excluded Tests (Requires Action)
-                          </h2>
-                        </div>
-                        <p className="mt-1 text-sm text-slate-500">
-                          The following tests cannot be performed due to clinical conflicts or missing requirements.
-                        </p>
-                      </div>
-
-                      {/* Excluded Tests Table */}
-                      <div className="border border-slate-200/90 rounded-xl overflow-hidden bg-white shadow-xs">
-                        <table className="w-full text-left border-collapse">
-                          <thead>
-                            <tr className="border-b border-slate-200 bg-[#f8fafc]/80 text-[13px] font-bold text-slate-600 uppercase tracking-wider">
-                              <th className="py-4 px-6 w-28" scope="col">
-                                Select
-                              </th>
-                              <th className="py-4 px-6 w-1/3" scope="col">
-                                Test Name
-                              </th>
-                              <th className="py-4 px-6 w-1/2" scope="col">
-                                Reason For Exclusion
-                              </th>
-                              <th className="py-4 px-6 text-center w-28" scope="col">
-                                Status
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 text-sm font-normal text-slate-800">
-                            {/* Row 1: Glucose - Fasting */}
-                            <tr className="hover:bg-slate-50/50 transition-colors">
-                              <td className="py-5 px-6">
-                                <input
-                                  type="checkbox"
-                                  checked={isExcludedSelected}
-                                  onChange={() => setIsExcludedSelected(!isExcludedSelected)}
-                                  className="h-5 w-5 rounded border border-slate-400/80 text-[#1d6bf3] focus:ring-0 focus:ring-offset-0 cursor-pointer"
-                                />
-                              </td>
-                              <td className="py-5 px-6 font-medium text-slate-800">
-                                Glucose - Fasting
-                              </td>
-                              <td className="py-5 px-6">
-                                <div className="font-bold text-red-600">
-                                  Fasting Requirement Mismatch
-                                </div>
-                                <div className="text-xs text-slate-600 mt-0.5">
-                                  Conflict: Sample taken Post-Fasting
-                                </div>
-                              </td>
-                              <td className="py-5 px-6 text-center">
-                                <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-bold tracking-tight bg-red-100 text-red-700">
-                                  EXCLUDED
-                                </span>
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </section>
-                    {/* END: ExcludedTestsSection */}
 
                     {/* BEGIN: BottomActionBar */}
                     <footer
@@ -1594,17 +1547,6 @@ export default function LabDashboard() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={fetchRealData}
-                  disabled={isLoading}
-                  className="p-2 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-600 hover:text-slate-900 shadow-xs transition-all cursor-pointer disabled:opacity-50"
-                  title="Refresh"
-                >
-                  <svg className={`w-4 h-4 ${isLoading ? "animate-spin text-blue-600" : ""}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                  </svg>
-                </button>
                 <LabNotificationBell size="md" />
                 <UserProfileDropdown
                   userName={displayName}
@@ -1811,30 +1753,6 @@ export default function LabDashboard() {
                         </div>
                       )}
                     </div>
-
-                    {/* Refresh Button */}
-                    <button
-                      type="button"
-                      onClick={fetchRealData}
-                      disabled={isLoading}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
-                      title="Reload real lab orders from backend"
-                    >
-                      <svg
-                        className={`w-4 h-4 text-slate-600 ${isLoading ? "animate-spin" : ""}`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        />
-                      </svg>
-                      <span className="hidden sm:inline">Refresh</span>
-                    </button>
                   </div>
                 </header>
                 {/* END: HeaderSection */}

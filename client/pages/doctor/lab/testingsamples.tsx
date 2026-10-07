@@ -1325,17 +1325,6 @@ export default function TestingSamples() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={fetchRealData}
-              disabled={isLoading}
-              className="p-2 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-600 hover:text-slate-900 shadow-xs transition-all cursor-pointer disabled:opacity-50"
-              title="Refresh"
-            >
-              <svg className={`w-4 h-4 ${isLoading ? "animate-spin text-blue-600" : ""}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-              </svg>
-            </button>
             <LabNotificationBell size="md" />
             <UserProfileDropdown
               userName={displayName}
@@ -2290,30 +2279,6 @@ export default function TestingSamples() {
                     </div>
                   )}
                 </div>
-
-                {/* Refresh Button */}
-                <button
-                  type="button"
-                  onClick={fetchRealData}
-                  disabled={isLoading}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
-                  title="Reload testing samples from database"
-                >
-                  <svg
-                    className={`w-4 h-4 text-slate-600 ${isLoading ? "animate-spin" : ""}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                    />
-                  </svg>
-                  <span className="hidden sm:inline">Refresh</span>
-                </button>
               </div>
             </header>
             {/* END: HeaderSection */}

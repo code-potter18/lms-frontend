@@ -687,7 +687,7 @@ export default function ReportGeneration() {
           patientPid: s.patientPid || s.patientId || "P000124",
           patientName,
           patientAgeGender: s.patientAgeGender || "32 Years / Male",
-          patientAvatar: s.patientAvatar || "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=256&h=256",
+          patientAvatar: s.patientAvatar || undefined,
           patientEmail: s.patientEmail || `${patientName.toLowerCase().replace(/\s+/g, ".")}@email.com`,
           doctorName: s.doctorName || "Dr. Sarah Johnson",
           doctorEmail: s.doctorEmail || "doctor@hospital.com",
@@ -1447,18 +1447,20 @@ export default function ReportGeneration() {
 
                     {/* Patient Profile Details */}
                     <div className="flex items-center gap-4 mt-5 mb-8">
-                      <img
-                        alt={selectedReport.patientName}
-                        className="w-14 h-14 rounded-full object-cover border border-slate-100 ring-2 ring-slate-100"
-                        src={
-                          selectedReport.patientAvatar ||
-                          "https://lh3.googleusercontent.com/aida-public/AB6AXuBk5rMXMyViKhrEWS3OPs4EJKp41wiYn1yNbXA5l8RDhUEQ3edVPM-3o-jLtLS6HSXMEut3cfRaSBn5s33BhP0F6OAOZX42hZbHmmdVj65-ctAIdJRbm3Zz-9zEIo0TphDh1b4CrwJP4rmrJrZbPQyyErPeQlhLum-s5Zk9lFWs5P__X5-cb4t8OtGeYjeqonWaXkVvfzOF63hf9zgtRsnWsqeDqoPZEhiBztkX6UoF4fCIy7FpeUmamA"
-                        }
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src =
-                            "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=256&h=256";
-                        }}
-                      />
+                      {selectedReport.patientAvatar ? (
+                        <img
+                          alt={selectedReport.patientName}
+                          className="w-14 h-14 rounded-full object-cover border border-slate-100 ring-2 ring-slate-100"
+                          src={selectedReport.patientAvatar}
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        <div className="w-14 h-14 rounded-full bg-[#E8F0FE] text-[#00488D] border border-blue-200/60 ring-2 ring-slate-100 flex items-center justify-center font-bold text-lg select-none">
+                          {selectedReport.patientName ? selectedReport.patientName.slice(0, 2).toUpperCase() : "P"}
+                        </div>
+                      )}
                       <div>
                         <h3 className="text-lg font-bold text-slate-900 leading-snug">
                           {selectedReport.patientName}
@@ -1871,18 +1873,20 @@ export default function ReportGeneration() {
                   </div>
                   {/* Patient Thumbnail Image */}
                   <div className="shrink-0 pl-4 hidden sm:block">
-                    <img
-                      alt="Patient Avatar"
-                      className="w-16 h-16 rounded-full object-cover shadow-sm ring-2 ring-slate-100"
-                      src={
-                        selectedReport.patientAvatar ||
-                        "https://lh3.googleusercontent.com/aida-public/AB6AXuAk4z0h7-yWEOs1o7LaN7X-ROakKmoi3GI35bLJZUr__bhwepPRHuMyvxGVITnjKflVerHEXQTzcB77sT_Q_o9MiVhOu4EZ7RAqagKC5Sl-zto_-zU9cMsLfJQmLpurp07c7XmxZbh2NDLfRHJv8_ATG8DOXOYdp7Mp5FXyKNJnhnY-Xy6-_rpNIRRjtG4PYCdTLRx_SkPV1X-xahW1zTcQIMlbssjBGEaE96mFFpp40AFMGskXzzn_gA"
-                      }
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src =
-                          "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=256&h=256";
-                      }}
-                    />
+                    {selectedReport.patientAvatar ? (
+                      <img
+                        alt="Patient Avatar"
+                        className="w-16 h-16 rounded-full object-cover shadow-sm ring-2 ring-slate-100"
+                        src={selectedReport.patientAvatar}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    ) : (
+                      <div className="w-16 h-16 rounded-full bg-[#E8F0FE] text-[#00488D] border border-blue-200/60 ring-2 ring-slate-100 flex items-center justify-center font-bold text-lg select-none">
+                        {selectedReport.patientName ? selectedReport.patientName.slice(0, 2).toUpperCase() : "P"}
+                      </div>
+                    )}
                   </div>
                 </div>
               </section>
@@ -2171,17 +2175,6 @@ export default function ReportGeneration() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={fetchRealData}
-                  disabled={isLoading}
-                  className="p-2 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-600 hover:text-slate-900 shadow-xs transition-all cursor-pointer disabled:opacity-50"
-                  title="Refresh"
-                >
-                  <svg className={`w-4 h-4 ${isLoading ? "animate-spin text-blue-600" : ""}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                  </svg>
-                </button>
                 <LabNotificationBell size="md" />
                 <UserProfileDropdown
                   userName={displayName}

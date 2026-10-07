@@ -21,6 +21,21 @@ export interface LabOrderRecord {
     patient_id: string;
     visit_type?: string | null;
     visit_status?: string | null;
+    patient_bio_data?: {
+      patient_id: string;
+      patient_first_name?: string | null;
+      patient_middle_name?: string | null;
+      patient_last_name?: string | null;
+      patient_dob?: string | null;
+      patient_gender?: string | null;
+      patient_primary_mobile?: string | null;
+      patient_email?: string | null;
+      Patient_address?: string | null;
+      patient_photo_url?: string | null;
+      patient_area?: string | null;
+      patient_district?: string | null;
+      patient_state?: string | null;
+    } | null;
   } | null;
   employees?: {
     employee_id: string;
