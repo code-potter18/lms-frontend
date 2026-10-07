@@ -106,7 +106,7 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
   // Inpatient (IPD) is also a dropdown header, covering both the admissions
   // roster (/ipd) and the admission-details sub-page (/admissions/view/...),
   // so landing on either keeps the section expanded and highlighted.
-  const isIpdSectionActive = /^\/(ipd|admissions)(\/|$)/i.test(location.pathname);
+  const isIpdSectionActive = /^\/(inpatient|ipd|admissions)(\/|$)/i.test(location.pathname);
 
   // Tracks which dropdown section is currently expanded (by label).
   const [openMenu, setOpenMenu] = useState<string | null>(() =>
@@ -180,7 +180,7 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
   // all). `end: true` on Admissions keeps it from matching /ipd/beds too,
   // since /ipd is a literal prefix of that path.
   const ipdChildren = [
-    { label: "Admissions", to: "/ipd", end: true },
+    { label: "Admissions", to: "/inpatient/admissions", end: true },
     { label: "Ward & Bed Master", to: "/ipd/beds" },
   ];
 

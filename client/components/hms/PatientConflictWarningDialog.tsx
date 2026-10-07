@@ -3,6 +3,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X, AlertTriangle, Clock, User, Building, Calendar } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
+import { StatusBadge } from "@/components/hms/StatusBadge";
 
 export interface PatientConflictAppointment {
   appointmentId: string;
@@ -19,7 +20,7 @@ export interface PatientConflictWarningDialogProps {
   conflicts: { type: string; message: string }[];
   existingAppointments: PatientConflictAppointment[];
   totalAppointments: number;
-  onReview: () => void;
+  onCancel: () => void;
   onProceed: () => void;
   loading?: boolean;
 }
@@ -51,19 +52,19 @@ export function PatientConflictWarningDialog({
   conflicts,
   existingAppointments,
   totalAppointments,
-  onReview,
+  onCancel,
   onProceed,
   loading = false,
 }: PatientConflictWarningDialogProps) {
   const config = severityConfig[severity];
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={(next) => !next && onReview()}>
+    <DialogPrimitive.Root open={open} onOpenChange={(next) => !next && onCancel()}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 hms-modal-overlay data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
           className={cn(
-            "fixed left-[50%] top-[50%] z-50 w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-xl duration-200 hms-modal-content data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-xl"
+            "fixed left-[50%] top-[50%] z-50 w-full max-w-xl translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-xl duration-200 hms-modal-content data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-xl"
           )}
         >
           <div className="flex flex-col gap-4">
@@ -113,7 +114,7 @@ export function PatientConflictWarningDialog({
                         <Clock className="h-3.5 w-3.5" />
                         {appt.time}
                       </span>
-                      <span className="text-xs px-2 py-0.5 rounded bg-muted-foreground/10">{appt.status}</span>
+                      <StatusBadge status={appt.status} />
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground space-y-0.5">
                       <div className="flex items-center gap-1.5">
@@ -133,11 +134,11 @@ export function PatientConflictWarningDialog({
             <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
-                onClick={onReview}
+                onClick={onCancel}
                 disabled={loading}
                 className={cn(buttonVariants({ variant: "outline" }))}
               >
-                Review Appointment
+                Cancel
               </button>
               <button
                 type="button"

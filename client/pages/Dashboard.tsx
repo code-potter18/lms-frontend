@@ -1308,7 +1308,7 @@ export default function Dashboard() {
         icon: <BedDouble className="w-[17px] h-[17px]" color="#00488D" />,
         isActive: false,
         onClick: () => {
-          navigate("/ipd");
+          navigate("/inpatient/admissions");
         },
       },
       {

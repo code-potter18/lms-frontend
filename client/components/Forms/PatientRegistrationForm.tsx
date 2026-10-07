@@ -375,11 +375,11 @@ export default function PatientRegistrationForm({
             referral_contact: patient.patient_type === "Referral" ? (patient.referral_contact || "") : "",
             referral_notes: patient.patient_type === "Referral" ? (patient.referral_notes || "") : "",
             referral_address:
-              patient.patient_type === "Referral" ? ((patient as any).referral_address || "") : "",
+              patient.patient_type === "Referral" ? (patient.referral_address || "") : "",
             referral_mail:
-              patient.patient_type === "Referral" ? ((patient as any).referral_mail || "") : "",
+              patient.patient_type === "Referral" ? (patient.referral_mail || "") : "",
             referral_branch_name:
-              patient.patient_type === "Referral" ? ((patient as any).referral_branch_name || "") : "",
+              patient.patient_type === "Referral" ? (patient.referral_branch_name || "") : "",
             patient_primary_mobile: patient.patient_primary_mobile || "",
             patient_alternate_mobile: patient.patient_alternate_mobile || "",
             patient_email: patient.patient_email || "",
@@ -859,13 +859,11 @@ export default function PatientRegistrationForm({
           referred_by: referralValue(formData, "referred_by"),
           referral_contact: referralValue(formData, "referral_contact"),
           referral_notes: referralValue(formData, "referral_notes"),
-          ...({
-            referral_address: referralValue(formData, "referral_address"),
-            referral_mail: referralValue(formData, "referral_mail"),
-            referral_branch_name: needsReferralBranchName(formData.referral_type)
-              ? referralValue(formData, "referral_branch_name")
-              : null,
-          } as Record<string, string | null>),
+          referral_address: referralValue(formData, "referral_address"),
+          referral_mail: referralValue(formData, "referral_mail"),
+          referral_branch_name: needsReferralBranchName(formData.referral_type)
+            ? referralValue(formData, "referral_branch_name")
+            : null,
         });
 
         if (!response.data.success) {
@@ -921,13 +919,11 @@ export default function PatientRegistrationForm({
         referred_by: referralValue(formData, "referred_by"),
         referral_contact: referralValue(formData, "referral_contact"),
         referral_notes: referralValue(formData, "referral_notes"),
-        ...({
-          referral_address: referralValue(formData, "referral_address"),
-          referral_mail: referralValue(formData, "referral_mail"),
-          referral_branch_name: needsReferralBranchName(formData.referral_type)
-            ? referralValue(formData, "referral_branch_name")
-            : null,
-        } as Record<string, string | null>),
+        referral_address: referralValue(formData, "referral_address"),
+        referral_mail: referralValue(formData, "referral_mail"),
+        referral_branch_name: needsReferralBranchName(formData.referral_type)
+          ? referralValue(formData, "referral_branch_name")
+          : null,
         created_by: "SYSTEM",
       });
 

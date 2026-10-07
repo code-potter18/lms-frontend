@@ -11,6 +11,16 @@ interface AdmissionActionMenuProps {
   onAdmit: () => void;
   onTransfer: () => void;
   onDischarge: () => void;
+  /** Planned-request actions: hold / change / release a bed, cancel, no-show. */
+  onReserve?: () => void;
+  onReleaseReservation?: () => void;
+  onCancel?: () => void;
+  onNoShow?: () => void;
+  /** True while a bed is RESERVED for this (planned) admission. */
+  hasReservation?: boolean;
+  /** Assign / change the doctor of an admitted patient. */
+  onAssignDoctor?: () => void;
+  hasDoctor?: boolean;
   patientId?: string;
   encounterNo?: string | null;
   /** Fired after the vitals popover saved successfully so parents can refresh. */
@@ -24,6 +34,13 @@ export function AdmissionActionMenu({
   onAdmit,
   onTransfer,
   onDischarge,
+  onReserve,
+  onReleaseReservation,
+  onCancel,
+  onNoShow,
+  hasReservation = false,
+  onAssignDoctor,
+  hasDoctor = true,
   patientId,
   encounterNo,
   onVitalsSaved,
@@ -45,6 +62,8 @@ export function AdmissionActionMenu({
 
   const isPlanned = status === "PLANNED";
   const isAdmitted = status === "ADMITTED";
+  // Reserve / release / cancel / no-show all go through admission.update.
+  const canManagePlanned = isPlanned && can("admission.update");
 
   return (
     <>
@@ -89,12 +108,59 @@ export function AdmissionActionMenu({
             </>
           )}
 
+          {canManagePlanned && onReserve && (
+            <DropdownMenuItem
+              onSelect={() => onReserve()}
+              className="flex w-full cursor-pointer px-3 py-2 text-xs font-semibold text-left text-violet-700 focus:bg-violet-50"
+            >
+              {hasReservation ? "Change Reserved Bed" : "Reserve Bed"}
+            </DropdownMenuItem>
+          )}
+
+          {canManagePlanned && hasReservation && onReleaseReservation && (
+            <DropdownMenuItem
+              onSelect={() => onReleaseReservation()}
+              className="flex w-full cursor-pointer px-3 py-2 text-xs font-semibold text-left text-[#374151] focus:bg-[#F2F4F6]"
+            >
+              Release Reservation
+            </DropdownMenuItem>
+          )}
+
+          {canManagePlanned && onNoShow && (
+            <DropdownMenuItem
+              onSelect={() => onNoShow()}
+              className="flex w-full cursor-pointer px-3 py-2 text-xs font-semibold text-left text-[#6B7280] focus:bg-[#F2F4F6]"
+            >
+              Mark No-Show
+            </DropdownMenuItem>
+          )}
+
+          {canManagePlanned && onCancel && (
+            <DropdownMenuItem
+              onSelect={() => onCancel()}
+              className="flex w-full cursor-pointer px-3 py-2 text-xs font-semibold text-left text-[#B91C1C] focus:bg-[#FEF2F2]"
+            >
+              Cancel Request
+            </DropdownMenuItem>
+          )}
+
           {isAdmitted && can("admission.read") && (
             <DropdownMenuItem
               onSelect={() => setVitalsOpen(true)}
               className="flex w-full cursor-pointer px-3 py-2 text-xs font-semibold text-left text-purple-600 focus:bg-purple-50"
             >
               Vitals
+            </DropdownMenuItem>
+          )}
+
+          {isAdmitted && can("admission.update") && onAssignDoctor && (
+            <DropdownMenuItem
+              onSelect={() => onAssignDoctor()}
+              className={`flex w-full cursor-pointer px-3 py-2 text-xs font-semibold text-left ${
+                hasDoctor ? "text-[#374151] focus:bg-[#F2F4F6]" : "text-amber-700 focus:bg-amber-50"
+              }`}
+            >
+              {hasDoctor ? "Change Doctor" : "Assign Doctor"}
             </DropdownMenuItem>
           )}
 

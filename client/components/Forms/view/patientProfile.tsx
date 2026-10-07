@@ -99,6 +99,7 @@ export default function PatientProfile() {
 
   const [patient, setPatient] = useState<PatientRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  const [patientLoadError, setPatientLoadError] = useState<string | null>(null);
   const [appointments, setAppointments] = useState<ReturnType<typeof mapAppointment>[]>([]);
   // Bumped whenever an embedded action (e.g. vitals save) changes data so
   // PatientVitalsPanel remounts and re-fetches its encounters immediately.
@@ -112,11 +113,22 @@ export default function PatientProfile() {
   const { getCriticalInfo } = useCriticalPatients(patientAgeData);
 
   useEffect(() => {
-    if (!id) return;
+    if (!id) {
+      setPatientLoadError("Patient ID is missing.");
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setPatient(null);
+    setPatientLoadError(null);
     patientApi
       .getById(id)
       .then((res) => setPatient(res.data.data))
-      .catch(() => {})
+      .catch((error: any) => {
+        setPatientLoadError(
+          error.response?.data?.message ?? error.message ?? "Failed to load patient."
+        );
+      })
       .finally(() => setLoading(false));
   }, [id]);
 
@@ -341,7 +353,7 @@ export default function PatientProfile() {
   if (!patient) {
     return (
       <div className="flex w-full font-[Manrope,sans-serif] bg-[#F7F9FB] min-h-screen items-center justify-center text-[#6B7280] text-sm">
-        Patient not found.
+        {patientLoadError ?? "Patient not found."}
       </div>
     );
   }

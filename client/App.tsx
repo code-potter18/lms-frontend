@@ -51,6 +51,7 @@ import Security from "@/components/Forms/view/Security";
 // ============================================================
 
 import Appointments from "./pages/Appointments";
+import InpatientAdmissions from "./pages/InpatientAdmissions";
 import BedMaster from "./pages/BedMaster";
 import Departments from "./pages/Departments";
 import Login from "./pages/Login";
@@ -339,8 +340,16 @@ const protectedRoutes = [
   // ----------------------------------------------------------
 
   {
+    path: "/inpatient/admissions",
+    element: <InpatientAdmissions />,
+    permission: "admission.read",
+  },
+
+  // Legacy IPD roster URL -- kept so old bookmarks/links that point at /ipd
+  // still land on the dedicated admissions route.
+  {
     path: "/ipd",
-    element: <Appointments defaultTab="ipd" />,
+    element: <Navigate to="/inpatient/admissions" replace />,
     permission: "admission.read",
   },
 

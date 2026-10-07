@@ -90,7 +90,10 @@ export interface AdmissionRecord {
   discharge_type: string | null;
   discharge_summary: string | null;
   advance_amount: number | string | null;
-  status: "PLANNED" | "ADMITTED" | "DISCHARGED" | "TRANSFERRED" | "CANCELLED" | string;
+  status: "PLANNED" | "ADMITTED" | "DISCHARGED" | "TRANSFERRED" | "CANCELLED" | "NO_SHOW" | string;
+  cancellation_reason?: string | null;
+  /** Display name for updated_by (details view only); null when the nightly sweep made the change. */
+  updated_by_name?: string | null;
   created_by: string | null;
   created_at: string;
   updated_by: string | null;
@@ -131,6 +134,9 @@ export interface AdmissionRecord {
     bed_id: string;
     bed_number: string;
     bed_type?: string | null;
+    status?: BedStatus;
+    reserved_admission_id?: string | null;
+    reserved_until?: string | null;
   } | null;
   admission_transfer_log?: AdmissionTransferLog[];
 }
@@ -154,6 +160,22 @@ export interface WardRecord {
   };
 }
 
+// AVAILABLE -> RESERVED -> OCCUPIED -> CLEANING -> AVAILABLE (+ MAINTENANCE)
+export type BedStatus = "AVAILABLE" | "RESERVED" | "OCCUPIED" | "CLEANING" | "MAINTENANCE" | string;
+
+/** Patient summary attached to a bed on the bed board. */
+export interface BedPatientSummary {
+  admission_id: string;
+  ip_number: string;
+  admission_date: string;
+  patient_bio_data: {
+    patient_id: string;
+    patient_first_name: string;
+    patient_last_name: string | null;
+    patient_gender: string | null;
+  } | null;
+}
+
 export interface BedRecord {
   bed_id: string;
   ward_id: string;
@@ -161,9 +183,15 @@ export interface BedRecord {
   bed_number: string;
   bed_type: string;
   tariff?: number | string | null;
-  status: "AVAILABLE" | "OCCUPIED" | "MAINTENANCE" | string;
+  status: BedStatus;
+  reserved_admission_id?: string | null;
+  reserved_until?: string | null;
   remarks?: string | null;
   active_status: number;
+  /** Admitted patient in this bed (OCCUPIED beds). */
+  occupant?: BedPatientSummary | null;
+  /** Planned admission holding this bed (RESERVED beds). */
+  reserved_for?: BedPatientSummary | null;
   ward_master?: {
     ward_id: string;
     ward_name: string;
@@ -172,8 +200,34 @@ export interface BedRecord {
 }
 
 export interface UpdateBedStatusPayload {
-  status: "AVAILABLE" | "MAINTENANCE";
+  status: "AVAILABLE" | "CLEANING" | "MAINTENANCE";
   remarks?: string;
+}
+
+// Daycare booking: doctor OPD slot + PLANNED daycare admission (ward required,
+// bed optional, expected_stay_days > 0 and <= 1).
+export interface CreateDaycarePayload {
+  patient_id: string;
+  branch_id: string;
+  department_id: string;
+  employee_id: string;
+  appointment_date: string; // yyyy-MM-dd
+  appointment_time: string; // HH:mm
+  ward_id: string;
+  bed_id?: string;
+  expected_stay_days: number;
+  payment_mode?: string;
+  advance_amount?: number;
+  provisional_diagnosis?: string;
+  reason_for_visit?: string;
+}
+
+/** Capacity of a daycare ward on one day and the sessions already booked in it. */
+export interface DaycareOccupancy {
+  ward_id: string;
+  date: string;
+  capacity: number;
+  bookings: { ip_number: string; status: string; start: string; end: string }[];
 }
 
 export interface GetAdmissionsParams {
@@ -246,6 +300,31 @@ export const ipdApi = {
   update: (id: string, data: UpdateAdmissionPayload) =>
     API.patch<{ success: boolean; message: string; data: AdmissionRecord }>(`/ipd/${id}`, data),
 
+  // PLANNED -> ADMITTED: occupies the bed, stamps the admit time and opens the
+  // IPD encounter in one backend transaction. ward_id/bed_id override the
+  // requested ones.
+  admit: (id: string, data: { ward_id?: string; bed_id?: string } = {}) =>
+    API.post<{ success: boolean; message: string; data: AdmissionRecord }>(`/ipd/${id}/admit`, data),
+
+  cancel: (id: string, reason?: string) =>
+    API.post<{ success: boolean; message: string; data: AdmissionRecord }>(`/ipd/${id}/cancel`, { reason }),
+
+  noShow: (id: string, reason?: string) =>
+    API.post<{ success: boolean; message: string; data: AdmissionRecord }>(`/ipd/${id}/no-show`, { reason }),
+
+  // Holds a bed for a planned admission until the end of its planned day.
+  reserve: (id: string, data: { ward_id?: string; bed_id?: string } = {}) =>
+    API.post<{ success: boolean; message: string; data: AdmissionRecord }>(`/ipd/${id}/reserve`, data),
+
+  createDaycare: (data: CreateDaycarePayload) =>
+    API.post<{ success: boolean; message: string; data: AdmissionRecord }>("/ipd/daycare", data),
+
+  getDaycareOccupancy: (wardId: string, date: string) =>
+    API.get<{ success: boolean; data: DaycareOccupancy }>("/ipd/daycare/occupancy", { params: { wardId, date } }),
+
+  releaseReservation: (id: string) =>
+    API.post<{ success: boolean; message: string; data: AdmissionRecord }>(`/ipd/${id}/release-reservation`),
+
   discharge: (id: string, data: DischargeAdmissionPayload) =>
     API.post<{ success: boolean; message: string; data: AdmissionRecord }>(`/ipd/${id}/discharge`, data),
 
@@ -277,6 +356,9 @@ export const ipdApi = {
   updateWard: (wardId: string, data: UpdateWardPayload) =>
     API.patch<{ success: boolean; message: string; data: WardRecord }>(`/ipd/wards/${wardId}`, data),
 
+  deleteWard: (wardId: string) =>
+    API.delete<{ success: boolean; message: string; data: WardRecord }>(`/ipd/wards/${wardId}`),
+
   getBeds: (wardId?: string, branchId?: string) =>
     API.get<{ success: boolean; message: string; data: BedRecord[] }>("/ipd/beds", {
       params: { ...(wardId ? { wardId } : {}), ...(branchId ? { branchId } : {}) },
@@ -287,6 +369,9 @@ export const ipdApi = {
 
   updateBed: (bedId: string, data: UpdateBedPayload) =>
     API.patch<{ success: boolean; message: string; data: BedRecord }>(`/ipd/beds/${bedId}`, data),
+
+  deleteBed: (bedId: string) =>
+    API.delete<{ success: boolean; message: string; data: BedRecord }>(`/ipd/beds/${bedId}`),
 
   updateBedStatus: (bedId: string, data: UpdateBedStatusPayload) =>
     API.patch<{ success: boolean; message: string; data: BedRecord }>(`/ipd/beds/${bedId}/status`, data),

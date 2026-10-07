@@ -4,6 +4,12 @@ import { Bot, Send, Loader2, X, MessageSquare, Sparkles, Trash2, Mic, MicOff } f
 import { cn } from "@/lib/utils";
 import { aiChatApi, type AIPerformedAction } from "@/api/ai-chat.api";
 import { getUser } from "@/utils/token";
+import { loadChatPanelPosition, saveChatPanelPosition } from "@/utils/chatPanelPosition";
+import {
+    CHAT_MESSAGES_KEY_PREFIX,
+    CHAT_OPEN_KEY_PREFIX,
+    AI_CHAT_CLEARED_EVENT,
+} from "@/utils/aiChatStorage";
 import { NAV_ROUTES } from "@/config/nav-routes";
 import { AIDashboardView, buildDashboard } from "./AIDashboardView";
 
@@ -24,9 +30,11 @@ const SUGGESTIONS = [
     "Show my notifications"
 ];
 
-const STORAGE_KEY = "ai-chatbox-panel-position";
-const CHAT_STORAGE_KEY = "ai-chatbox-messages";
-const OPEN_STORAGE_KEY = "ai-chatbox-open";
+// Key prefixes are owned by utils/aiChatStorage.ts so utils/token.ts can wipe
+// them on logout (remove()) / on login (saveToken()) without importing this
+// component.
+const CHAT_STORAGE_KEY = CHAT_MESSAGES_KEY_PREFIX;
+const OPEN_STORAGE_KEY = CHAT_OPEN_KEY_PREFIX;
 const DRAG_THRESHOLD = 5;
 const PANEL_WIDTH = 400;
 const LOGO_SIZE = 56;
@@ -112,7 +120,6 @@ export function AIChatBox() {
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const recognitionRef = useRef<any>(null);
 
-    const logoPosition = getLogoPosition();
     const [panelPos, setPanelPos] = useState(getDefaultPanelPosition);
     const [isDragging, setIsDragging] = useState(false);
     const panelRef = useRef<HTMLDivElement>(null);
@@ -154,6 +161,24 @@ export function AIChatBox() {
         }
         setIsListening(false);
     }, []);
+
+    // Logout / session expiry wipes the persisted chat (utils/token.ts) and
+    // fires AI_CHAT_CLEARED_EVENT -- reset the live state too, so the popup
+    // closes and empties right away instead of only after this component
+    // unmounts (the axios 401 handler, for one, keeps the page alive for a
+    // moment before redirecting).
+    useEffect(() => {
+        const handleChatCleared = () => {
+            stopListening();
+            setIsOpen(false);
+            setMessages([]);
+            setConversationId(undefined);
+            setInput("");
+            setLoading(false);
+        };
+        window.addEventListener(AI_CHAT_CLEARED_EVENT, handleChatCleared);
+        return () => window.removeEventListener(AI_CHAT_CLEARED_EVENT, handleChatCleared);
+    }, [stopListening]);
 
     const handleSendRef = useRef<(text?: string) => Promise<void>>();
 
@@ -204,16 +229,13 @@ export function AIChatBox() {
     }, [speechSupported, stopListening]);
 
     useEffect(() => {
-        try {
-            const saved = localStorage.getItem(STORAGE_KEY);
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (typeof parsed.x === "number" && typeof parsed.y === "number") {
-                    setPanelPos(clampPanelToViewport(parsed.x, parsed.y));
-                    return;
-                }
-            }
-        } catch { /* ignore */ }
+        // Restore only if this browser session still holds a position;
+        // otherwise start back at the default spot.
+        const saved = loadChatPanelPosition();
+        if (saved) {
+            setPanelPos(clampPanelToViewport(saved.x, saved.y));
+            return;
+        }
         setPanelPos(getDefaultPanelPosition());
     }, []);
 
@@ -247,7 +269,7 @@ export function AIChatBox() {
             setIsDragging(false);
             if (hasDragged.current) {
                 setPanelPos(dragOffset.current.finalPos);
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(dragOffset.current.finalPos));
+                saveChatPanelPosition(dragOffset.current.finalPos);
             }
         };
 
@@ -416,10 +438,8 @@ export function AIChatBox() {
             {/* AI Logo - fixed position, never moves */}
             <button
                 onClick={() => setIsOpen(prev => !prev)}
-                className="fixed z-50 flex h-14 w-14 items-center justify-center rounded-full bg-[#004785] shadow-lg transition-all duration-200 hover:bg-[#003A6B] hover:scale-105"
+                className="fixed right-6 bottom-11 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-[#004785] shadow-lg transition-all duration-200 hover:bg-[#003A6B] hover:scale-105"
                 style={{
-                    left: logoPosition.x,
-                    top: logoPosition.y,
                     cursor: "pointer",
                     userSelect: "none"
                 }}

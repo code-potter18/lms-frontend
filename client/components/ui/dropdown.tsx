@@ -37,6 +37,11 @@ export interface DropdownProps {
   label?: string;
   disabled?: boolean;
   className?: string;
+  // Merged onto the trigger button, after its own classes, so a toolbar can
+  // match its row height (e.g. BedMaster's h-[34px] controls) without the
+  // dialogs' taller default leaking into it. `cn` collapses conflicting
+  // utilities, so this wins over py-*/text-*.
+  triggerClassName?: string;
 }
 
 export function Dropdown({
@@ -47,6 +52,7 @@ export function Dropdown({
   label,
   disabled = false,
   className,
+  triggerClassName,
 }: DropdownProps) {
   const [internal, setInternal] = useState<string | null>(null);
   const selected = value !== undefined ? value : internal;
@@ -176,11 +182,14 @@ export function Dropdown({
         id={`${id}-btn`}
         onClick={() => (open ? setOpen(false) : openList())}
         onKeyDown={onKeyDown}
-        className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm
-          bg-white transition-colors
-          focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-1
-          ${open ? "border-teal-700" : "border-stone-300 hover:border-stone-400"}
-          ${disabled ? "cursor-not-allowed bg-stone-100 text-stone-400" : "text-stone-900"}`}
+        className={cn(
+          `flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm
+            bg-white transition-colors
+            focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-1
+            ${open ? "border-teal-700" : "border-stone-300 hover:border-stone-400"}
+            ${disabled ? "cursor-not-allowed bg-stone-100 text-stone-400" : "text-stone-900"}`,
+          triggerClassName,
+        )}
       >
         <span className={selectedOption ? "" : "text-stone-400"}>
           {selectedOption ? selectedOption.label : placeholder}
@@ -201,7 +210,7 @@ export function Dropdown({
           id={`${id}-list`}
           role="listbox"
           aria-labelledby={label ? `${id}-label` : undefined}
-          className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md border border-stone-200 bg-white py-1 text-sm shadow-lg"
+          className="absolute z-10 mt-1 max-h-60 w-full overflow-auto slim-scrollbar rounded-md border border-stone-200 bg-white py-1 text-sm shadow-lg"
         >
           {options.length === 0 && (
             <li className="px-3 py-2 text-stone-400">No options available</li>

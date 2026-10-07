@@ -33,6 +33,9 @@ export interface CreatePatientPayload {
   referred_by?: string | null;
   referral_contact?: string | null;
   referral_notes?: string | null;
+  referral_address?: string | null;
+  referral_mail?: string | null;
+  referral_branch_name?: string | null;
   photo?: string;
   branch_id: string;
   created_by: string;
@@ -92,6 +95,9 @@ export interface UpdatePatientPayload {
   referred_by?: string | null;
   referral_contact?: string | null;
   referral_notes?: string | null;
+  referral_address?: string | null;
+  referral_mail?: string | null;
+  referral_branch_name?: string | null;
   photo?: string;
 }
 
@@ -131,6 +137,9 @@ export interface PatientRecord {
   referred_by?: string | null;
   referral_contact?: string | null;
   referral_notes?: string | null;
+  referral_address?: string | null;
+  referral_mail?: string | null;
+  referral_branch_name?: string | null;
   branch: { branch_name: string | null } | null;
   user_table: { role_type: string | null; user_status: number | null; created_at?: string | null } | null;
 }

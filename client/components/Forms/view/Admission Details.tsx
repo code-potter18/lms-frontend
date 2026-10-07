@@ -20,6 +20,7 @@ import {
   ArrowRightLeft,
   Banknote,
   ShieldCheck,
+  Ban,
 } from "lucide-react";
 import { ipdApi, type AdmissionRecord } from "@/api/ipd.api";
 import { formatMobile } from "@/utils/formatters";
@@ -33,6 +34,7 @@ const STATUS_LABELS: Record<string, string> = {
   DISCHARGED: "Discharged",
   TRANSFERRED: "Transferred",
   CANCELLED: "Cancelled",
+  NO_SHOW: "No-Show",
 };
 
 const STATUS_TONES: Record<string, StatusTone> = {
@@ -41,6 +43,7 @@ const STATUS_TONES: Record<string, StatusTone> = {
   DISCHARGED: "slate",
   TRANSFERRED: "blue",
   CANCELLED: "red",
+  NO_SHOW: "slate",
 };
 
 function getInitials(name: string): string {
@@ -151,7 +154,7 @@ const AdmissionDetails: React.FC = () => {
           The admission you are looking for does not exist or may have been deleted.
         </p>
         <button
-          onClick={() => navigate("/ipd")}
+          onClick={() => navigate("/inpatient/admissions")}
           className="rounded-lg bg-[#00488D] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#003870]"
         >
           Return to Inpatient (IPD)
@@ -594,6 +597,46 @@ const AdmissionDetails: React.FC = () => {
               <div className="rounded-lg border border-amber-200 bg-white p-3">
                 <span className="text-amber-500 text-[10px] uppercase font-bold">Discharge Summary</span>
                 <p className="font-semibold text-slate-800 mt-0.5">{admission.discharge_summary || "—"}</p>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* 6b. Cancellation / No-Show Details -- closed admissions can't be
+            edited, so updated_at / updated_by still record who closed it. */}
+        {(rawStatus === "CANCELLED" || rawStatus === "NO_SHOW") && (
+          <section className="rounded-xl border border-slate-200 bg-slate-50 p-6 shadow-sm w-full space-y-4">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-200 text-slate-600">
+                <Ban className="h-4 w-4" />
+              </div>
+              <h2 className="text-base font-bold text-slate-800">
+                {rawStatus === "CANCELLED" ? "Cancellation Details" : "No-Show Details"}
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <span className="text-slate-400 text-[10px] uppercase font-bold">Reason</span>
+                <p className="font-semibold text-slate-800 mt-0.5 whitespace-pre-wrap">
+                  {admission.cancellation_reason || "No reason given"}
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <span className="text-slate-400 text-[10px] uppercase font-bold">
+                  {rawStatus === "CANCELLED" ? "Cancelled On" : "Marked On"}
+                </span>
+                <p className="font-semibold text-slate-800 mt-0.5">{formatDateTime(admission.updated_at)}</p>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <span className="text-slate-400 text-[10px] uppercase font-bold">
+                  {rawStatus === "CANCELLED" ? "Cancelled By" : "Marked By"}
+                </span>
+                <p className="font-semibold text-slate-800 mt-0.5">
+                  {admission.updated_by_name || (admission.updated_by === "SYSTEM" ? "Automatic (nightly check)" : admission.updated_by || "—")}
+                </p>
               </div>
             </div>
           </section>
