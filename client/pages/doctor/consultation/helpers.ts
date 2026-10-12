@@ -8,7 +8,12 @@ import {
   type ChemoPlanOrderHeader,
   type ChemoPlanOrderPayload,
 } from "../../../api/chemotherapy.api";
-import type { FormData, RegimenProtocolDetail } from "./types";
+import type {
+  FormData,
+  RegimenProtocolDetail,
+  RegimenProtocolDilution,
+  RegimenProtocolItem,
+} from "./types";
 import type { DosingSnapshot, OrderPlanItem } from "./doseCalculation";
 
 export const formatPickedDate = (date: Date) => {
@@ -21,6 +26,148 @@ export const parsePickedDate = (value: string) => {
   const match = value.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
   if (!match) return undefined;
   return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
+};
+
+/* Strict DD-MM-YYYY -> YYYY-MM-DD. Rejects impossible dates such as
+   31-02-2026, which parsePickedDate would roll over into March. */
+export const dmyToIsoStrict = (value: string): string | undefined => {
+  const date = parsePickedDate(value.trim());
+  if (!date) return undefined;
+  const [day, month, year] = value.trim().split("-").map(Number);
+  if (
+    date.getDate() !== day ||
+    date.getMonth() !== month - 1 ||
+    date.getFullYear() !== year
+  ) {
+    return undefined;
+  }
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+};
+
+/* Formats a typed/pasted date as DD-MM-YYYY. Digits overflow into the next
+   part ("10102026" -> "10-10-2026"), "/" or "." count as "-", and while
+   typing forward a full day/month gets its "-" added and a separator after
+   a single digit pads it ("1-" -> "01-"). Deleting never re-adds a "-". */
+export const maskDmyInput = (next: string, prev: string) => {
+  const typingForward = next.length > prev.length;
+  const parts: string[] = [""];
+
+  for (const char of next) {
+    const last = parts.length - 1;
+    if (/\d/.test(char)) {
+      if (parts[last].length < (last < 2 ? 2 : 4)) parts[last] += char;
+      else if (last < 2) parts.push(char);
+    } else if (/[-/.]/.test(char) && last < 2 && parts[last]) {
+      parts.push("");
+    }
+  }
+
+  if (typingForward) {
+    const last = parts.length - 1;
+    if (/[-/.]$/.test(next) && last > 0 && parts[last] === "") {
+      parts[last - 1] = parts[last - 1].padStart(2, "0");
+    } else if (last < 2 && parts[last].length === 2) {
+      parts.push("");
+    }
+  }
+
+  return parts.join("-");
+};
+
+const todayIso = () => {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+};
+
+/* Validation message for an investigation's Target Date ("" when valid
+   or empty - the field is optional). */
+export const targetDateError = (value: string) => {
+  if (!value.trim()) return "";
+  const iso = dmyToIsoStrict(value);
+  if (!iso) return "Use DD-MM-YYYY";
+  if (iso < todayIso()) return "Date is in the past";
+  return "";
+};
+
+/* DD-MM-YYYY of a DATE column value ("2026-10-07" or its UTC-midnight
+   timestamp), read from the string so the timezone can't shift the day. */
+export const dateOnlyDMY = (value?: string | null) => {
+  const iso = value?.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return iso ? `${iso[3]}-${iso[2]}-${iso[1]}` : "";
+};
+
+/* A DATE column value moved by whole days, as YYYY-MM-DD. */
+export const addDaysToIsoDate = (value: string, days: number) => {
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!iso) return "";
+  const date = new Date(
+    Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]) + days)
+  );
+  return date.toISOString().slice(0, 10);
+};
+
+/* A protocol item's day within a cycle (administration_day, else the
+   legacy cycle_day); items without a day belong to Day 1. */
+const protocolItemDay = (item: RegimenProtocolItem): number => {
+  const day = Number(item.administration_day ?? item.cycle_day);
+  return Number.isFinite(day) && day > 0 ? day : 1;
+};
+
+/* The Chemotherapy Order Dilution tab's template for a cycle day: the
+   protocol-level dilutions (every day) plus those attached to that day's
+   items (a "same as Day 1" day uses Day 1's), each with its item. */
+export const protocolDayDilutions = (
+  protocol: RegimenProtocolDetail | null | undefined,
+  dayNumber: number | null
+): { dilution: RegimenProtocolDilution; item?: RegimenProtocolItem }[] => {
+  const items = protocol?.chemotherapy_regimen_protocol_items ?? [];
+  const itemById = new Map(items.map((item) => [item.protocol_item_id, item]));
+
+  const byId = new Map<string, RegimenProtocolDilution>();
+  for (const dilution of protocol?.protocol_dilutions ?? []) {
+    byId.set(dilution.protocol_dilution_id, dilution);
+  }
+  for (const item of items) {
+    for (const dilution of item.chemotherapy_protocol_dilutions ?? []) {
+      if (byId.has(dilution.protocol_dilution_id)) continue;
+      byId.set(dilution.protocol_dilution_id, {
+        ...dilution,
+        protocol_item_id: dilution.protocol_item_id ?? item.protocol_item_id,
+      });
+    }
+  }
+
+  let day = dayNumber;
+  if (day != null && day !== 1) {
+    const days = protocol?.chemotherapy_regimen_protocol_days ?? [];
+    if (
+      days.find((entry) => entry.day_number === day)?.same_as_day_one &&
+      days.some((entry) => entry.day_number === 1)
+    ) {
+      day = 1;
+    }
+  }
+  const dayItemIds = new Set(
+    day != null
+      ? items
+          .filter((item) => protocolItemDay(item) === day)
+          .map((item) => item.protocol_item_id)
+      : []
+  );
+
+  const all = [...byId.values()];
+  return [
+    ...all.filter((dilution) => !dilution.protocol_item_id),
+    ...all.filter(
+      (dilution) =>
+        !!dilution.protocol_item_id && dayItemIds.has(dilution.protocol_item_id)
+    ),
+  ].map((dilution) => ({
+    dilution,
+    item: dilution.protocol_item_id
+      ? itemById.get(dilution.protocol_item_id)
+      : undefined,
+  }));
 };
 
 export const parseDateValue = (value?: string | null): Date | null => {
@@ -442,6 +589,22 @@ export const findStagingDetailForEncounter = async (
   return response.data.data?.[0]?.staging_detail_id ?? "";
 };
 
+/* The patient's latest staging detail on record (newest visit first), or
+   "". Asks the server - unlike resolveStagingDetailId, which prefers the
+   id this browser saved last. */
+export const findLatestStagingDetailId = async (
+  patientId: string
+): Promise<string> => {
+  if (!patientId) return "";
+  const response = await API.get<{
+    success: boolean;
+    data: { staging_detail_id: string }[];
+  }>("/oncology/staging-details", {
+    params: { patient_id: patientId, page: 1, limit: 1, view: "ids" },
+  });
+  return response.data.data?.[0]?.staging_detail_id ?? "";
+};
+
 /* The Consultation Notes part of an encounter's clinical_notes (the Past
    History section after PAST_HISTORY_MARKER is left out). */
 export const consultationNotesOf = (clinicalNotes?: string | null) => {
@@ -505,6 +668,10 @@ export type PlanOrderTarget = {
   cycle: number;
   day: number;
   hydration?: ChemoPlanOrderPayload["hydration"];
+  /* The order's Post Chemo Instructions / Additional Notes; left out keeps
+     what the day's order already has. */
+  chemoInstructions?: string;
+  additionalNotes?: string;
 };
 
 export const COURSE_CLOSED_MESSAGE =
@@ -577,6 +744,12 @@ export const createChemotherapyPlanForPatient = async (
         ...(target.hydration ? { hydration: target.hydration } : {}),
         dosing: orderDosingFromSnapshot(dosing),
         encounter_no: encounter.encounter_no ?? null,
+        ...(target.chemoInstructions !== undefined
+          ? { chemo_instructions: target.chemoInstructions }
+          : {}),
+        ...(target.additionalNotes !== undefined
+          ? { additional_notes: target.additionalNotes }
+          : {}),
       });
       return undefined;
     } catch (orderError: any) {

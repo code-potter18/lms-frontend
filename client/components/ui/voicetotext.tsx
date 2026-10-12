@@ -4,12 +4,15 @@ interface VoiceToTextProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  /* Visible textarea height in lines. */
+  rows?: number;
 }
 
 const VoiceToText: React.FC<VoiceToTextProps> = ({
   value,
   onChange,
   placeholder = "Speak your reason for visit...",
+  rows = 4,
 }) => {
   const [isListening, setIsListening] = useState(false);
 
@@ -119,7 +122,7 @@ const VoiceToText: React.FC<VoiceToTextProps> = ({
       <textarea
         value={value}
         onChange={handleTextChange}
-        rows={4}
+        rows={rows}
         placeholder={
           isListening
             ? "Listening... Please speak..."

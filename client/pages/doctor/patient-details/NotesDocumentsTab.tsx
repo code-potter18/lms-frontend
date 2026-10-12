@@ -586,6 +586,35 @@ const NotesDocumentsTab: React.FC<{
   const [stagedFiles, setStagedFiles] = useState<{ file: File; name: string }[]>([]);
   const [renamingDocId, setRenamingDocId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [addingToBatchIndex, setAddingToBatchIndex] = useState<number | null>(null);
+  const [deletingBatchIndex, setDeletingBatchIndex] = useState<number | null>(null);
+
+  const handleDeleteAll = async () => {
+    for (const doc of documents) {
+      await deletePatientDocument(doc.id);
+    }
+    setDocuments([]);
+    setImageBatchGroups([]);
+    if (patientId) persistBatchGroups([], patientId);
+    setShowDeleteAllConfirm(false);
+  };
+
+  const handleDeleteBatch = async () => {
+    if (deletingBatchIndex === null) return;
+    const batch = imageBatchGroups[deletingBatchIndex];
+    if (!batch) { setDeletingBatchIndex(null); return; }
+    for (const id of batch.ids) {
+      await deletePatientDocument(id);
+    }
+    setDocuments(prev => prev.filter(d => !batch.ids.includes(d.id)));
+    setImageBatchGroups(prev => {
+      const updated = prev.filter((_, i) => i !== deletingBatchIndex);
+      if (patientId) persistBatchGroups(updated, patientId);
+      return updated;
+    });
+    setDeletingBatchIndex(null);
+  };
 
   const handleRenameDoc = (docId: string, newName: string) => {
     const trimmed = newName.trim();
@@ -781,19 +810,74 @@ const NotesDocumentsTab: React.FC<{
       );
       setTimeout(() => setDocSuccessMsg(null), 4000);
       const newBatchIds = newItems.map(d => d.id);
-      const newBatch = { ids: newBatchIds, label: batchLabel };
-      setImageBatchGroups(prev => {
-        const updated = [...prev, newBatch];
-        if (targetPatientId !== "unknown") persistBatchGroups(updated, targetPatientId);
-        return updated;
-      });
-      setWordView({ docs: newItems, label: batchLabel });
+      if (addingToBatchIndex !== null) {
+        setImageBatchGroups(prev => {
+          const updated = prev.map((g, i) =>
+            i === addingToBatchIndex ? { ...g, ids: [...g.ids, ...newBatchIds] } : g
+          );
+          if (targetPatientId !== "unknown") persistBatchGroups(updated, targetPatientId);
+          return updated;
+        });
+        setAddingToBatchIndex(null);
+      } else {
+        const newBatch = { ids: newBatchIds, label: batchLabel };
+        setImageBatchGroups(prev => {
+          const updated = [...prev, newBatch];
+          if (targetPatientId !== "unknown") persistBatchGroups(updated, targetPatientId);
+          return updated;
+        });
+        setWordView({ docs: newItems, label: batchLabel });
+      }
     }
     setIsUploadingDoc(false);
   };
 
+  const handleDirectUploadToBatch = async (files: FileList | null) => {
+    if (!files || files.length === 0 || addingToBatchIndex === null) {
+      setAddingToBatchIndex(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    const batchIdx = addingToBatchIndex;
+    setAddingToBatchIndex(null);
+    setIsUploadingDoc(true);
+    const targetPatientId = patientId || "unknown";
+    const newItems: PatientDocumentItem[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file) continue;
+      try {
+        const savedDoc = await savePatientDocument(targetPatientId, file);
+        newItems.push(savedDoc);
+      } catch (err) {
+        console.error("Failed to save document:", file.name, err);
+      }
+    }
+    if (newItems.length > 0) {
+      setDocuments(prev => [...newItems, ...prev]);
+      const newBatchIds = newItems.map(d => d.id);
+      setImageBatchGroups(prev => {
+        const updated = prev.map((g, i) =>
+          i === batchIdx ? { ...g, ids: [...g.ids, ...newBatchIds] } : g
+        );
+        if (targetPatientId !== "unknown") persistBatchGroups(updated, targetPatientId);
+        return updated;
+      });
+      setDocSuccessMsg(
+        `${newItems.length === 1 ? `"${newItems[0].name}"` : `${newItems.length} files`} added to batch!`
+      );
+      setTimeout(() => setDocSuccessMsg(null), 4000);
+    }
+    setIsUploadingDoc(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    stageFiles(event.target.files);
+    if (addingToBatchIndex !== null) {
+      handleDirectUploadToBatch(event.target.files);
+    } else {
+      stageFiles(event.target.files);
+    }
   };
 
   const handleSelectFiles = () => {
@@ -1539,7 +1623,7 @@ const NotesDocumentsTab: React.FC<{
           ================================================== */}
           <section className="mb-8">
 
-            <div className="mb-4 flex items-end justify-between">
+            <div className="mb-4">
               <h3 className="text-lg font-semibold text-slate-900">Document Library</h3>
             </div>
 
@@ -1559,20 +1643,38 @@ const NotesDocumentsTab: React.FC<{
                     const displayTitle = batchLabel || (batchDocs.length === 1 ? batchDocs[0].name : `Documents (${batchDocs.length} files)`);
                     return (
                       <div key={batchIndex} className="group relative rounded-xl border border-blue-100 bg-white p-4 shadow-sm transition-all hover:shadow-md">
-                        <div className="mb-3 flex items-center gap-2">
-                          <span className="text-2xl text-blue-600">
-                            <i className="fa-solid fa-file-word" />
-                          </span>
-                          {batchDocs.length > 1 && (
-                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-bold text-blue-700">
-                              {batchDocs.length} files
+                        <div className="mb-3 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-2xl text-blue-600">
+                              <i className="fa-solid fa-file-word" />
                             </span>
-                          )}
+                            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-bold text-slate-600">
+                              {batchDocs.length} file{batchDocs.length !== 1 ? "s" : ""}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => { setAddingToBatchIndex(batchIndex); fileInputRef.current?.click(); }}
+                              className="flex items-center gap-1 rounded-md border border-blue-300 bg-white px-2.5 py-1 text-xs font-semibold text-blue-600 transition-colors hover:bg-blue-50"
+                            >
+                              <i className="fa-solid fa-plus text-xs" />
+                              Add
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeletingBatchIndex(batchIndex)}
+                              className="flex items-center gap-1 rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-500 transition-colors hover:bg-red-50"
+                            >
+                              <i className="fa-solid fa-trash-can text-xs" />
+                              Delete
+                            </button>
+                          </div>
                         </div>
                         <h4 className="mb-1 text-sm font-bold text-slate-900">
                           {displayTitle}
                         </h4>
-                        <div className="mb-3 space-y-1">
+                        <div className="mb-3 max-h-[4.5rem] space-y-1 overflow-y-auto pr-1">
                           {batchDocs.map(batchDoc => (
                             <div key={batchDoc.id} className="flex items-center justify-between gap-1">
                               <i className={`fa-solid ${isPdfFile(batchDoc) ? "fa-file-pdf text-red-400" : isImageFile(batchDoc) ? "fa-file-image text-blue-400" : "fa-file text-slate-400"} flex-shrink-0 text-[10px]`} />
@@ -1605,11 +1707,18 @@ const NotesDocumentsTab: React.FC<{
                             </div>
                           ))}
                         </div>
-                        <button type="button" onClick={() => setWordView({ docs: batchDocs, label: batchLabel })}
-                          className="flex w-full items-center justify-center gap-1.5 rounded bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100">
-                          <i className="fa-regular fa-eye text-xs" />
-                          View in Word
-                        </button>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => setWordView({ docs: batchDocs, label: batchLabel })}
+                            className="flex flex-1 items-center justify-center gap-1.5 rounded bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100">
+                            <i className="fa-regular fa-eye text-xs" />
+                            View in Word
+                          </button>
+                          <button type="button" onClick={() => downloadPatientDocumentsDocx(batchDocs, { patientId: patientId || undefined })}
+                            className="flex flex-1 items-center justify-center gap-1.5 rounded border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50">
+                            <i className="fa-solid fa-download text-xs" />
+                            Download
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -1624,6 +1733,60 @@ const NotesDocumentsTab: React.FC<{
                 onClose={() => setWordView(null)}
                 onDownload={handleDownload}
               />
+            )}
+
+            {showDeleteAllConfirm && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+                  <h4 className="mb-2 text-base font-bold text-slate-900">Delete All Documents?</h4>
+                  <p className="mb-5 text-sm text-slate-500">
+                    This will permanently remove all {documents.length} document{documents.length !== 1 ? "s" : ""} from the library. This cannot be undone.
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowDeleteAllConfirm(false)}
+                      className="flex-1 rounded-md border border-slate-200 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDeleteAll}
+                      className="flex-1 rounded-md bg-red-600 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
+                    >
+                      Delete All
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {deletingBatchIndex !== null && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+                  <h4 className="mb-2 text-base font-bold text-slate-900">Delete this batch?</h4>
+                  <p className="mb-5 text-sm text-slate-500">
+                    This will permanently remove all {imageBatchGroups[deletingBatchIndex]?.ids.length ?? 0} file{(imageBatchGroups[deletingBatchIndex]?.ids.length ?? 0) !== 1 ? "s" : ""} in this batch. This cannot be undone.
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDeletingBatchIndex(null)}
+                      className="flex-1 rounded-md border border-slate-200 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDeleteBatch}
+                      className="flex-1 rounded-md bg-red-600 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
           </section>
 

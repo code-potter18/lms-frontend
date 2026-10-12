@@ -8,6 +8,18 @@ export interface ConsultationState {
   visit_type?: string;
 }
 
+/* Consultation > Investigations / Scans: what the doctor sets per selected
+   test, keyed by test name (like selectedInvestigations). Lab Review sends
+   it on each lab_order_item. */
+export type InvestigationPriority = "Normal" | "Urgent";
+
+export interface InvestigationOrderDetail {
+  notes: string;
+  priority: InvestigationPriority;
+  /* DD-MM-YYYY, as typed or picked; may be empty. */
+  targetDate: string;
+}
+
 export interface MeasurementValues {
   height: string;
   weight: string;

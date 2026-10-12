@@ -303,6 +303,7 @@ const PatientNotesDocuments: React.FC<{
   const [previewDoc, setPreviewDoc] = useState<PatientDocumentItem | null>(null);
   const [isDownloadingWord, setIsDownloadingWord] = useState(false);
   const [isExportingDocs, setIsExportingDocs] = useState(false);
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
 
   /* Load stored patient documents from IndexedDB */
   useEffect(() => {
@@ -571,6 +572,15 @@ const PatientNotesDocuments: React.FC<{
         setPreviewDoc(null);
       }
     }
+  };
+
+  const handleDeleteAll = async () => {
+    for (const doc of documents) {
+      await deletePatientDocument(doc.id);
+    }
+    setDocuments([]);
+    setPreviewDoc(null);
+    setShowDeleteAllConfirm(false);
   };
 
   const handleExportDocuments = async () => {
@@ -1287,13 +1297,33 @@ const PatientNotesDocuments: React.FC<{
                       Document Library
                     </h3>
 
-                    <button
-                      type="button"
-                      className="flex items-center text-sm font-medium text-blue-600 transition-colors hover:text-blue-800"
-                    >
-                      View All Documents
-                      <i className="fa-solid fa-arrow-right ml-1" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSelectFiles}
+                        className="flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-700"
+                      >
+                        <i className="fa-solid fa-plus text-xs" />
+                        Add
+                      </button>
+                      {documents.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowDeleteAllConfirm(true)}
+                          className="flex items-center gap-1 rounded-md bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-100"
+                        >
+                          <i className="fa-solid fa-trash-can text-xs" />
+                          Delete All
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="flex items-center text-sm font-medium text-blue-600 transition-colors hover:text-blue-800"
+                      >
+                        View All Documents
+                        <i className="fa-solid fa-arrow-right ml-1" />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -1370,6 +1400,33 @@ const PatientNotesDocuments: React.FC<{
                     ))
                     )}
                   </div>
+
+                  {showDeleteAllConfirm && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                      <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+                        <h4 className="mb-2 text-base font-bold text-slate-900">Delete All Documents?</h4>
+                        <p className="mb-5 text-sm text-slate-500">
+                          This will permanently remove all {documents.length} document{documents.length !== 1 ? "s" : ""} from the library. This cannot be undone.
+                        </p>
+                        <div className="flex gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setShowDeleteAllConfirm(false)}
+                            className="flex-1 rounded-md border border-slate-200 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleDeleteAll}
+                            className="flex-1 rounded-md bg-red-600 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
+                          >
+                            Delete All
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </section>
 
                 {/* =================================================

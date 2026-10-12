@@ -10,8 +10,9 @@ import {
 } from "../../../api/labOrder.api";
 import { UserProfileDropdown } from "../../../components/ui/User_profile_dropdown";
 import VoiceToText from "@/components/ui/voicetotext";
-import { findActiveEncounter } from "./helpers";
+import { dmyToIsoStrict, findActiveEncounter } from "./helpers";
 import { BackIcon, CheckIcon } from "./icons";
+import type { InvestigationOrderDetail } from "./types";
 
 /* ============================================================
    LAB REVIEW COMPONENT
@@ -30,6 +31,13 @@ const formatOrderedDate = (value?: string | null) => {
   const day = String(date.getDate()).padStart(2, "0");
   const month = String(date.getMonth() + 1).padStart(2, "0");
   return `${day}-${month}-${date.getFullYear()}`;
+};
+
+/* target_date is a DATE column (serialised as UTC midnight), so it is read
+   from the string rather than through the local timezone. */
+const formatTargetDate = (value?: string | null) => {
+  const iso = value?.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return iso ? `${iso[3]}-${iso[2]}-${iso[1]}` : "—";
 };
 
 const NotificationIcon = () => (
@@ -71,6 +79,10 @@ const LabReview: React.FC<{
   branchId?: string;
   encounterNo?: string;
   pendingTests?: LabTestMasterRecord[];
+  /* Consultation's per-test notes / priority / target date, by test name. */
+  testDetails?: Record<string, InvestigationOrderDetail>;
+  /* Consultation's Additional Instructions -> lab_order.clinical_notes. */
+  instructions?: string;
   onOrdered?: (testIds: string[]) => void;
   onNext?: () => void;
 }> = ({
@@ -80,6 +92,8 @@ const LabReview: React.FC<{
   branchId,
   encounterNo,
   pendingTests = [],
+  testDetails = {},
+  instructions = "",
   onOrdered,
   onNext,
 }) => {
@@ -190,9 +204,19 @@ const LabReview: React.FC<{
         const branchId =
           getActiveBranchId() ?? getUser()?.branch_id ?? undefined;
 
+        /* The order is Urgent when any of its tests is, so the lab's
+           order-level badges and alerts flag it. */
+        const orderUrgent = pendingTests.some(
+          (test) => testDetails[test.test_name]?.priority === "Urgent"
+        );
+
         const orderResponse = await labOrderApi.create({
           patient_id: patientId,
           doctor_employee_id: employeeId,
+          priority: orderUrgent ? "Urgent" : "Normal",
+          ...(instructions.trim()
+            ? { clinical_notes: instructions.trim() }
+            : {}),
           ...(branchId ? { branch_id: branchId } : {}),
         });
 
@@ -203,13 +227,22 @@ const LabReview: React.FC<{
         }
 
         const createdItems = await Promise.all(
-          pendingTests.map((test) =>
-            labOrderItemApi.create({
+          pendingTests.map((test) => {
+            const detail = testDetails[test.test_name];
+            const notes = detail?.notes.trim() ?? "";
+            /* An invalid typed date is dropped (Consultation's Proceed
+               blocks it, but this step can be opened from the stepper). */
+            const targetDate = dmyToIsoStrict(detail?.targetDate ?? "");
+
+            return labOrderItemApi.create({
               lab_order_id: labOrderId,
               lab_test_id: test.lab_test_id,
+              priority: detail?.priority ?? "Normal",
+              ...(notes ? { clinical_notes: notes } : {}),
+              ...(targetDate ? { target_date: targetDate } : {}),
               ...(branchId ? { branch_id: branchId } : {}),
-            })
-          )
+            });
+          })
         );
 
         try {
@@ -342,19 +375,23 @@ const LabReview: React.FC<{
           <table className="w-full border-collapse text-left">
             <thead>
               <tr className="border-b border-gray-100 bg-white">
-                <th className="w-2/5 px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <th className="w-[36%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
                   Investigation Name
                 </th>
 
-                <th className="w-1/5 px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
                   Ordered Date
                 </th>
 
-                <th className="w-1/5 px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
+                  Target Date
+                </th>
+
+                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
                   Status
                 </th>
 
-                <th className="w-1/5 px-8 py-4 text-right text-xs font-bold uppercase tracking-wider text-gray-500">
+                <th className="w-[16%] px-8 py-4 text-right text-xs font-bold uppercase tracking-wider text-gray-500">
                   Action
                 </th>
               </tr>
@@ -364,7 +401,7 @@ const LabReview: React.FC<{
               {!itemsLoading && !itemsError && orderedItems.length === 0 && (
                 <tr>
                   <td
-                    colSpan={4}
+                    colSpan={5}
                     className="px-8 py-6 text-center text-sm text-gray-500"
                   >
                     No investigations have been ordered for this patient yet.
@@ -381,14 +418,35 @@ const LabReview: React.FC<{
                   key={item.lab_order_item_id}
                   className="border-b border-[#F3F4F6] transition-colors last:border-b-0 hover:bg-gray-50"
                 >
-                  <td className="px-8 py-5 text-[15px] font-semibold">
-                    {item.lab_test_master?.test_name ?? "—"}
+                  <td className="max-w-0 px-8 py-5">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-[15px] font-semibold">
+                        {item.lab_test_master?.test_name ?? "—"}
+                      </span>
+                      {item.priority === "Urgent" && (
+                        <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-600 ring-1 ring-red-200">
+                          Urgent
+                        </span>
+                      )}
+                    </div>
+                    {item.clinical_notes && (
+                      <div
+                        className="mt-0.5 truncate text-xs text-gray-500"
+                        title={item.clinical_notes}
+                      >
+                        {item.clinical_notes}
+                      </div>
+                    )}
                   </td>
 
                   <td className="px-8 py-5 text-gray-600">
                     {formatOrderedDate(
                       item.lab_order?.order_datetime ?? item.created_at
                     )}
+                  </td>
+
+                  <td className="px-8 py-5 text-gray-600">
+                    {formatTargetDate(item.target_date)}
                   </td>
 
                   <td className="px-8 py-5">

@@ -30,6 +30,7 @@ import { useLatestPatientVitals } from "./patient-details/hooks";
 import { loadLatestChemoPlan } from "./patient-details/api";
 import OrderSummaryTab from "./patient-details/OrderSummaryTab";
 import MedicationsTab from "./patient-details/MedicationsTab";
+import AdministrationTab from "./patient-details/AdministrationTab";
 import DischargeTab from "./patient-details/DischargeTab";
 import HistoryTab from "./patient-details/HistoryTab";
 import NotesDocumentsTab from "./patient-details/NotesDocumentsTab";
@@ -399,6 +400,8 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
   selectedCycle={selectedCycle}
   cycleMedicationsMap={cycleMedicationsMap}
 />
+) : activeTab === "Administration" ? (
+<AdministrationTab patientId={resolvedPatientId} plan={savedPlan} />
 ) : activeTab === "Discharge" ? (
 <DischargeTab
   patientId={resolvedPatientId}

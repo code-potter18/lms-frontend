@@ -23,7 +23,24 @@ export interface PatientDocumentItem {
   color: string; // Tailwind text color class
   hover: string; // Tailwind border hover class
   blob?: Blob;
+  // The OPD visit or IPD stay this document is scoped to, if any -- the
+  // common column across both modules.
+  encounterNo?: string | null;
+  // Free-text taxonomy (BIOPSY_REPORT / DISCHARGE_DOCUMENT / LAB_REPORT /
+  // IMAGING / CONSENT_FORM / INSURANCE / OTHER).
+  documentType?: string | null;
 }
+
+/** Mirrors the backend's DOCUMENT_TYPE_VALUES (patientDocument.constants.ts). */
+export const DOCUMENT_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "BIOPSY_REPORT", label: "Biopsy Report" },
+  { value: "DISCHARGE_DOCUMENT", label: "Discharge Document" },
+  { value: "LAB_REPORT", label: "Lab Report" },
+  { value: "IMAGING", label: "Imaging" },
+  { value: "CONSENT_FORM", label: "Consent Form" },
+  { value: "INSURANCE", label: "Insurance" },
+  { value: "OTHER", label: "Other" },
+];
 
 interface StoredDocumentRecord {
   id: string;
@@ -48,6 +65,8 @@ interface BackendDocumentRecord {
   uploaded_by?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  encounter_no?: string | null;
+  document_type?: string | null;
 }
 
 const DB_NAME = "HMS_PatientDocumentsDB";
@@ -325,6 +344,59 @@ async function deletePatientDocumentFromIndexedDB(id: string): Promise<void> {
   }
 }
 
+function backendBaseUrl(): string {
+  return (
+    (import.meta as any).env?.VITE_BACKEND_URL || "http://localhost:5000/api"
+  ).replace(/\/+$/, "");
+}
+
+/** Shared record -> PatientDocumentItem mapping for every backend-sourced list. */
+function mapBackendRecord(
+  rec: BackendDocumentRecord,
+  fallbackPatientId: string,
+  backendBase: string,
+  tokenQuery: string
+): PatientDocumentItem {
+  const docId = rec.document_id || rec.id;
+  const fileName = rec.file_name || rec.original_name || "Document";
+  const fileType = rec.file_type || "application/octet-stream";
+  const fileSize = Number(rec.file_size || 0);
+  const { icon, color, hover } = getDocumentIconAndColors(fileName, fileType);
+  const ext = fileName.split(".").pop()?.toUpperCase() || "FILE";
+  const formattedSize = formatFileSize(fileSize);
+
+  const createdDate = rec.created_at ? new Date(rec.created_at) : new Date();
+  const uploadDate =
+    createdDate.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }) +
+    ", " +
+    createdDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const dateOnly = uploadDate.split(",")[0] || uploadDate;
+
+  const viewUrl = `${backendBase}/patient-documents/${encodeURIComponent(docId)}/view${tokenQuery}`;
+
+  return {
+    id: docId,
+    patientId: rec.patient_id || fallbackPatientId,
+    name: fileName,
+    title: stripExtension(fileName),
+    originalName: rec.original_name || fileName,
+    size: fileSize,
+    type: fileType,
+    url: viewUrl,
+    uploadDate,
+    info: `${ext} • ${formattedSize} • ${dateOnly}`,
+    icon,
+    color,
+    hover,
+    encounterNo: rec.encounter_no ?? null,
+    documentType: rec.document_type ?? null,
+  };
+}
+
 /**
  * Load all documents stored in the database for a specific patient.
  * First queries backend API `/patient-documents/patient/:patientId`.
@@ -335,9 +407,7 @@ export async function loadPatientDocuments(
 ): Promise<PatientDocumentItem[]> {
   if (!patientId) return [];
 
-  const backendBase = (
-    (import.meta as any).env?.VITE_BACKEND_URL || "http://localhost:5000/api"
-  ).replace(/\/+$/, "");
+  const backendBase = backendBaseUrl();
   const token = getToken();
   const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : "";
 
@@ -347,53 +417,46 @@ export async function loadPatientDocuments(
     );
 
     if (response.data && Array.isArray(response.data.data)) {
-      const backendDocs = response.data.data;
-      const items: PatientDocumentItem[] = backendDocs.map((rec) => {
-        const docId = rec.document_id || rec.id;
-        const fileName = rec.file_name || rec.original_name || "Document";
-        const fileType = rec.file_type || "application/octet-stream";
-        const fileSize = Number(rec.file_size || 0);
-        const { icon, color, hover } = getDocumentIconAndColors(fileName, fileType);
-        const ext = fileName.split(".").pop()?.toUpperCase() || "FILE";
-        const formattedSize = formatFileSize(fileSize);
-
-        const createdDate = rec.created_at ? new Date(rec.created_at) : new Date();
-        const uploadDate =
-          createdDate.toLocaleDateString("en-GB", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          }) +
-          ", " +
-          createdDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        const dateOnly = uploadDate.split(",")[0] || uploadDate;
-
-        const viewUrl = `${backendBase}/patient-documents/${encodeURIComponent(docId)}/view${tokenQuery}`;
-
-        return {
-          id: docId,
-          patientId: rec.patient_id || patientId,
-          name: fileName,
-          title: stripExtension(fileName),
-          originalName: rec.original_name || fileName,
-          size: fileSize,
-          type: fileType,
-          url: viewUrl,
-          uploadDate,
-          info: `${ext} • ${formattedSize} • ${dateOnly}`,
-          icon,
-          color,
-          hover,
-        };
-      });
-
-      return items;
+      return response.data.data.map((rec) =>
+        mapBackendRecord(rec, patientId, backendBase, tokenQuery)
+      );
     }
   } catch (err) {
     console.warn("Backend loadPatientDocuments failed, falling back to IndexedDB:", err);
   }
 
   return loadPatientDocumentsFromIndexedDB(patientId);
+}
+
+/**
+ * Documents attached to one OPD visit or IPD stay (encounter-scoped).
+ * No IndexedDB fallback -- this view only exists once the backend link is
+ * known, so there's nothing meaningful to show offline.
+ */
+export async function loadDocumentsByEncounter(
+  encounterNo: string
+): Promise<PatientDocumentItem[]> {
+  if (!encounterNo) return [];
+
+  const backendBase = backendBaseUrl();
+  const token = getToken();
+  const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : "";
+
+  try {
+    const response = await API.get<{ success: boolean; data: BackendDocumentRecord[] }>(
+      `/patient-documents/encounter/${encodeURIComponent(encounterNo)}`
+    );
+
+    if (response.data && Array.isArray(response.data.data)) {
+      return response.data.data.map((rec) =>
+        mapBackendRecord(rec, rec.patient_id, backendBase, tokenQuery)
+      );
+    }
+  } catch (err) {
+    console.warn("loadDocumentsByEncounter failed:", err);
+  }
+
+  return [];
 }
 
 /**
@@ -414,16 +477,18 @@ function buildDocumentName(file: File, title?: string): string {
  * Save an uploaded file for a patient into PostgreSQL Database via backend API,
  * and caches into IndexedDB for offline capability and immediate previews.
  * An optional title replaces the file name shown in the Document Library.
+ * `context` scopes the upload to one OPD visit / IPD stay (encounterNo) and
+ * tags it with a taxonomy value (documentType) -- both optional, so existing
+ * patient-only callers (e.g. the doctor's Notes & Documents tab) are unaffected.
  */
 export async function savePatientDocument(
   patientId: string,
   file: File,
-  title?: string
+  title?: string,
+  context?: { encounterNo?: string; documentType?: string }
 ): Promise<PatientDocumentItem> {
   const displayName = buildDocumentName(file, title);
-  const backendBase = (
-    (import.meta as any).env?.VITE_BACKEND_URL || "http://localhost:5000/api"
-  ).replace(/\/+$/, "");
+  const backendBase = backendBaseUrl();
   const token = getToken();
   const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : "";
 
@@ -455,6 +520,8 @@ export async function savePatientDocument(
       file_data: base64Data,
       category: "Clinical",
       uploaded_by: uploadedBy,
+      encounter_no: context?.encounterNo,
+      document_type: context?.documentType,
     });
 
     if (response.data && response.data.data) {
@@ -497,6 +564,8 @@ export async function savePatientDocument(
         color,
         hover,
         blob: file,
+        encounterNo: serverDoc.encounter_no ?? context?.encounterNo ?? null,
+        documentType: serverDoc.document_type ?? context?.documentType ?? null,
       };
     }
   } catch (err) {

@@ -46,7 +46,12 @@ export interface ConsultationSummaryPrintData {
   previousReports: { test: string; date?: string; result?: string; impression?: string }[];
   previousReportsText?: string;
   molecularTests: { test: string; date?: string; result?: string; impression?: string }[];
-  investigations: { name: string; notes?: string }[];
+  investigations: {
+    name: string;
+    notes?: string;
+    priority?: string;
+    targetDate?: string;
+  }[];
   investigationInstructions?: string;
   medicines: {
     form: string;
@@ -341,6 +346,8 @@ export const buildConsultationSummaryHtml = (data: ConsultationSummaryPrintData)
       "Investigations / Scans Advised",
       table(data.investigations, [
         { header: "Investigation", cell: (row) => row.name },
+        { header: "Priority", cell: (row) => row.priority },
+        { header: "Target Date", cell: (row) => row.targetDate },
         { header: "Clinical Notes", cell: (row) => row.notes },
       ]) +
         (has(data.investigationInstructions)

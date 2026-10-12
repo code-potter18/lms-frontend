@@ -290,10 +290,42 @@ export interface ChemoPlanOrderHeader {
   hydration_saved: boolean;
   copied_from_order_id?: string | null;
   encounter_no?: string | null;
+  /* The Chemotherapy Order's "Post Chemo Instructions" / "Additional Notes". */
+  chemo_instructions?: string | null;
+  additional_notes?: string | null;
   completed_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   chemotherapy_cycle?: { cycle_status: string | null } | null;
+}
+
+/* GET /chemotherapy/pharmacy-slips?encounter_no=: a visit's pharmacy slips
+   (CANCELLED ones left out, one per cycle day order) with their items. */
+export interface PharmacySlipItemRecord {
+  pharmacy_slip_item_id: string;
+  display_order: number;
+  medicine_id: string | null;
+  drug_name: string | null;
+  brand_name: string | null;
+  dose: string | null;
+  dose_unit: string | null;
+  quantity: number | null;
+  drug_role: string | null;
+  medicine_master: {
+    medicine_name: string | null;
+    generic_name: string | null;
+    brand_name: string | null;
+  } | null;
+}
+
+export interface PharmacySlipRecord {
+  pharmacy_slip_id: string;
+  plan_order_id: string | null;
+  cycle_number: number | null;
+  cycle_day: number | null;
+  slip_status: string;
+  created_at: string | null;
+  pharmacy_slip_item: PharmacySlipItemRecord[];
 }
 
 export interface ChemoPlanOrder extends ChemoPlanOrderHeader {
@@ -328,6 +360,9 @@ export interface ChemoPlanOrderPayload {
   };
   encounter_no?: string | null;
   copied_from_order_id?: string | null;
+  /* Left out = the saved text is kept; empty = cleared. */
+  chemo_instructions?: string | null;
+  additional_notes?: string | null;
 }
 
 export interface ChemoPlanOrderCompletion {
@@ -414,6 +449,12 @@ export const chemotherapyApi = {
     API.get<{ success: boolean; message: string; data: ChemoPlanDetail | null }>(
       "/chemotherapy/plans/latest-for-patient",
       { params: { patient_id: patientId } }
+    ),
+
+  getPharmacySlips: (encounterNo: string) =>
+    API.get<{ success: boolean; message: string; data: PharmacySlipRecord[] }>(
+      "/chemotherapy/pharmacy-slips",
+      { params: { encounter_no: encounterNo } }
     ),
   listPlanOrders: (planId: string) =>
     API.get<{ success: boolean; message: string; data: ChemoPlanOrderHeader[] }>(

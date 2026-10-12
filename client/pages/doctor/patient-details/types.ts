@@ -363,11 +363,12 @@ export interface UseLatestPatientVitalsResult {
 }
 
 /* The patient details page tabs, in display order. */
-export type PatientDetailTab = "Order Summary" | "Medications" | "Discharge" | "History" | "Notes & Documents";
+export type PatientDetailTab = "Order Summary" | "Medications" | "Administration" | "Discharge" | "History" | "Notes & Documents";
 
 export const PATIENT_DETAIL_TABS: PatientDetailTab[] = [
   "Order Summary",
   "Medications",
+  "Administration",
   "Discharge",
   "History",
   "Notes & Documents",

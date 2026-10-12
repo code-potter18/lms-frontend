@@ -54,6 +54,16 @@ type Patient360Visit = {
 
 /* A saved Investigation Results value (patient_investigation_result, from
    the Diagnosis tab) with its test and the test's cancer type. */
+type EncounterReportRow = {
+  encounter_report_id: string;
+  encounter_no: string;
+  report_completed_date: string | null;
+  test_name: string | null;
+  result: string | null;
+  impression: string | null;
+  lab_test_master: { test_name: string } | null;
+};
+
 type InvestigationResultRow = {
   investigation_result_id: string;
   encounter_no: string;
@@ -372,6 +382,8 @@ const HistoryTab: React.FC<{
   const [visitEncounters, setVisitEncounters] = useState<EncounterRecord[]>([]);
   const [stagingDetailsLoading, setStagingDetailsLoading] = useState(false);
   const [stagingHistoryOpen, setStagingHistoryOpen] = useState(false);
+  const [labReportModalOpen, setLabReportModalOpen] = useState(false);
+  const [reportPage, setReportPage] = useState(0);
   const stagingHistoryScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1480,6 +1492,7 @@ const HistoryTab: React.FC<{
 
   /* Treatment Trend: the Investigation Results the Diagnosis tab saved on
      each visit, as one trend per number test, grouped per cancer type. */
+  const [encounterReports, setEncounterReports] = useState<EncounterReportRow[]>([]);
   const [investigationResults, setInvestigationResults] = useState<InvestigationResultRow[]>([]);
   const [investigationLoading, setInvestigationLoading] = useState(false);
 
@@ -1504,6 +1517,17 @@ const HistoryTab: React.FC<{
     return () => {
       cancelled = true;
     };
+  }, [patientId]);
+
+  useEffect(() => {
+    if (!patientId) return;
+    let cancelled = false;
+    API.get<{ success: boolean; data: EncounterReportRow[] }>(
+      `/consultation/patients/${patientId}/reports`
+    )
+      .then((r) => { if (!cancelled) setEncounterReports(r.data?.data ?? []); })
+      .catch(() => { if (!cancelled) setEncounterReports([]); });
+    return () => { cancelled = true; };
   }, [patientId]);
 
   const treatmentTrends = useMemo(
@@ -1679,6 +1703,47 @@ const HistoryTab: React.FC<{
               )}
             </div>
           </div>
+
+          {/* Annual Report — column table view */}
+          {encounterReports.length > 0 && (
+            <div className="mt-6 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+                <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                  <i className="fa-solid fa-file-medical text-[#004785]" />
+                  Annual Report
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => { setReportPage(0); setLabReportModalOpen(true); }}
+                  className="px-4 py-1.5 rounded-lg bg-[#004785] hover:bg-[#003A6B] active:scale-[0.98] text-white text-xs font-semibold transition-all"
+                >
+                  View Report
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100">
+                      <th className="px-4 py-2.5 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Completed Date</th>
+                      <th className="px-4 py-2.5 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Test Name</th>
+                      <th className="px-4 py-2.5 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Result</th>
+                      <th className="px-4 py-2.5 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Impression</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {encounterReports.slice(0, 1).map((row) => (
+                      <tr key={row.encounter_report_id} className="hover:bg-gray-50/60 transition-colors">
+                        <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{fmtHistoryDate(row.report_completed_date ?? "") || "—"}</td>
+                        <td className="px-4 py-3 font-medium text-gray-900">{row.lab_test_master?.test_name || "—"}</td>
+                        <td className="px-4 py-3 text-gray-700">{row.result || "—"}</td>
+                        <td className="px-4 py-3 text-gray-600 max-w-[200px]">{row.impression || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* RIGHT */}
@@ -2489,6 +2554,120 @@ const HistoryTab: React.FC<{
       </div>
 
       {/* PATIENT 360 - VISIT HISTORY POPUP */}
+      {/* Annual Report History Modal — column table view */}
+      {labReportModalOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/50 backdrop-blur-sm p-4 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Annual report history"
+          onClick={() => setLabReportModalOpen(false)}
+        >
+          <div
+            className="mt-6 w-full max-w-3xl animate-[p360-pop_0.25s_ease-out]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="rounded-2xl bg-white shadow-2xl overflow-hidden border border-gray-200">
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-[#F7F9FB]">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-[#004785] text-white flex items-center justify-center">
+                    <i className="fa-solid fa-file-medical" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-gray-900">Annual Report History</h3>
+                    <p className="text-xs text-gray-500">
+                      {encounterReports.length} report{encounterReports.length === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLabReportModalOpen(false)}
+                  className="w-8 h-8 rounded-full hover:bg-gray-100 text-gray-500 hover:text-gray-800 flex items-center justify-center transition-colors"
+                  aria-label="Close annual report history"
+                >
+                  <i className="fa-solid fa-xmark" />
+                </button>
+              </div>
+
+              {/* Table */}
+              <div className="overflow-x-auto">
+                {encounterReports.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-8 text-center">
+                    No lab reports recorded for this patient yet.
+                  </p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 z-10">
+                      <tr className="bg-gray-50 border-b border-gray-200">
+                        <th className="px-5 py-3 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold whitespace-nowrap">Completed Date</th>
+                        <th className="px-5 py-3 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold whitespace-nowrap">Test Name</th>
+                        <th className="px-5 py-3 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold whitespace-nowrap">Result</th>
+                        <th className="px-5 py-3 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Impression</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {encounterReports.slice(reportPage * 5, reportPage * 5 + 5).map((row, idx) => (
+                        <tr
+                          key={row.encounter_report_id || idx}
+                          className={idx === 0 ? "bg-blue-50/40" : "hover:bg-gray-50/60 transition-colors"}
+                        >
+                          <td className="px-5 py-3 text-gray-700 whitespace-nowrap">
+                            {fmtHistoryDate(row.report_completed_date ?? "") || "—"}
+                            {reportPage === 0 && idx === 0 && (
+                              <span className="ml-2 text-[10px] font-bold uppercase tracking-wide text-[#004785]">Latest</span>
+                            )}
+                          </td>
+                          <td className="px-5 py-3 font-medium text-gray-900">{row.lab_test_master?.test_name || "—"}</td>
+                          <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{row.result || "—"}</td>
+                          <td className="px-5 py-3 text-gray-600">{row.impression || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Pagination — up/down arrows, right-aligned */}
+              {encounterReports.length > 5 && (
+                <div className="flex justify-end items-center gap-2 px-5 py-2 border-t border-gray-100">
+                  {reportPage > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setReportPage((p) => p - 1)}
+                      className="w-7 h-7 rounded-full border border-gray-200 bg-white hover:bg-gray-50 text-[#004785] flex items-center justify-center transition-colors shadow-sm"
+                    >
+                      <i className="fa-solid fa-chevron-up text-[11px]" />
+                    </button>
+                  )}
+                  {(reportPage + 1) * 5 < encounterReports.length && (
+                    <button
+                      type="button"
+                      onClick={() => setReportPage((p) => p + 1)}
+                      className="w-7 h-7 rounded-full border border-gray-200 bg-white hover:bg-gray-50 text-[#004785] flex items-center justify-center transition-colors shadow-sm"
+                    >
+                      <i className="fa-solid fa-chevron-down text-[11px]" />
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Footer */}
+              <div className="px-5 py-3 border-t border-gray-100 bg-[#F7F9FB] flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setLabReportModalOpen(false)}
+                  className="px-4 py-1.5 rounded-lg border border-gray-300 text-gray-700 font-semibold hover:bg-gray-100 transition-colors text-sm"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {stagingHistoryOpen && (
         <div
           className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/50 backdrop-blur-sm p-4 sm:p-6"

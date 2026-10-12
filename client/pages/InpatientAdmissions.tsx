@@ -23,7 +23,10 @@ import {
   type BedRecord,
   type TransferAdmissionPayload,
   type DischargeAdmissionPayload,
+  type DiseaseStatusRecord,
+  PATIENT_STATUS_AT_DISCHARGE_OPTIONS,
 } from "@/api/ipd.api";
+import { EncounterDocuments } from "@/components/hms/EncounterDocuments";
 import { useToast } from "@/hooks/use-toast";
 import { RefreshButton } from "@/components/hms/RefreshButton";
 import { StatusBadge } from "@/components/hms/StatusBadge";
@@ -113,8 +116,15 @@ const InpatientAdmissions: React.FC = () => {
     discharge_type: "RECOVERED",
     discharge_summary: "",
     discharge_date: new Date().toISOString().slice(0, 16),
+    discharge_advice: "",
+    review_date: "",
+    discharge_disease_status: "",
+    patient_status_at_discharge: "",
   });
   const [submittingDischarge, setSubmittingDischarge] = useState(false);
+  // Fetched lazily the first time the discharge dialog opens, then cached --
+  // same list the doctor's Diagnosis form maintains (disease_status_master).
+  const [diseaseStatusOptions, setDiseaseStatusOptions] = useState<DiseaseStatusRecord[]>([]);
 
   // Planned-request workflow: bed picker (admit / reserve) and the
   // confirm dialogs for cancel / no-show / release reservation.
@@ -335,8 +345,22 @@ const InpatientAdmissions: React.FC = () => {
       discharge_type: "RECOVERED",
       discharge_summary: "",
       discharge_date: new Date().toISOString().slice(0, 16),
+      discharge_advice: "",
+      review_date: "",
+      discharge_disease_status: "",
+      patient_status_at_discharge: "",
     });
     setDischargeOpen(true);
+
+    if (diseaseStatusOptions.length === 0) {
+      ipdApi
+        .listDiseaseStatuses()
+        .then((res) => setDiseaseStatusOptions(res.data?.data || []))
+        .catch(() => {
+          // Non-fatal -- the dropdown just shows no options; discharge can
+          // still proceed without a disease status.
+        });
+    }
   };
 
   // Submit Discharge
@@ -346,7 +370,16 @@ const InpatientAdmissions: React.FC = () => {
 
     setSubmittingDischarge(true);
     try {
-      const res = await ipdApi.discharge(activeAdmission.admission_id, dischargeData);
+      // express-validator's .optional() only skips a field that's
+      // undefined -- an empty string still hits isISO8601()/isIn() and
+      // fails. review_date and patient_status_at_discharge are both
+      // genuinely optional, so blank out to undefined rather than "".
+      const payload: DischargeAdmissionPayload = {
+        ...dischargeData,
+        review_date: dischargeData.review_date || undefined,
+        patient_status_at_discharge: dischargeData.patient_status_at_discharge || undefined,
+      };
+      const res = await ipdApi.discharge(activeAdmission.admission_id, payload);
       if (res.data?.success) {
         toast({
           title: "Patient Discharged",
@@ -990,12 +1023,34 @@ const InpatientAdmissions: React.FC = () => {
                 </div>
               </div>
 
+              {/* Discharge Date & Time */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-700">Discharge Date & Time *</Label>
+                <Input
+                  type="datetime-local"
+                  max={new Date().toISOString().slice(0, 16)}
+                  value={dischargeData.discharge_date || ""}
+                  onChange={(e) =>
+                    setDischargeData((prev) => ({ ...prev, discharge_date: e.target.value }))
+                  }
+                />
+              </div>
+
               {/* Discharge Type */}
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-slate-700">Discharge Type *</Label>
                 <Select
                   value={dischargeData.discharge_type}
-                  onValueChange={(val) => setDischargeData((prev) => ({ ...prev, discharge_type: val }))}
+                  onValueChange={(val) =>
+                    setDischargeData((prev) => ({
+                      ...prev,
+                      discharge_type: val,
+                      // Mirrors the server-side auto-force in dischargeAdmission --
+                      // deceased is a consequence of the type, not a separate pick.
+                      patient_status_at_discharge: val === "DECEASED" ? "DECEASED" : prev.patient_status_at_discharge,
+                      review_date: val === "DECEASED" ? "" : prev.review_date,
+                    }))
+                  }
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -1006,6 +1061,51 @@ const InpatientAdmissions: React.FC = () => {
                     <SelectItem value="AGAINST_MEDICAL_ADVICE">Against Medical Advice (AMA)</SelectItem>
                     <SelectItem value="REFERRED_OUT">Referred Out to Other Facility</SelectItem>
                     <SelectItem value="DECEASED">Deceased</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Patient Status at Discharge */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-700">Patient Status at Discharge</Label>
+                <Select
+                  value={dischargeData.patient_status_at_discharge || ""}
+                  disabled={dischargeData.discharge_type === "DECEASED"}
+                  onValueChange={(val) =>
+                    setDischargeData((prev) => ({ ...prev, patient_status_at_discharge: val }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select condition at discharge" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PATIENT_STATUS_AT_DISCHARGE_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Disease Status -- same list the doctor's Diagnosis form maintains */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-700">Disease Status</Label>
+                <Select
+                  value={dischargeData.discharge_disease_status || ""}
+                  onValueChange={(val) =>
+                    setDischargeData((prev) => ({ ...prev, discharge_disease_status: val }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select disease status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {diseaseStatusOptions.map((opt) => (
+                      <SelectItem key={opt.disease_status_id} value={opt.status_name}>
+                        {opt.status_name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1022,6 +1122,41 @@ const InpatientAdmissions: React.FC = () => {
                   }
                 />
               </div>
+
+              {/* Discharge Advice -- take-home instructions for the patient */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-slate-700">Discharge Advice</Label>
+                <Textarea
+                  rows={2}
+                  placeholder="Diet, activity, wound care, when to come back..."
+                  value={dischargeData.discharge_advice || ""}
+                  onChange={(e) =>
+                    setDischargeData((prev) => ({ ...prev, discharge_advice: e.target.value }))
+                  }
+                />
+              </div>
+
+              {/* Review Date */}
+              {dischargeData.discharge_type !== "DECEASED" && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-slate-700">Review / Follow-up Date</Label>
+                  <Input
+                    type="date"
+                    min={(dischargeData.discharge_date || "").slice(0, 10)}
+                    value={dischargeData.review_date || ""}
+                    onChange={(e) =>
+                      setDischargeData((prev) => ({ ...prev, review_date: e.target.value }))
+                    }
+                  />
+                </div>
+              )}
+
+              {/* Attachments -- biopsy reports, discharge paperwork, etc. */}
+              <EncounterDocuments
+                encounterNo={activeAdmission.encounter_no}
+                patientId={activeAdmission.patient_id}
+                title="Attachments"
+              />
 
               <DialogFooter className="pt-2">
                 <Button

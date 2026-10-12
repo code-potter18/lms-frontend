@@ -51,6 +51,30 @@ export interface DischargeAdmissionPayload {
   discharge_type?: string;
   discharge_summary?: string;
   discharge_date?: string;
+  /** Take-home instructions for the patient -- distinct from discharge_summary. */
+  discharge_advice?: string;
+  /** Target follow-up date (yyyy-MM-dd); must be on or after discharge_date. */
+  review_date?: string;
+  /** Free-text label sourced from the same list the doctor's Diagnosis form uses. */
+  discharge_disease_status?: string;
+  /** STABLE | IMPROVED | UNCHANGED | DETERIORATED | CRITICAL | DECEASED. */
+  patient_status_at_discharge?: string;
+}
+
+/** Mirrors the backend's PATIENT_STATUS_AT_DISCHARGE_VALUES (ipd.constants.ts). */
+export const PATIENT_STATUS_AT_DISCHARGE_OPTIONS: { value: string; label: string }[] = [
+  { value: "STABLE", label: "Stable" },
+  { value: "IMPROVED", label: "Improved" },
+  { value: "UNCHANGED", label: "Unchanged" },
+  { value: "DETERIORATED", label: "Deteriorated" },
+  { value: "CRITICAL", label: "Critical" },
+  { value: "DECEASED", label: "Deceased" },
+];
+
+export interface DiseaseStatusRecord {
+  disease_status_id: string;
+  status_name: string;
+  display_order?: number | null;
 }
 
 export interface AdmissionTransferLog {
@@ -89,6 +113,10 @@ export interface AdmissionRecord {
   discharge_date: string | null;
   discharge_type: string | null;
   discharge_summary: string | null;
+  discharge_advice?: string | null;
+  review_date?: string | null;
+  discharge_disease_status?: string | null;
+  patient_status_at_discharge?: string | null;
   advance_amount: number | string | null;
   status: "PLANNED" | "ADMITTED" | "DISCHARGED" | "TRANSFERRED" | "CANCELLED" | "NO_SHOW" | string;
   cancellation_reason?: string | null;
@@ -327,6 +355,12 @@ export const ipdApi = {
 
   discharge: (id: string, data: DischargeAdmissionPayload) =>
     API.post<{ success: boolean; message: string; data: AdmissionRecord }>(`/ipd/${id}/discharge`, data),
+
+  // The discharge form's Disease Status dropdown reuses the exact list the
+  // doctor's Diagnosis form maintains (disease_status_master) -- same
+  // endpoint, not a separate IPD copy.
+  listDiseaseStatuses: () =>
+    API.get<{ success: boolean; data: DiseaseStatusRecord[] }>("/oncology/reference/disease-statuses"),
 
   transfer: (id: string, data: TransferAdmissionPayload) =>
     API.post<{ success: boolean; message: string; data: any }>(`/ipd/${id}/transfer`, data),

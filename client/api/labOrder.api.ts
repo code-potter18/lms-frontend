@@ -61,6 +61,10 @@ export interface LabOrderItemRecord {
   net_amount?: number | string | null;
   item_status?: string | null;
   remarks?: string | null;
+  /* Doctor's per-test order details (Consultation > Investigations). */
+  clinical_notes?: string | null;
+  priority?: string | null;
+  target_date?: string | null;
   barcode?: string | null;
   sample_id?: string | null;
   specimen_type?: string | null;
@@ -129,6 +133,10 @@ export const labOrderItemApi = {
     lab_test_id: string;
     quantity?: number;
     remarks?: string;
+    clinical_notes?: string;
+    priority?: "Normal" | "Urgent" | "Stat";
+    /* ISO date, YYYY-MM-DD. */
+    target_date?: string;
     branch_id?: string;
     user_id?: string;
   }) =>

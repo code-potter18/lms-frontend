@@ -16,6 +16,7 @@ import {
 import type { ConsultationState, FormData } from "./types";
 import {
   findActiveEncounter,
+  findLatestStagingDetailId,
   findStagingDetailForEncounter,
   formatPickedDate,
   parsePickedDate,
@@ -1214,6 +1215,282 @@ const toPickedDateValue = (value?: string | null): string => {
   return `${day}-${month}-${year}`;
 };
 
+const EMPTY_FORM_DATA: FormData = {
+  diagnosisDate: "",
+  progressionDate: "",
+  relapseDate: "",
+  secondPrimaryDate: "",
+  preDiagnosis: "",
+  diseaseStatus: "",
+  laterality: [],
+  bodySite: [],
+  survivor: "",
+  type: "",
+  cancerTypes: [],
+  subType: [],
+  histomorphology: "",
+  cancerStage: [],
+  grade: [],
+  score: [],
+  tStage: [],
+  nStage: [],
+  mStage: [],
+  icdCode: "",
+  notes: "",
+  investigationReportDate: "",
+  investigationResults: {},
+  valueEdits: {},
+};
+
+const asStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === "string" && value.length > 0) return [value];
+  return [];
+};
+
+/* A stored form (local draft or a staging detail's form_state) made safe
+   to load: subType / cancerStage / laterality / bodySite / grade used to be
+   single strings and are multi-select arrays now, and only text value
+   edits are kept. */
+const normalizeStoredForm = (data: Partial<FormData>): Partial<FormData> => ({
+  ...data,
+  cancerTypes: asStringArray(data.cancerTypes),
+  subType: asStringArray(data.subType),
+  cancerStage: asStringArray(data.cancerStage),
+  laterality: asStringArray(data.laterality),
+  bodySite: asStringArray(data.bodySite),
+  grade: asStringArray(data.grade),
+  score: asStringArray(data.score),
+  tStage: asStringArray(data.tStage),
+  nStage: asStringArray(data.nStage),
+  mStage: asStringArray(data.mStage),
+  valueEdits:
+    data.valueEdits &&
+    typeof data.valueEdits === "object" &&
+    !Array.isArray(data.valueEdits)
+      ? Object.fromEntries(
+          Object.entries(data.valueEdits).filter(
+            (entry): entry is [string, string] =>
+              typeof entry[1] === "string" && entry[1].trim() !== ""
+          )
+        )
+      : {},
+});
+
+/* ---- A staging detail's form_state ----
+   The exact Diagnosis selections behind a staging detail, saved with it so
+   the form refills exactly from the patient's latest staging detail (its
+   text columns join Stage / Body Site / Grade / Score across the cancer
+   types, which can't be mapped back). The visit's Investigation Results are
+   saved on their own and are not part of it. */
+type DiagnosisFormFields = Omit<
+  FormData,
+  "investigationReportDate" | "investigationResults"
+>;
+
+type DiagnosisFormState = {
+  version: 1;
+  formData: DiagnosisFormFields;
+  selectedCancerTypes: string[];
+  metastasisSites: string[];
+};
+
+/* Only the known form fields, fresh defaults for any missing. */
+const pickFormFields = (data: Partial<FormData>): DiagnosisFormFields => {
+  const {
+    investigationReportDate: _reportDate,
+    investigationResults: _results,
+    ...defaults
+  } = EMPTY_FORM_DATA;
+  return Object.fromEntries(
+    Object.entries(defaults).map(([key, fallback]) => [
+      key,
+      data[key as keyof FormData] ??
+        (Array.isArray(fallback)
+          ? []
+          : typeof fallback === "object"
+            ? {}
+            : fallback),
+    ])
+  ) as DiagnosisFormFields;
+};
+
+const parseFormState = (value: unknown): DiagnosisFormState | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const state = value as Partial<Record<keyof DiagnosisFormState, unknown>>;
+  if (
+    state.version !== 1 ||
+    !state.formData ||
+    typeof state.formData !== "object"
+  ) {
+    return null;
+  }
+  return {
+    version: 1,
+    formData: pickFormFields(
+      normalizeStoredForm(state.formData as Partial<FormData>)
+    ),
+    selectedCancerTypes: asStringArray(state.selectedCancerTypes),
+    metastasisSites: asStringArray(state.metastasisSites),
+  };
+};
+
+/* Equal signatures = the doctor changed nothing. Selections compare as
+   sets, except the cancer types (the first is the primary). */
+const formStateSignature = (state: DiagnosisFormState) => {
+  const fields = state.formData as Record<string, unknown>;
+  const normalized = Object.keys(fields)
+    .sort()
+    .map((key) => {
+      const value = fields[key];
+      if (key === "valueEdits") {
+        return [
+          key,
+          Object.entries((value ?? {}) as Record<string, string>).sort(
+            ([a], [b]) => a.localeCompare(b)
+          ),
+        ];
+      }
+      if (key === "cancerTypes") return [key, asStringArray(value)];
+      if (Array.isArray(value)) return [key, value.map(String).sort()];
+      return [key, typeof value === "string" ? value.trim() : value ?? ""];
+    });
+  return JSON.stringify({
+    fields: normalized,
+    /* No list yet means just the primary type (the form adds it). */
+    selectedCancerTypes:
+      state.selectedCancerTypes.length > 0
+        ? state.selectedCancerTypes
+        : [state.formData.type].filter(Boolean),
+    metastasisSites: [...state.metastasisSites].sort(),
+  });
+};
+
+/* A staging detail as GET /oncology/staging-details/:id returns it (the
+   fields the form is filled from). */
+type StagingDetailRecord = {
+  staging_detail_id: string;
+  visit_date?: string | null;
+  diagnosis_date?: string | null;
+  progression_date?: string | null;
+  relapse_date?: string | null;
+  second_primary_date?: string | null;
+  notes?: string | null;
+  pre_diagnosis?: string | null;
+  disease_status?: string | null;
+  clinical_stage?: string | null;
+  site?: string | null;
+  grade?: string | null;
+  score?: string | null;
+  laterality?: string | null;
+  t_stage?: string | null;
+  n_stage?: string | null;
+  m_stage?: string | null;
+  histopathology?: string | null;
+  icd10_code?: string | null;
+  metastasis_sites?: unknown;
+  form_state?: unknown;
+  cancer_types?: { cancer_type: string } | null;
+  cancer_subtypes?: { subtype_name: string } | null;
+  oncology_staging_additional_cancers?: {
+    display_order?: number | null;
+    laterality?: string | null;
+    t_stage?: string | null;
+    n_stage?: string | null;
+    m_stage?: string | null;
+    histopathology?: string | null;
+    cancer_types?: { cancer_type: string } | null;
+    cancer_subtypes?: { subtype_name: string } | null;
+  }[] | null;
+};
+
+/* A staging detail saved before form_state existed, rebuilt from its
+   columns. Each cancer type's histopathology / laterality / T / N / M is
+   exact; Stage / Body Site / Grade / Score are joined across the types
+   without saying which, so they go under the primary type. */
+const formStateFromColumns = (
+  detail: StagingDetailRecord
+): DiagnosisFormState | null => {
+  const primary = detail.cancer_types?.cancer_type ?? "";
+  if (!primary) return null;
+
+  const extras = [...(detail.oncology_staging_additional_cancers ?? [])]
+    .filter((cancer) => cancer.cancer_types?.cancer_type)
+    .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
+  const types = [
+    primary,
+    ...extras.map((cancer) => cancer.cancer_types?.cancer_type ?? ""),
+  ];
+
+  const fields = pickFormFields({});
+  const valueEdits: Record<string, string> = {};
+  const qualify = (cancerType: string, value: string) => `${cancerType}|${value}`;
+  const addCancer = (
+    cancerType: string,
+    row: {
+      subtypeName?: string | null;
+      histopathology?: string | null;
+      laterality?: string | null;
+      t_stage?: string | null;
+      n_stage?: string | null;
+      m_stage?: string | null;
+    }
+  ) => {
+    if (row.subtypeName) {
+      const value = qualify(cancerType, row.subtypeName);
+      fields.subType.push(value);
+      if (row.histopathology && row.histopathology !== row.subtypeName) {
+        valueEdits[editKey("subType", value)] = row.histopathology;
+      }
+    }
+    if (row.laterality) fields.laterality.push(qualify(cancerType, row.laterality));
+    if (row.t_stage) fields.tStage.push(qualify(cancerType, row.t_stage));
+    if (row.n_stage) fields.nStage.push(qualify(cancerType, row.n_stage));
+    if (row.m_stage) fields.mStage.push(qualify(cancerType, row.m_stage));
+  };
+  addCancer(primary, {
+    ...detail,
+    subtypeName: detail.cancer_subtypes?.subtype_name,
+  });
+  extras.forEach((cancer) =>
+    addCancer(cancer.cancer_types?.cancer_type ?? "", {
+      ...cancer,
+      subtypeName: cancer.cancer_subtypes?.subtype_name,
+    })
+  );
+
+  const underPrimary = (text?: string | null) =>
+    (text ?? "")
+      .split(",")
+      .map((label) => label.trim())
+      .filter(Boolean)
+      .map((label) => qualify(primary, label));
+
+  return {
+    version: 1,
+    formData: {
+      ...fields,
+      diagnosisDate: toPickedDateValue(detail.diagnosis_date),
+      progressionDate: toPickedDateValue(detail.progression_date),
+      relapseDate: toPickedDateValue(detail.relapse_date),
+      secondPrimaryDate: toPickedDateValue(detail.second_primary_date),
+      preDiagnosis: detail.pre_diagnosis ?? "",
+      diseaseStatus: detail.disease_status ?? "",
+      type: primary,
+      cancerTypes: types,
+      cancerStage: underPrimary(detail.clinical_stage),
+      bodySite: underPrimary(detail.site),
+      grade: underPrimary(detail.grade),
+      score: underPrimary(detail.score),
+      icdCode: detail.icd10_code ?? "",
+      notes: detail.notes ?? "",
+      valueEdits,
+    },
+    selectedCancerTypes: types,
+    metastasisSites: asStringArray(detail.metastasis_sites),
+  };
+};
+
 type StagingReferenceItem = {
   stage_ref_id: string;
   cancer_type_id: string;
@@ -1370,32 +1647,7 @@ const Diagnosis: React.FC<{
   const [userAvatarUrl, setUserAvatarUrl] = useState<string>(() => localStorage.getItem("user_photo") || "");
   const [avatarLoading, setAvatarLoading] = useState<boolean>(() => !localStorage.getItem("user_photo"));
 
-  const [formData, setFormData] = useState<FormData>({
-    diagnosisDate: "",
-    progressionDate: "",
-    relapseDate: "",
-    secondPrimaryDate: "",
-    preDiagnosis: "",
-    diseaseStatus: "",
-    laterality: [],
-    bodySite: [],
-    survivor: "",
-    type: "",
-    cancerTypes: [],
-    subType: [],
-    histomorphology: "",
-    cancerStage: [],
-    grade: [],
-    score: [],
-    tStage: [],
-    nStage: [],
-    mStage: [],
-    icdCode: "",
-    notes: "",
-    investigationReportDate: "",
-    investigationResults: {},
-    valueEdits: {},
-  });
+  const [formData, setFormData] = useState<FormData>(EMPTY_FORM_DATA);
 
   const diagnosisDraftKey = `hms_diagnosis_form_${resolvedPatientId}`;
 
@@ -1407,27 +1659,9 @@ const Diagnosis: React.FC<{
 
     try {
       const data = JSON.parse(saved) as Partial<FormData>;
-      /* Normalize legacy drafts: subType / cancerStage / laterality /
-         bodySite / grade used to be single strings, they are now
-         multi-select arrays. */
-      const asArray = (value: unknown): string[] => {
-        if (Array.isArray(value)) return value.map(String);
-        if (typeof value === "string" && value.length > 0) return [value];
-        return [];
-      };
       setFormData((previous) => ({
         ...previous,
-        ...data,
-        cancerTypes: asArray(data.cancerTypes),
-        subType: asArray(data.subType),
-        cancerStage: asArray(data.cancerStage),
-        laterality: asArray(data.laterality),
-        bodySite: asArray(data.bodySite),
-        grade: asArray(data.grade),
-        score: asArray(data.score),
-        tStage: asArray(data.tStage),
-        nStage: asArray(data.nStage),
-        mStage: asArray(data.mStage),
+        ...normalizeStoredForm(data),
         investigationReportDate:
           typeof data.investigationReportDate === "string"
             ? data.investigationReportDate
@@ -1438,100 +1672,155 @@ const Diagnosis: React.FC<{
           !Array.isArray(data.investigationResults)
             ? data.investigationResults
             : {},
-        /* Only text edits survive a malformed draft. */
-        valueEdits:
-          data.valueEdits &&
-          typeof data.valueEdits === "object" &&
-          !Array.isArray(data.valueEdits)
-            ? Object.fromEntries(
-                Object.entries(data.valueEdits).filter(
-                  (entry): entry is [string, string] =>
-                    typeof entry[1] === "string" && entry[1].trim() !== ""
-                )
-              )
-            : {},
       }));
-      const savedTypes = asArray(data.cancerTypes);
+      const savedTypes = asStringArray(data.cancerTypes);
       if (savedTypes.length > 0) setSelectedCancerTypes(savedTypes);
     } catch (error) {
       console.error("Failed to restore diagnosis draft:", error);
     }
   }, [diagnosisDraftKey, resolvedPatientId]);
 
-  /* One-time server hydration: when there's no local draft yet, pull the
-     latest staging detail and seed the visit date, diagnosis dates and
-     notes so a fresh browser shows what was previously saved. A
-     local draft always wins over this server seed. Runs before the
-     draft-save effect so the empty initial draft can't suppress it. */
+  /* The visit the local draft belongs to (plus its Metastasis Sites, which
+     live outside formData): a draft from an earlier visit is replaced by
+     the latest staging detail, one from this visit is the doctor's work in
+     progress and stays. */
+  const visitContextKey = `hms_diagnosis_visit_${resolvedPatientId}`;
+  type DiagnosisVisitContext = { encounterNo: string; metastasisSites: string[] };
+  const readVisitContext = (): DiagnosisVisitContext | null => {
+    try {
+      const data = JSON.parse(localStorage.getItem(visitContextKey) ?? "null");
+      return data && typeof data === "object"
+        ? {
+            encounterNo: String(data.encounterNo ?? ""),
+            metastasisSites: asStringArray(data.metastasisSites),
+          }
+        : null;
+    } catch {
+      return null;
+    }
+  };
+  const visitContextReadyRef = useRef(false);
+
+  /* The staging detail the form was filled from and its selections: Save
+     reuses it when nothing changed, else records this visit's own row. */
+  const baselineRef = useRef<{
+    stagingDetailId: string;
+    ownVisit: boolean;
+    signature: string;
+  } | null>(null);
+
+  /* The cancer type catalog, and the types whose options still have to
+     load once it arrives (a prefill that landed before it). */
+  const cancerTypesRef = useRef<CancerTypeItem[]>([]);
+  const pendingOptionTypesRef = useRef<string[] | null>(null);
+
+  /* Fill the form with a staging detail's selections and load the option
+     lists of its cancer types. */
+  const applyFormState = (state: DiagnosisFormState) => {
+    setFormData((previous) => ({ ...previous, ...state.formData }));
+    const typeNames =
+      state.selectedCancerTypes.length > 0
+        ? state.selectedCancerTypes
+        : state.formData.type
+          ? [state.formData.type]
+          : [];
+    setSelectedCancerTypes(typeNames);
+    if (cancerTypesRef.current.length > 0) {
+      const selections = typeNames
+        .map((name) =>
+          cancerTypesRef.current.find((item) => item.cancer_type === name)
+        )
+        .filter((item): item is CancerTypeItem => Boolean(item?.cancer_type_id))
+        .map((item) => ({
+          cancerTypeId: item.cancer_type_id,
+          cancerTypeName: item.cancer_type,
+        }));
+      if (selections.length > 0) {
+        loadSubtypesForCancerTypes(selections);
+        loadStagesForCancerTypes(selections, false);
+        loadMastersForCancerTypes(selections);
+      }
+    } else {
+      pendingOptionTypesRef.current = typeNames;
+    }
+    setMetastasisSites(state.metastasisSites);
+  };
+
+  /* On arrival the form is filled from this visit's staging detail, else
+     the patient's latest one (an exact form_state, else rebuilt from its
+     columns). A draft from this same visit is kept instead - the doctor's
+     unsaved changes survive switching steps. Either way the staging detail
+     becomes the baseline Save compares against. */
   useEffect(() => {
     if (!resolvedPatientId) return;
+    /* Read now: the draft-save effect below rewrites it after this render. */
     const rawDraft = localStorage.getItem(diagnosisDraftKey);
-    if (rawDraft && hasDraftContent(rawDraft)) return;
     let cancelled = false;
     const hydrate = async () => {
       try {
-         /* This visit's own staging detail (the Diagnosis step reopened in
-            the same visit) seeds everything. Otherwise the latest earlier
-            one only carries the diagnosis / progression / relapse / second
-            primary dates - its visit date and notes belong to that earlier
-            visit. */
-        const visitEncounterNo = await resolveVisitEncounterNo();
+        const visitEncounterNo = await resolveVisitEncounterNo().catch(() => "");
         const ownStagingId = visitEncounterNo
           ? await findStagingDetailForEncounter(resolvedPatientId, visitEncounterNo)
           : "";
-        const stored = JSON.parse(
-          localStorage.getItem(`hms_staging_detail_id_${resolvedPatientId}`) ??
-            "{}"
-        ) as { staging_detail_id?: string } | null;
-        const sourceStagingId = ownStagingId || stored?.staging_detail_id;
-        if (!sourceStagingId || cancelled) return;
-        const response = await API.get<{
-          success: boolean;
-          data: {
-            visit_date?: string | null;
-            diagnosis_date?: string | null;
-            progression_date?: string | null;
-            relapse_date?: string | null;
-            second_primary_date?: string | null;
-            notes?: string | null;
-          } | null;
-        }>(
-          `/oncology/staging-details/${encodeURIComponent(sourceStagingId)}`
-        );
-        const detail = response.data.data;
-        if (!detail || cancelled) return;
-        const ownVisit = Boolean(ownStagingId);
-        setFormData((previous) => ({
-          ...previous,
-          diagnosisDate:
-            previous.diagnosisDate || toPickedDateValue(detail.diagnosis_date),
-          progressionDate:
-            previous.progressionDate ||
-            toPickedDateValue(detail.progression_date),
-          relapseDate:
-            previous.relapseDate || toPickedDateValue(detail.relapse_date),
-          secondPrimaryDate:
-            previous.secondPrimaryDate ||
-            toPickedDateValue(detail.second_primary_date),
-          notes: ownVisit ? previous.notes || detail.notes || "" : previous.notes,
-        }));
-        const visitDateIso = ownVisit
-          ? toDateInputValue(detail.visit_date ?? "")
-          : "";
-        if (visitDateIso) {
-          const parsed = parsePickedDate(visitDateIso);
-          if (parsed && onVisitDateChange) {
-            onVisitDateChange(formatPickedDate(parsed));
+        const sourceStagingId =
+          ownStagingId || (await findLatestStagingDetailId(resolvedPatientId));
+        const detail = sourceStagingId
+          ? (
+              await API.get<{ success: boolean; data: StagingDetailRecord | null }>(
+                `/oncology/staging-details/${encodeURIComponent(sourceStagingId)}`
+              )
+            ).data.data
+          : null;
+        if (cancelled) return;
+
+        const state = detail
+          ? parseFormState(detail.form_state) ?? formStateFromColumns(detail)
+          : null;
+        const context = readVisitContext();
+        const keepDraft = visitEncounterNo
+          ? context?.encounterNo === visitEncounterNo && rawDraft !== null
+          : Boolean(rawDraft && hasDraftContent(rawDraft));
+
+        if (keepDraft) {
+          setMetastasisSites(context?.metastasisSites ?? []);
+        } else if (state) {
+          applyFormState(state);
+          /* This visit's own staging detail also restores its visit date. */
+          const visitDate = ownStagingId
+            ? parsePickedDate(toPickedDateValue(detail?.visit_date))
+            : undefined;
+          if (visitDate && onVisitDateChange) {
+            onVisitDateChange(formatPickedDate(visitDate));
           }
         }
+        localStorage.setItem(
+          visitContextKey,
+          JSON.stringify({
+            encounterNo: visitEncounterNo,
+            metastasisSites: keepDraft
+              ? context?.metastasisSites ?? []
+              : state?.metastasisSites ?? [],
+          })
+        );
+        visitContextReadyRef.current = true;
+
+        baselineRef.current =
+          detail && state
+            ? {
+                stagingDetailId: detail.staging_detail_id,
+                ownVisit: Boolean(ownStagingId),
+                signature: formStateSignature(state),
+              }
+            : null;
       } catch (error) {
-        console.error("Failed to hydrate diagnosis from staging detail:", error);
+        console.error("Failed to fill the diagnosis from the latest staging detail:", error);
       }
     };
     hydrate();
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diagnosisDraftKey, resolvedPatientId, onVisitDateChange, encounterNo, appointmentId]);
 
   useEffect(() => {
@@ -1855,6 +2144,19 @@ const Diagnosis: React.FC<{
   >([]);
   const [investigationVisitNo, setInvestigationVisitNo] = useState("");
   const [metastasisSites, setMetastasisSites] = useState<string[]>([]);
+  /* Metastasis Sites aren't in the draft: kept with the visit context so
+     they survive switching steps (once the context belongs to this visit). */
+  useEffect(() => {
+    if (!resolvedPatientId || !visitContextReadyRef.current) return;
+    localStorage.setItem(
+      visitContextKey,
+      JSON.stringify({
+        encounterNo: readVisitContext()?.encounterNo ?? "",
+        metastasisSites,
+      })
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metastasisSites, resolvedPatientId]);
   const [diagnosisLoading, setDiagnosisLoading] = useState(false);
   const [diagnosisError, setDiagnosisError] = useState("");
   const [savingDiagnosis, setSavingDiagnosis] = useState(false);
@@ -2012,7 +2314,9 @@ const Diagnosis: React.FC<{
     setNOptions([]);
     setMOptions([]);
     setGrades([]);
-    setMetastasisSites([]);
+    /* New cancer types start over; reloading the options of restored /
+       prefilled ones keeps their Metastasis Sites. */
+    if (resetStageSelection) setMetastasisSites([]);
 
     Promise.all(
       selections.map((selection) =>
@@ -2148,20 +2452,26 @@ const Diagnosis: React.FC<{
         if (cancelled) return;
         const fetched = response.data.data;
         setCancerTypes(fetched);
+        cancerTypesRef.current = fetched;
 
-        let savedTypes: string[] = [];
-        try {
-          const savedDraft = JSON.parse(
-            localStorage.getItem(diagnosisDraftKey) ?? ""
-          ) as Partial<FormData> | null;
-          savedTypes = Array.isArray(savedDraft?.cancerTypes)
-            ? savedDraft.cancerTypes.map(String)
-            : [];
-          if (savedDraft?.type && !savedTypes.includes(savedDraft.type)) {
-            savedTypes = [savedDraft.type, ...savedTypes];
+        /* A staging detail prefilled before the catalog arrived, else the
+           draft's cancer types. */
+        let savedTypes: string[] = pendingOptionTypesRef.current ?? [];
+        pendingOptionTypesRef.current = null;
+        if (savedTypes.length === 0) {
+          try {
+            const savedDraft = JSON.parse(
+              localStorage.getItem(diagnosisDraftKey) ?? ""
+            ) as Partial<FormData> | null;
+            savedTypes = Array.isArray(savedDraft?.cancerTypes)
+              ? savedDraft.cancerTypes.map(String)
+              : [];
+            if (savedDraft?.type && !savedTypes.includes(savedDraft.type)) {
+              savedTypes = [savedDraft.type, ...savedTypes];
+            }
+          } catch (error) {
+            console.error("Failed to read diagnosis draft:", error);
           }
-        } catch (error) {
-          console.error("Failed to read diagnosis draft:", error);
         }
 
         const matchedSavedTypes = savedTypes
@@ -2818,6 +3128,14 @@ const Diagnosis: React.FC<{
     scoreMasterOptions.find((score) => score.cancerType === cancerType)
       ?.score_system || "Other";
 
+  /* The form's current selections, as saved in form_state. */
+  const buildFormState = (): DiagnosisFormState => ({
+    version: 1,
+    formData: pickFormFields(formData),
+    selectedCancerTypes,
+    metastasisSites,
+  });
+
   const handleNext = async () => {
     if (!resolvedPatientId) {
       setDiagnosisError(
@@ -3094,6 +3412,7 @@ const Diagnosis: React.FC<{
       );
 
       const visitDateIso = toIsoDate(visitDate);
+      const formState = buildFormState();
 
       const stagingFields: Record<string, unknown> = {
         cancer_type_id: matchedType?.cancer_type_id ?? "",
@@ -3103,38 +3422,33 @@ const Diagnosis: React.FC<{
         /* Always sent: the list is replaced, so a deselected type is removed. */
         additional_cancers: additionalCancers,
         ...(diagnosisId ? { diagnosis_id: diagnosisId } : {}),
-        ...(clinicalStageText ? { clinical_stage: clinicalStageText } : {}),
-        ...(primaryTStage ? { t_stage: primaryTStage } : {}),
-        ...(primaryNStage ? { n_stage: primaryNStage } : {}),
-        ...(primaryMStage ? { m_stage: primaryMStage } : {}),
-        ...(metastasisSites.length > 0
-          ? { metastasis_sites: metastasisSites }
-          : {}),
-        ...(formData.preDiagnosis
-          ? { pre_diagnosis: formData.preDiagnosis }
-          : {}),
-        ...(diseaseStatusText ? { disease_status: diseaseStatusText } : {}),
-        ...(primaryLaterality ? { laterality: primaryLaterality } : {}),
-        ...(siteText ? { site: siteText } : {}),
-        ...(gradeText ? { grade: gradeText } : {}),
-        ...(gradeSystems ? { grade_system: gradeSystems } : {}),
-        ...(scoreText ? { score: scoreText } : {}),
-        ...(scoreSystems ? { score_system: scoreSystems } : {}),
         ...(visitDateIso ? { visit_date: visitDateIso } : {}),
-        ...(diagnosisDateIso ? { diagnosis_date: diagnosisDateIso } : {}),
-        ...(progressionDateIso
-          ? { progression_date: progressionDateIso }
-          : {}),
-        ...(relapseDateIso ? { relapse_date: relapseDateIso } : {}),
-        ...(secondPrimaryDateIso
-          ? { second_primary_date: secondPrimaryDateIso }
-          : {}),
-        ...(formData.notes.trim() ? { notes: formData.notes.trim() } : {}),
+        /* The exact selections, to refill the form from this row. */
+        form_state: formState,
+      };
+      /* null = empty: clears the value when this visit's row is updated
+         (e.g. a value unticked), left out when a new row is created. */
+      const clearableFields: Record<string, unknown> = {
+        clinical_stage: clinicalStageText || null,
+        t_stage: primaryTStage || null,
+        n_stage: primaryNStage || null,
+        m_stage: primaryMStage || null,
+        metastasis_sites: metastasisSites.length > 0 ? metastasisSites : null,
+        pre_diagnosis: formData.preDiagnosis || null,
+        disease_status: diseaseStatusText || null,
+        laterality: primaryLaterality || null,
+        site: siteText || null,
+        grade: gradeText || null,
+        grade_system: gradeSystems || null,
+        score: scoreText || null,
+        score_system: scoreSystems || null,
+        diagnosis_date: diagnosisDateIso || null,
+        progression_date: progressionDateIso || null,
+        relapse_date: relapseDateIso || null,
+        second_primary_date: secondPrimaryDateIso || null,
+        notes: formData.notes.trim() || null,
       };
 
-      /* One staging detail per visit: re-saving in this visit updates its
-         row; a new visit records a new row, so earlier visits keep their
-         diagnosis in the patient's history. */
       let visitEncounterNo = "";
       let existingStagingDetailId = "";
       try {
@@ -3149,13 +3463,24 @@ const Diagnosis: React.FC<{
         console.error("Failed to resolve this visit's staging detail:", error);
       }
 
-      let stagingDetailId = existingStagingDetailId;
+      /* Nothing changed since the staging detail the form was filled from
+         (the patient's latest): keep using it. A change is recorded on
+         this visit's own row - created on the visit's first change (a new
+         staging_detail_id), updated on later ones - so earlier visits keep
+         their diagnosis in the patient's history. */
+      const baseline = baselineRef.current;
+      const signature = formStateSignature(formState);
+      const unchanged = baseline !== null && baseline.signature === signature;
 
-      if (existingStagingDetailId) {
+      let stagingDetailId = unchanged
+        ? baseline.stagingDetailId
+        : existingStagingDetailId;
+
+      if (!unchanged && existingStagingDetailId) {
         try {
           await API.put(
             `/oncology/staging-details/${existingStagingDetailId}`,
-            stagingFields
+            { ...stagingFields, ...clearableFields }
           );
         } catch (updateError: any) {
           if (updateError?.response?.status === 404) {
@@ -3174,8 +3499,19 @@ const Diagnosis: React.FC<{
           patient_id: resolvedPatientId,
           ...(visitEncounterNo ? { encounter_no: visitEncounterNo } : {}),
           ...stagingFields,
+          ...Object.fromEntries(
+            Object.entries(clearableFields).filter(([, value]) => value !== null)
+          ),
         });
         stagingDetailId = response.data.data?.staging_detail_id ?? "";
+      }
+
+      if (stagingDetailId) {
+        baselineRef.current = {
+          stagingDetailId,
+          ownVisit: unchanged ? baseline.ownVisit : true,
+          signature,
+        };
       }
 
       if (stagingDetailId) {

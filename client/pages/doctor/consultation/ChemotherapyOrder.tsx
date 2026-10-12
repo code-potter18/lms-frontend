@@ -36,6 +36,7 @@ import {
   formatPickedDate,
   parseDateValue,
   parsePickedDate,
+  protocolDayDilutions,
   toIsoDate,
 } from "./helpers";
 import { BackIcon, BellIcon, CheckIcon } from "./icons";
@@ -725,52 +726,12 @@ const ChemotherapyOrder: React.FC<{
      chemotherapy_protocol_dilutions repeats those (without the medicine) -
      so each dilution is read once, by protocol_dilution_id, preferring the
      protocol_dilutions copy. */
-  const templateDilutions = (dayNumber: number | null): Drug[] => {
-    const items = protocolRef.current?.chemotherapy_regimen_protocol_items ?? [];
-    const itemById = new Map(items.map((item) => [item.protocol_item_id, item]));
-
-    const byId = new Map<string, RegimenProtocolDilution>();
-    for (const dilution of protocolRef.current?.protocol_dilutions ?? []) {
-      byId.set(dilution.protocol_dilution_id, dilution);
-    }
-    for (const item of items) {
-      for (const dilution of item.chemotherapy_protocol_dilutions ?? []) {
-        if (byId.has(dilution.protocol_dilution_id)) continue;
-        byId.set(dilution.protocol_dilution_id, {
-          ...dilution,
-          protocol_item_id: dilution.protocol_item_id ?? item.protocol_item_id,
-        });
-      }
-    }
-
-    /* The items of this day (a same-as-day-1 day uses day 1's). */
-    const dayItemIds = new Set(
-      dayNumber != null
-        ? resolveProtocolDayItems(protocolDaysRef.current, dayNumber).map(
-            (item) => item.protocol_item_id
-          )
-        : []
+  /* Detached protocol-level rows first, then the day's own (shared with
+     the Summary step, see protocolDayDilutions). */
+  const templateDilutions = (dayNumber: number | null): Drug[] =>
+    protocolDayDilutions(protocolRef.current, dayNumber).map(
+      ({ dilution, item }, index) => protocolDilutionToDrug(dilution, index, item)
     );
-
-    const all = [...byId.values()];
-    /* Detached protocol-level rows first, then the day's own, so a whole
-       protocol's dilutions always read the same way. */
-    const protocolLevel = all.filter((dilution) => !dilution.protocol_item_id);
-    const attached = all.filter(
-      (dilution) =>
-        !!dilution.protocol_item_id && dayItemIds.has(dilution.protocol_item_id)
-    );
-
-    return [...protocolLevel, ...attached].map((dilution, index) =>
-      protocolDilutionToDrug(
-        dilution,
-        index,
-        dilution.protocol_item_id
-          ? itemById.get(dilution.protocol_item_id)
-          : undefined
-      )
-    );
-  };
 
   /* Keeps a saved cycle day order (from a load or a save) and its header. */
   const cacheOrder = (order: ChemoPlanOrder | null | undefined) => {
@@ -897,6 +858,16 @@ const ChemotherapyOrder: React.FC<{
           ? (saved.chemotherapy_plan_hydration ?? []).map(planHydrationToRow)
           : templateHydration()
       );
+      /* The day's saved instructions fill boxes nothing was typed into
+         (e.g. the order is reopened on another device). */
+      const savedInstructions = saved.chemo_instructions ?? "";
+      const savedNotes = saved.additional_notes ?? "";
+      if (savedInstructions) {
+        setPostChemoInstructions((prev) => (prev.trim() ? prev : savedInstructions));
+      }
+      if (savedNotes) {
+        setAdditionalNotes((prev) => (prev.trim() ? prev : savedNotes));
+      }
       return;
     }
 
@@ -1234,6 +1205,8 @@ const ChemotherapyOrder: React.FC<{
             cycle: getCycleNumber(cycleDayRef.current) ?? 1,
             day: displayedDayRef.current ?? 1,
             hydration: hydrationPayload(hydrationRows),
+            chemoInstructions: postChemoInstructions,
+            additionalNotes,
           },
         }
       );

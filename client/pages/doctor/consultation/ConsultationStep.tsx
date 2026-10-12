@@ -27,7 +27,10 @@ import AdviceSection, {
   type AdviceSaveResult,
   type AdviceSectionHandle,
 } from "./AdviceSection";
-import type { ConsultationState } from "./types";
+import InvestigationOrderCard, {
+  EMPTY_INVESTIGATION_DETAIL,
+} from "./InvestigationOrderCard";
+import type { ConsultationState, InvestigationOrderDetail } from "./types";
 import { computeBmi, computeBsa } from "../../../utils/vitals";
 import { printConsultationSummary } from "../../../utils/consultationSummaryPrint";
 import {
@@ -36,6 +39,7 @@ import {
   formatTimeAMPM,
   parsePickedDate,
   PAST_HISTORY_MARKER,
+  targetDateError,
 } from "./helpers";
 
 /* ============================================================
@@ -87,6 +91,14 @@ interface ConsultationStepProps {
   labTestsError: string;
   selectedInvestigations: string[];
   onSelectedInvestigationsChange: React.Dispatch<React.SetStateAction<string[]>>;
+  /* Per-test notes / priority / target date (by test name) and the
+     Additional Instructions; Lab Review sends them with the order. */
+  investigationDetails: Record<string, InvestigationOrderDetail>;
+  onInvestigationDetailsChange: React.Dispatch<
+    React.SetStateAction<Record<string, InvestigationOrderDetail>>
+  >;
+  investigationInstructions: string;
+  onInvestigationInstructionsChange: (value: string) => void;
   onToast: (message: string) => void;
   /* Called after the consultation is saved by Proceed to Next. */
   onProceed: () => void;
@@ -106,6 +118,10 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
   labTestsError,
   selectedInvestigations,
   onSelectedInvestigationsChange: setSelectedInvestigations,
+  investigationDetails,
+  onInvestigationDetailsChange: setInvestigationDetails,
+  investigationInstructions: additionalInstructions,
+  onInvestigationInstructionsChange: setAdditionalInstructions,
   onToast: showToast,
   onProceed,
 }) => {
@@ -158,10 +174,17 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
     []
   );
 
-  const [investigationNotes, setInvestigationNotes] = useState<
-    Record<string, string>
-  >({});
-  const [additionalInstructions, setAdditionalInstructions] = useState("");
+  const investigationDetail = (name: string) =>
+    investigationDetails[name] ?? EMPTY_INVESTIGATION_DETAIL;
+
+  const updateInvestigationDetail = (
+    name: string,
+    patch: Partial<InvestigationOrderDetail>
+  ) =>
+    setInvestigationDetails((prev) => ({
+      ...prev,
+      [name]: { ...(prev[name] ?? EMPTY_INVESTIGATION_DETAIL), ...patch },
+    }));
 
   /* Standard General Examination findings (one row of checkbox -> one
      multi-select field). Persisted as per-finding booleans, so the
@@ -688,10 +711,15 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
             },
           ]
         : [],
-      investigations: selectedInvestigations.map((name) => ({
-        name,
-        notes: investigationNotes[name] ?? "",
-      })),
+      investigations: selectedInvestigations.map((name) => {
+        const detail = investigationDetail(name);
+        return {
+          name,
+          notes: detail.notes,
+          priority: detail.priority,
+          targetDate: detail.targetDate,
+        };
+      }),
       investigationInstructions: additionalInstructions,
       medicines: (adviceSectionRef.current?.getDraftRows() ?? []).map(
         (row) => ({
@@ -979,6 +1007,16 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
   const proceedNext = async () => {
     if (proceeding) return;
+
+    /* Lab Review orders the selected tests next, so a mistyped Target
+       Date is caught here rather than silently dropped. */
+    for (const name of selectedInvestigations) {
+      const dateError = targetDateError(investigationDetail(name).targetDate);
+      if (dateError) {
+        showToast(`Target Date for ${name}: ${dateError}`);
+        return;
+      }
+    }
 
     if (!encounter) {
       showToast(
@@ -1848,8 +1886,15 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-4 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="text-lg font-bold leading-7 text-slate-800">
-      Investigations / Scans
+    <div className="flex items-center justify-between gap-2">
+      <div className="text-lg font-bold leading-7 text-slate-800">
+        Investigations / Scans
+      </div>
+      {selectedInvestigations.length > 0 && (
+        <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold leading-4 text-blue-700">
+          {selectedInvestigations.length} selected
+        </span>
+      )}
     </div>
 
     {labTestsLoading && (
@@ -1950,32 +1995,23 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
     )}
 
     {selectedInvestigations.length > 0 && (
-      <div className="flex w-full flex-col gap-4 pt-2">
+      <div className="flex w-full flex-col gap-2.5 pt-1">
 
-        {selectedInvestigations.map((investigation) => (
-
-          <div
+        {selectedInvestigations.map((investigation, index) => (
+          <InvestigationOrderCard
             key={investigation}
-            className="flex flex-col gap-2"
-          >
-
-            <label className="text-xs font-bold leading-4 text-slate-500">
-              Clinical Notes - {investigation}
-            </label>
-
-            <VoiceToText
-              value={investigationNotes[investigation] ?? ""}
-              onChange={(text) =>
-                setInvestigationNotes((prev) => ({
-                  ...prev,
-                  [investigation]: text,
-                }))
-              }
-              placeholder={`Enter clinical notes for ${investigation}`}
-            />
-
-          </div>
-
+            index={index}
+            name={investigation}
+            detail={investigationDetail(investigation)}
+            onChange={(patch) =>
+              updateInvestigationDetail(investigation, patch)
+            }
+            onRemove={() =>
+              handleInvestigationsChange(
+                selectedInvestigations.filter((name) => name !== investigation)
+              )
+            }
+          />
         ))}
 
       </div>

@@ -26,6 +26,7 @@ import { ipdApi, type AdmissionRecord } from "@/api/ipd.api";
 import { formatMobile } from "@/utils/formatters";
 import { StatusBadge, type StatusTone } from "@/components/hms/StatusBadge";
 import PatientVitalsPanel from "@/components/hms/PatientVitalsPanel";
+import { EncounterDocuments } from "@/components/hms/EncounterDocuments";
 
 // Status label mapping matching backend enum
 const STATUS_LABELS: Record<string, string> = {
@@ -595,8 +596,30 @@ const AdmissionDetails: React.FC = () => {
               </div>
 
               <div className="rounded-lg border border-amber-200 bg-white p-3">
+                <span className="text-amber-500 text-[10px] uppercase font-bold">Patient Status</span>
+                <p className="font-semibold text-slate-800 mt-0.5">{admission.patient_status_at_discharge || "—"}</p>
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-white p-3">
+                <span className="text-amber-500 text-[10px] uppercase font-bold">Disease Status</span>
+                <p className="font-semibold text-slate-800 mt-0.5">{admission.discharge_disease_status || "—"}</p>
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-white p-3">
+                <span className="text-amber-500 text-[10px] uppercase font-bold">Review / Follow-up Date</span>
+                <p className="font-semibold text-slate-800 mt-0.5">
+                  {admission.review_date ? formatDateOnly(admission.review_date) : "—"}
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-white p-3">
                 <span className="text-amber-500 text-[10px] uppercase font-bold">Discharge Summary</span>
-                <p className="font-semibold text-slate-800 mt-0.5">{admission.discharge_summary || "—"}</p>
+                <p className="font-semibold text-slate-800 mt-0.5 whitespace-pre-wrap">{admission.discharge_summary || "—"}</p>
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-white p-3 sm:col-span-3">
+                <span className="text-amber-500 text-[10px] uppercase font-bold">Discharge Advice</span>
+                <p className="font-semibold text-slate-800 mt-0.5 whitespace-pre-wrap">{admission.discharge_advice || "—"}</p>
               </div>
             </div>
           </section>
@@ -642,7 +665,24 @@ const AdmissionDetails: React.FC = () => {
           </section>
         )}
 
-        {/* 7. Vitals Section */}
+        {/* 7. Attachments -- biopsy reports, discharge paperwork, etc.,
+            scoped to this admission's encounter. Read-only here; uploads
+            happen from the Discharge dialog or wherever the stay is active. */}
+        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm w-full">
+          <div className="flex items-center gap-2.5 mb-4">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+              <FileText className="h-4 w-4" />
+            </div>
+            <h2 className="text-base font-bold text-slate-800">Attachments</h2>
+          </div>
+          <EncounterDocuments
+            encounterNo={admission.encounter_no}
+            patientId={admission.patient_id}
+            readOnly
+          />
+        </section>
+
+        {/* 8. Vitals Section */}
         <section className="space-y-2">
           <PatientVitalsPanel patientId={admission.patient_id} />
         </section>

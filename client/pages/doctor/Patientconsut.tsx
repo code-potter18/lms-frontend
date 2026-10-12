@@ -38,6 +38,7 @@ import FollowUp from "./consultation/FollowUp";
 import Summary from "./consultation/Summary";
 import type {
   ConsultationState,
+  InvestigationOrderDetail,
   MeasurementValues,
 } from "./consultation/types";
 import { findActiveEncounter, formatDateDMY } from "./consultation/helpers";
@@ -239,6 +240,14 @@ const Consultation: React.FC = () => {
   const [selectedInvestigations, setSelectedInvestigations] = useState<
     string[]
   >([]);
+  /* Per-test notes / priority / target date (keyed by test name) and the
+     Additional Instructions: entered in Consultation, sent by Lab Review on
+     the lab_order_item rows and the lab_order. */
+  const [investigationDetails, setInvestigationDetails] = useState<
+    Record<string, InvestigationOrderDetail>
+  >({});
+  const [investigationInstructions, setInvestigationInstructions] =
+    useState("");
 
   const [labTests, setLabTests] = useState<LabTestMasterRecord[]>([]);
   const [labTestsLoading, setLabTestsLoading] = useState(true);
@@ -1079,6 +1088,8 @@ const Consultation: React.FC = () => {
                     branchId={consultationState?.branchId}
                     encounterNo={encounter?.encounter_no}
                     pendingTests={pendingLabTests}
+                    testDetails={investigationDetails}
+                    instructions={investigationInstructions}
                     onOrdered={handleTestsOrdered}
                     onNext={() => { selectStep("DIAGNOSIS", markStepCompleted("LAB REPORT REVIEW")); }}
                   />
@@ -1152,6 +1163,10 @@ const Consultation: React.FC = () => {
                     labTestsError={labTestsError}
                     selectedInvestigations={selectedInvestigations}
                     onSelectedInvestigationsChange={setSelectedInvestigations}
+                    investigationDetails={investigationDetails}
+                    onInvestigationDetailsChange={setInvestigationDetails}
+                    investigationInstructions={investigationInstructions}
+                    onInvestigationInstructionsChange={setInvestigationInstructions}
                     onToast={showToast}
                     onProceed={() => { selectStep("LAB REPORT REVIEW", markStepCompleted("CONSULTATION")); }}
                   />

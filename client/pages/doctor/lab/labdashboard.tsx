@@ -437,7 +437,7 @@ export default function LabDashboard() {
                       oi.lab_test_master?.test_name || "Diagnostic Test",
                     sampleType:
                       oi.lab_test_master?.sample_type || "Whole Blood",
-                    priority: order.priority || "Normal",
+                    priority: oi.priority || order.priority || "Normal",
                     barcode: sampleBarcode,
                     deadlineDate: formattedDeadline,
                   };
