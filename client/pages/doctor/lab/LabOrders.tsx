@@ -30,6 +30,7 @@ interface OrderTestItem {
   completedBy?: string;
   resultSummary?: string;
   parameters?: { parameter: string; result: string; unit?: string; referenceRange?: string }[];
+  deadlineDate?: string;
 }
 
 interface TrackedOrder {
@@ -206,6 +207,25 @@ export default function LabOrders() {
             status = "VERIFIED"; statusLabel = "Barcode Assigned";
           }
 
+          const tatHours = Number(oi.lab_test_master?.tat_hours) || 2;
+          const baseDate = oi.created_at || order.order_datetime || order.created_at
+            ? new Date(oi.created_at || order.order_datetime || order.created_at!)
+            : new Date();
+          const deadlineDateObj = new Date(baseDate.getTime() + tatHours * 3600 * 1000);
+          const deadlineDate = !isNaN(deadlineDateObj.getTime())
+            ? deadlineDateObj.toLocaleDateString("en-GB", {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+              }) +
+              ", " +
+              deadlineDateObj.toLocaleTimeString("en-US", {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: true,
+              })
+            : undefined;
+
           return {
             id: itemId,
             testCode: oi.lab_test_master?.test_code || oi.lab_test_id?.replace(/^LABTEST/, "T") || "TEST",
@@ -217,6 +237,7 @@ export default function LabOrders() {
             completedAt: status === "COMPLETED" ? (oi.updated_at ? new Date(oi.updated_at).toLocaleString() : "—") : undefined,
             resultSummary: lsResult,
             parameters: lsParams.length > 0 ? lsParams : undefined,
+            deadlineDate,
           };
         });
 
@@ -672,7 +693,10 @@ export default function LabOrders() {
                             <button type="button" onClick={() => copyBarcode(t.barcode!)} className="text-blue-600 hover:text-blue-800 text-[11px] font-semibold cursor-pointer">{copiedBarcode === t.barcode ? "Copied!" : "Copy"}</button>
                           </div>
                         ) : <span className="text-slate-400 italic text-[11px]">No barcode yet</span>}
-                        {t.completedAt && <span className="text-[11px] text-slate-500">{t.completedAt}</span>}
+                        <div className="flex items-center gap-3">
+                          {t.deadlineDate && <span className="text-[11px] text-slate-500 font-medium">Deadline: <strong className="text-slate-700">{t.deadlineDate}</strong></span>}
+                          {t.completedAt && <span className="text-[11px] text-slate-500">{t.completedAt}</span>}
+                        </div>
                       </div>
                       {/* Findings / Results */}
                       {t.resultSummary && <div className="p-2 rounded-lg bg-emerald-50/60 border border-emerald-100 text-xs text-emerald-950"><span className="text-[10px] font-bold text-emerald-800 uppercase block mb-0.5">Findings:</span>{t.resultSummary}</div>}

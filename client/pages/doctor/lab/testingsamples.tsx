@@ -580,22 +580,14 @@ export default function TestingSamples() {
     "ALL" | "RUNNING" | "COMPLETED" | "FLAGGED" | "CALIBRATING"
   >("ALL");
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
-  const [quickInputBarcode, setQuickInputBarcode] = useState("");
 
-  // Verification and Results Workflow State
+  // Results Workflow State
   const [viewMode, setViewMode] = useState<
-    "table" | "verify" | "enter-results" | "mark-completed"
+    "table" | "enter-results" | "mark-completed"
   >("table");
   const [selectedSample, setSelectedSample] = useState<TestingSampleItem>(
     INITIAL_TESTING_SAMPLES[0],
   );
-  const [checklist, setChecklist] = useState({
-    sampleIntact: "Yes",
-    labelInfoCorrect: "Yes",
-    sufficientQuantity: "Yes",
-    properPackaging: "Yes",
-  });
-  const [verificationComments, setVerificationComments] = useState("");
 
   // Enter Test Results State
   const [testParameters, setTestParameters] = useState<TestParameter[]>(
@@ -893,18 +885,6 @@ export default function TestingSamples() {
     fetchRealData();
   }, [fetchRealData]);
 
-  const handleOpenVerification = (sample: TestingSampleItem) => {
-    setSelectedSample(sample);
-    setChecklist({
-      sampleIntact: "Yes",
-      labelInfoCorrect: "Yes",
-      sufficientQuantity: "Yes",
-      properPackaging: "Yes",
-    });
-    setVerificationComments(sample.comments || "");
-    setViewMode("verify");
-  };
-
   const handleOpenEnterResults = (sample: TestingSampleItem) => {
     setSelectedSample(sample);
     if (sample.parameters && sample.parameters.length > 0) {
@@ -1143,55 +1123,6 @@ export default function TestingSamples() {
     });
   };
 
-  const handleTestSample = async () => {
-    const startTimeStr = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    setSamples((prev) =>
-      prev.map((s) =>
-        s.id === selectedSample.id
-          ? {
-              ...s,
-              status: "RUNNING",
-              comments: verificationComments.trim() || s.comments,
-              startTime: startTimeStr,
-            }
-          : s,
-      ),
-    );
-    setSelectedSample((prev) => ({
-      ...prev,
-      status: "RUNNING",
-      comments: verificationComments.trim() || prev.comments,
-      startTime: startTimeStr,
-    }));
-
-    try {
-      localStorage.setItem(`testing_sample_status_${selectedSample.id}`, "RUNNING");
-      if (verificationComments.trim()) {
-        localStorage.setItem(`testing_sample_comments_${selectedSample.id}`, verificationComments.trim());
-      }
-      if (!selectedSample.id.startsWith("ts-")) {
-        await labOrderItemApi.update(selectedSample.id, {
-          item_status: "Running",
-          remarks: verificationComments.trim() || undefined,
-        });
-      }
-    } catch (err) {
-      console.warn("Could not persist testing status to backend:", err);
-    }
-
-    toast({
-      title: "Testing Initiated",
-      description: `Barcode ${selectedSample.barcode || selectedSample.sampleId} verified. Analyzer test run started on ${selectedSample.analyzerBench}.`,
-    });
-    setTimeout(() => {
-      setViewMode("table");
-    }, 1000);
-  };
-
   const handleMarkCompleted = (id: string) => {
     const s = samples.find((item) => item.id === id);
     if (s) {
@@ -1230,26 +1161,6 @@ export default function TestingSamples() {
       title: "Rerun Initiated",
       description: "Sample queued for secondary analyzer run.",
     });
-  };
-
-  const handleQuickRun = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quickInputBarcode.trim()) return;
-    const match = samples.find(
-      (s) =>
-        s.barcode.toLowerCase() === quickInputBarcode.trim().toLowerCase() ||
-        s.sampleId.toLowerCase() === quickInputBarcode.trim().toLowerCase(),
-    );
-    if (match) {
-      handleOpenEnterResults(match);
-      setQuickInputBarcode("");
-    } else {
-      toast({
-        title: "Sample Not Found",
-        description: `No testing sample with ID/barcode "${quickInputBarcode}" found in analytical run.`,
-        variant: "destructive",
-      });
-    }
   };
 
   const filteredSamples = useMemo(() => {
@@ -1336,371 +1247,8 @@ export default function TestingSamples() {
           </div>
         </header>
 
-        {/* DashboardBody / Verification Workflow */}
-        {viewMode === "verify" ? (
-          <main
-            className="flex-1 flex flex-col min-w-0 bg-[#fbfcfd]"
-            data-purpose="sample-verification-dashboard"
-          >
-            {/* Top Page Header */}
-            <header
-              className="pt-8 pb-7 px-9 border-b border-slate-200 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-              data-purpose="page-header"
-            >
-              <div>
-                <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-                  Sample Verification
-                </h2>
-                <p className="text-xs font-normal text-slate-500 mt-1">
-                  Verify sample details to start testing process
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setViewMode("table")}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg shadow-2xs transition-colors cursor-pointer"
-              >
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M10 19l-7-7m0 0l7-7m-7 7h18"
-                  />
-                </svg>
-                Back to Table
-              </button>
-            </header>
-
-            {/* Content Workspace */}
-            <div className="p-9 max-w-[1240px] space-y-6">
-              {/* BEGIN: SampleInformationCard */}
-              <section
-                className="bg-white rounded-lg border border-slate-200 shadow-sm"
-                data-purpose="sample-information"
-              >
-                {/* Card Header */}
-                <div className="px-6 py-4 border-b border-slate-100">
-                  <h3 className="text-[13.5px] font-semibold text-slate-900">
-                    Sample Information
-                  </h3>
-                </div>
-
-                {/* Card Body / Meta Grid */}
-                <div className="p-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-y-5 gap-x-12">
-                    {/* Left Column Items */}
-                    <div className="space-y-4">
-                      {/* Sample ID */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-36 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          BARCODE
-                        </span>
-                        <span className="font-medium text-slate-900 text-[13px] font-mono">
-                          {selectedSample.barcode || selectedSample.sampleId}
-                        </span>
-                      </div>
-                      {/* Patient Name */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-36 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          PATIENT NAME
-                        </span>
-                        <span className="font-medium text-slate-900 text-[13px]">
-                          {selectedSample.patientName}
-                        </span>
-                      </div>
-                      {/* Sample Type */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-36 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          SAMPLE TYPE
-                        </span>
-                        <span className="font-medium text-slate-900 text-[13px]">
-                          {selectedSample.sampleType || "Whole Blood"}
-                        </span>
-                      </div>
-                      {/* Received Date */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-36 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          RECEIVED DATE
-                        </span>
-                        <span className="font-medium text-slate-900 text-[13px]">
-                          {selectedSample.receivedDate || "20 May 2024"}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Right Column Items */}
-                    <div className="space-y-4">
-                      {/* Received By */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-32 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          RECEIVED BY
-                        </span>
-                        <span className="font-medium text-slate-900 text-[13px]">
-                          {selectedSample.receivedBy || "John Doe"}
-                        </span>
-                      </div>
-                      {/* Status with badge */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-32 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          STATUS
-                        </span>
-                        <div>
-                          {selectedSample.status === "COMPLETED" ? (
-                            <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              Completed
-                            </span>
-                          ) : selectedSample.status === "RUNNING" ? (
-                            <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
-                              Running
-                            </span>
-                          ) : selectedSample.status === "FLAGGED" ? (
-                            <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">
-                              Flagged
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
-                              Calibrating
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-              {/* END: SampleInformationCard */}
-
-              {/* BEGIN: TwoColumnChecklistAndComments */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Card: Verification Checklist */}
-                <section
-                  className="bg-white rounded-lg border border-slate-200 shadow-sm flex flex-col"
-                  data-purpose="verification-checklist"
-                >
-                  <div className="px-6 py-4 border-b border-slate-100">
-                    <h3 className="text-[13.5px] font-semibold text-slate-900">
-                      Verification Checklist
-                    </h3>
-                  </div>
-                  <div className="p-6 space-y-4 flex-1">
-                    {/* Checklist Item 1 */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center justify-center w-4 h-4 rounded-full bg-emerald-100 text-emerald-600">
-                          <svg
-                            className="w-2.5 h-2.5 stroke-2"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        </span>
-                        <span className="text-[13px] text-slate-800 font-medium">
-                          Sample Intact
-                        </span>
-                      </div>
-                      <select
-                        value={checklist.sampleIntact}
-                        onChange={(e) =>
-                          setChecklist((prev) => ({
-                            ...prev,
-                            sampleIntact: e.target.value,
-                          }))
-                        }
-                        className="w-20 text-[13px] py-1.5 pl-3 pr-7 bg-white border border-slate-200 rounded-md text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-600 focus:border-blue-600"
-                        style={{
-                          backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                          backgroundPosition: "right 0.65rem center",
-                          backgroundRepeat: "no-repeat",
-                          backgroundSize: "1.25em 1.25em",
-                          appearance: "none",
-                        }}
-                      >
-                        <option value="Yes">Yes</option>
-                        <option value="No">No</option>
-                      </select>
-                    </div>
-
-                    {/* Checklist Item 2 */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center justify-center w-4 h-4 rounded-full bg-emerald-100 text-emerald-600">
-                          <svg
-                            className="w-2.5 h-2.5 stroke-2"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        </span>
-                        <span className="text-[13px] text-slate-800 font-medium">
-                          Label Information Correct
-                        </span>
-                      </div>
-                      <select
-                        value={checklist.labelInfoCorrect}
-                        onChange={(e) =>
-                          setChecklist((prev) => ({
-                            ...prev,
-                            labelInfoCorrect: e.target.value,
-                          }))
-                        }
-                        className="w-20 text-[13px] py-1.5 pl-3 pr-7 bg-white border border-slate-200 rounded-md text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-600 focus:border-blue-600"
-                        style={{
-                          backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                          backgroundPosition: "right 0.65rem center",
-                          backgroundRepeat: "no-repeat",
-                          backgroundSize: "1.25em 1.25em",
-                          appearance: "none",
-                        }}
-                      >
-                        <option value="Yes">Yes</option>
-                        <option value="No">No</option>
-                      </select>
-                    </div>
-
-                    {/* Checklist Item 3 */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center justify-center w-4 h-4 rounded-full bg-emerald-100 text-emerald-600">
-                          <svg
-                            className="w-2.5 h-2.5 stroke-2"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        </span>
-                        <span className="text-[13px] text-slate-800 font-medium">
-                          Sufficient Quantity
-                        </span>
-                      </div>
-                      <select
-                        value={checklist.sufficientQuantity}
-                        onChange={(e) =>
-                          setChecklist((prev) => ({
-                            ...prev,
-                            sufficientQuantity: e.target.value,
-                          }))
-                        }
-                        className="w-20 text-[13px] py-1.5 pl-3 pr-7 bg-white border border-slate-200 rounded-md text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-600 focus:border-blue-600"
-                        style={{
-                          backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                          backgroundPosition: "right 0.65rem center",
-                          backgroundRepeat: "no-repeat",
-                          backgroundSize: "1.25em 1.25em",
-                          appearance: "none",
-                        }}
-                      >
-                        <option value="Yes">Yes</option>
-                        <option value="No">No</option>
-                      </select>
-                    </div>
-
-                    {/* Checklist Item 4 */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center justify-center w-4 h-4 rounded-full bg-emerald-100 text-emerald-600">
-                          <svg
-                            className="w-2.5 h-2.5 stroke-2"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        </span>
-                        <span className="text-[13px] text-slate-800 font-medium">
-                          Proper Packaging
-                        </span>
-                      </div>
-                      <select
-                        value={checklist.properPackaging}
-                        onChange={(e) =>
-                          setChecklist((prev) => ({
-                            ...prev,
-                            properPackaging: e.target.value,
-                          }))
-                        }
-                        className="w-20 text-[13px] py-1.5 pl-3 pr-7 bg-white border border-slate-200 rounded-md text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-600 focus:border-blue-600"
-                        style={{
-                          backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                          backgroundPosition: "right 0.65rem center",
-                          backgroundRepeat: "no-repeat",
-                          backgroundSize: "1.25em 1.25em",
-                          appearance: "none",
-                        }}
-                      >
-                        <option value="Yes">Yes</option>
-                        <option value="No">No</option>
-                      </select>
-                    </div>
-                  </div>
-                </section>
-
-                {/* Card: Comments (Optional) */}
-                <section
-                  className="bg-white rounded-lg border border-slate-200 shadow-sm flex flex-col"
-                  data-purpose="comments-section"
-                >
-                  <div className="px-6 py-4 border-b border-slate-100">
-                    <h3 className="text-[13.5px] font-semibold text-slate-900">
-                      Comments (Optional)
-                    </h3>
-                  </div>
-                  <div className="p-6 flex-1 flex flex-col">
-                    <textarea
-                      value={verificationComments}
-                      onChange={(e) => setVerificationComments(e.target.value)}
-                      className="w-full flex-1 rounded-md border border-slate-200 text-[13px] p-3 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-600 focus:border-blue-600 resize-none shadow-none"
-                      placeholder="Enter comments here..."
-                      rows={6}
-                    />
-                  </div>
-                </section>
-              </div>
-              {/* END: TwoColumnChecklistAndComments */}
-
-              {/* BEGIN: ActionButtons */}
-              <div
-                className="flex items-center justify-end gap-3 pt-6"
-                data-purpose="action-buttons"
-              >
-                <button
-                  type="button"
-                  onClick={() => setViewMode("table")}
-                  className="px-5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-md shadow-xs hover:bg-slate-50 transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleOpenEnterResults(selectedSample)}
-                  className="px-5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-md shadow-xs hover:bg-slate-50 transition-colors cursor-pointer"
-                >
-                  Enter Results
-                </button>
-                <button
-                  type="button"
-                  onClick={handleTestSample}
-                  className="px-5 py-2 text-xs font-semibold text-white bg-[#1e60d5] hover:bg-[#1952be] rounded-md shadow-xs transition-colors cursor-pointer"
-                >
-                  Test Sample
-                </button>
-              </div>
-              {/* END: ActionButtons */}
-            </div>
-          </main>
-        ) : viewMode === "enter-results" ? (
+        {/* Results Workflow */}
+        {viewMode === "enter-results" ? (
           <main
             className="flex-1 flex flex-col justify-between overflow-y-auto px-10 py-7 min-w-0 bg-[#fcfdfe]"
             data-purpose="main-layout"
@@ -2066,7 +1614,7 @@ export default function TestingSamples() {
                   {runningCount}
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Results pending verification
+                  Results pending entry
                 </p>
               </div>
               <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 relative">
@@ -2099,26 +1647,6 @@ export default function TestingSamples() {
                 className="flex flex-wrap items-center gap-3 w-full md:w-auto"
                 data-purpose="search-and-filter-group"
               >
-                {/* Barcode Quick Run Input */}
-                <form
-                  onSubmit={handleQuickRun}
-                  className="relative flex items-center"
-                >
-                  <input
-                    type="text"
-                    value={quickInputBarcode}
-                    onChange={(e) => setQuickInputBarcode(e.target.value)}
-                    placeholder="Scan / Type Barcode..."
-                    className="w-48 pl-3 pr-14 py-2.5 bg-white text-sm font-mono text-slate-800 placeholder-slate-400 border border-slate-300 rounded-lg focus:outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500 transition-colors"
-                  />
-                  <button
-                    type="submit"
-                    className="absolute right-1.5 px-3 py-1 bg-[#00875A] hover:bg-[#00744E] text-white text-xs font-semibold rounded-md shadow-2xs transition-colors cursor-pointer"
-                  >
-                    Validate
-                  </button>
-                </form>
-
                 {/* Search Input Container */}
                 <div
                   className="relative flex-1 md:w-72"
@@ -2364,7 +1892,7 @@ export default function TestingSamples() {
                     filteredSamples.map((s) => (
                       <tr
                         key={s.id}
-                        onClick={() => handleOpenVerification(s)}
+                        onClick={() => handleOpenEnterResults(s)}
                         className="hover:bg-slate-50/70 transition-colors cursor-pointer"
                       >
                         <td className="py-5 px-8 whitespace-nowrap">
@@ -2394,7 +1922,10 @@ export default function TestingSamples() {
                           {s.analyzerBench}
                         </td>
                         <td className="py-5 px-6 text-center text-slate-600 font-normal whitespace-nowrap">
-                          {s.startTime}
+                          <div>{s.startTime}</div>
+                          {s.estimatedCompletion && (
+                            <div className="text-[11px] text-amber-700 font-medium">Due: {s.estimatedCompletion}</div>
+                          )}
                         </td>
                         <td className="py-5 px-8 text-center whitespace-nowrap">
                           {s.status === "COMPLETED" ? (
@@ -2420,42 +1951,32 @@ export default function TestingSamples() {
                         </td>
                         <td className="py-5 px-4 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-2">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenVerification(s);
-                              }}
-                              className="px-3 py-1.5 bg-[#1e60d5] hover:bg-[#1952be] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                            >
-                              Verify Sample
-                            </button>
+                            {s.status !== "COMPLETED" && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenEnterResults(s);
+                                }}
+                                className="px-3 py-1.5 bg-[#00875A] hover:bg-[#00744E] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                              >
+                                Enter Results
+                              </button>
+                            )}
                             {s.status === "RUNNING" && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenEnterResults(s);
-                                  }}
-                                  className="px-3 py-1.5 bg-[#00875A] hover:bg-[#00744E] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                                >
-                                  Enter Result
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenMarkCompleted(s);
-                                  }}
-                                  className="px-3 py-1.5 bg-[#16a34a] hover:bg-[#15803d] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                                >
-                                  Mark Completed
-                                </button>
-                              </>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenMarkCompleted(s);
+                                }}
+                                className="px-3 py-1.5 bg-[#16a34a] hover:bg-[#15803d] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                              >
+                                Mark Completed
+                              </button>
                             )}
                             {s.status === "FLAGGED" && (
-                              <div className="flex items-center justify-center gap-2">
+                              <>
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -2476,42 +1997,19 @@ export default function TestingSamples() {
                                 >
                                   Mark Completed
                                 </button>
-                              </div>
+                              </>
                             )}
                             {s.status === "COMPLETED" && (
-                              <div className="flex items-center justify-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenEnterResults(s);
-                                  }}
-                                  className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#15803d] border border-emerald-200 text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                                >
-                                  Edit Result
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenMarkCompleted(s);
-                                  }}
-                                  className="px-2.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                                >
-                                  Review
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    navigate("/doctor/lab/report-generation");
-                                  }}
-                                  className="px-2.5 py-1.5 bg-[#0b57d0] hover:bg-[#094bb5] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                                  title="Go to Report Generation"
-                                >
-                                  Go to Report →
-                                </button>
-                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenEnterResults(s);
+                                }}
+                                className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#15803d] border border-emerald-200 text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                              >
+                                Edit Results
+                              </button>
                             )}
                             {s.status === "CALIBRATING" && (
                               <button

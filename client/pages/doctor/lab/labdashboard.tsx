@@ -15,6 +15,7 @@ export interface TestItemDetail {
   sampleType: string;
   priority: string;
   barcode?: string;
+  deadlineDate?: string;
 }
 
 export interface TestRecord {
@@ -207,6 +208,7 @@ interface SampleBarcodeItem {
   sampleType: string;
   barcode: string;
   count: number;
+  deadlineDate?: string;
 }
 
 const INITIAL_SAMPLES: SampleBarcodeItem[] = [
@@ -217,6 +219,7 @@ const INITIAL_SAMPLES: SampleBarcodeItem[] = [
     sampleType: "Whole Blood",
     barcode: "BC2405200001",
     count: 1,
+    deadlineDate: "20 May 2024, 02:30 PM",
   },
   {
     id: "lft",
@@ -225,6 +228,7 @@ const INITIAL_SAMPLES: SampleBarcodeItem[] = [
     sampleType: "Serum",
     barcode: "BC2405200002",
     count: 1,
+    deadlineDate: "20 May 2024, 04:30 PM",
   },
   {
     id: "kft",
@@ -233,13 +237,14 @@ const INITIAL_SAMPLES: SampleBarcodeItem[] = [
     sampleType: "Serum",
     barcode: "BC2405200003",
     count: 1,
+    deadlineDate: "20 May 2024, 05:00 PM",
   },
 ];
 
 const DEFAULT_TEST_ITEMS: TestItemDetail[] = [
-  { id: "cbc", testCode: "CBC", testName: "Complete Blood Count", sampleType: "Whole Blood", priority: "Normal" },
-  { id: "lft", testCode: "LFT", testName: "Liver Function Test", sampleType: "Serum", priority: "Normal" },
-  { id: "kft", testCode: "KFT", testName: "Kidney Function Test", sampleType: "Serum", priority: "Normal" },
+  { id: "cbc", testCode: "CBC", testName: "Complete Blood Count", sampleType: "Whole Blood", priority: "Normal", deadlineDate: "20 May 2024, 02:30 PM" },
+  { id: "lft", testCode: "LFT", testName: "Liver Function Test", sampleType: "Serum", priority: "Normal", deadlineDate: "20 May 2024, 04:30 PM" },
+  { id: "kft", testCode: "KFT", testName: "Kidney Function Test", sampleType: "Serum", priority: "Normal", deadlineDate: "20 May 2024, 05:00 PM" },
 ];
 
 export default function LabDashboard() {
@@ -399,6 +404,29 @@ export default function LabDashboard() {
                       ? localStorage.getItem(`generated_barcode_item_${oi.lab_order_item_id}`) || undefined
                       : undefined);
 
+                  // Calculate deadline date using turnaround time (tat_hours) from backend lab_test_master
+                  const tatHours = Number(oi.lab_test_master?.tat_hours) || 2;
+                  const itemCreatedDate =
+                    oi.created_at || order.order_datetime || order.created_at
+                      ? new Date(oi.created_at || order.order_datetime || order.created_at!)
+                      : new Date();
+                  const deadlineDateObj = new Date(
+                    itemCreatedDate.getTime() + tatHours * 3600 * 1000
+                  );
+                  const formattedDeadline = !isNaN(deadlineDateObj.getTime())
+                    ? deadlineDateObj.toLocaleDateString("en-GB", {
+                        day: "2-digit",
+                        month: "short",
+                        year: "numeric",
+                      }) +
+                      ", " +
+                      deadlineDateObj.toLocaleTimeString("en-US", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        hour12: true,
+                      })
+                    : "—";
+
                   return {
                     id: oi.lab_order_item_id || oi.lab_test_id,
                     testCode:
@@ -411,6 +439,7 @@ export default function LabDashboard() {
                       oi.lab_test_master?.sample_type || "Whole Blood",
                     priority: order.priority || "Normal",
                     barcode: sampleBarcode,
+                    deadlineDate: formattedDeadline,
                   };
                 })
               : [
@@ -420,6 +449,7 @@ export default function LabDashboard() {
                     testName: "Complete Blood Count",
                     sampleType: "Whole Blood",
                     priority: order.priority || "Normal",
+                    deadlineDate: formattedReqTime,
                   },
                 ];
 
@@ -656,6 +686,7 @@ export default function LabDashboard() {
           sampleType: ti.sampleType,
           barcode: `BC${patient.requestId.replace(/\D/g, "").slice(-6) || "2405"}${String(idx + 1).padStart(4, "0")}`,
           count: 1,
+          deadlineDate: ti.deadlineDate,
         }))
       );
     } else {
@@ -1231,7 +1262,7 @@ export default function LabDashboard() {
                         <table className="w-full text-left border-collapse">
                           <thead>
                             <tr className="border-b border-slate-200 bg-[#f8fafc]/80 text-[13px] font-bold text-slate-600 uppercase tracking-wider">
-                              <th className="py-4 px-6 w-28" scope="col">
+                              <th className="py-4 px-6 w-20" scope="col">
                                 <span className="sr-only">Select</span>
                                 <input
                                   type="checkbox"
@@ -1244,14 +1275,17 @@ export default function LabDashboard() {
                                   className="h-5 w-5 rounded bg-[#1d6bf3] border-slate-300 text-[#1d6bf3] focus:ring-0 focus:ring-offset-0 cursor-pointer"
                                 />
                               </th>
-                              <th className="py-4 px-6 w-1/3" scope="col">
+                              <th className="py-4 px-6" scope="col">
                                 Test Name
                               </th>
-                              <th className="py-4 px-6 w-1/3" scope="col">
+                              <th className="py-4 px-6" scope="col">
                                 Sample Type
                               </th>
-                              <th className="py-4 px-6" scope="col">
+                              <th className="py-4 px-6 w-32" scope="col">
                                 Priority
+                              </th>
+                              <th className="py-4 px-6" scope="col">
+                                Deadline Date
                               </th>
                             </tr>
                           </thead>
@@ -1274,6 +1308,18 @@ export default function LabDashboard() {
                                 </td>
                                 <td className="py-4 px-6 text-slate-700">{testItem.sampleType}</td>
                                 <td className="py-4 px-6 text-slate-700">{testItem.priority}</td>
+                                <td className="py-4 px-6 text-slate-700 font-medium whitespace-nowrap">
+                                  {testItem.deadlineDate ? (
+                                    <div className="flex items-center gap-1.5 text-slate-700">
+                                      <svg className="w-4 h-4 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                      </svg>
+                                      <span>{testItem.deadlineDate}</span>
+                                    </div>
+                                  ) : (
+                                    "—"
+                                  )}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -1388,9 +1434,10 @@ export default function LabDashboard() {
                         <table className="w-full text-left border-collapse">
                           <thead>
                             <tr className="bg-slate-50/80 border-y border-slate-200/80 text-[11px] font-semibold tracking-wider text-slate-500 uppercase">
-                              <th className="py-3.5 px-6 font-semibold w-1/5">TEST CODE</th>
+                              <th className="py-3.5 px-6 font-semibold w-1/6">TEST CODE</th>
                               <th className="py-3.5 px-6 font-semibold w-1/4">TEST NAME</th>
-                              <th className="py-3.5 px-6 font-semibold w-1/4">SAMPLE TYPE</th>
+                              <th className="py-3.5 px-6 font-semibold w-1/6">SAMPLE TYPE</th>
+                              <th className="py-3.5 px-6 font-semibold w-1/5">DEADLINE DATE</th>
                               <th className="py-3.5 px-6 font-semibold">BARCODE</th>
                             </tr>
                           </thead>
@@ -1405,6 +1452,9 @@ export default function LabDashboard() {
                                 </td>
                                 <td className="py-4 px-6 text-slate-600">
                                   {item.sampleType}
+                                </td>
+                                <td className="py-4 px-6 text-slate-700 font-medium whitespace-nowrap">
+                                  {item.deadlineDate || "—"}
                                 </td>
                                 <td className="py-4 px-6">
                                   <div className="flex items-center gap-3">
