@@ -1,5 +1,12 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ChevronLeft,
+  ChevronRight,
+  FlaskConical,
+  CheckCircle2,
+  Clock,
+} from "lucide-react";
 import { getUser, remove } from "@/utils/token";
 import { toast } from "@/hooks/use-toast";
 import LabNav from "./labnav";
@@ -31,7 +38,53 @@ export interface TestingSampleItem {
   receivedBy?: string;
   comments?: string;
   parameters?: TestParameter[];
+  targetDate?: string;
+  targetDateIso?: string;
 }
+
+const normalizeToIsoDate = (value?: string | null): string | null => {
+  if (!value || value === "—") return null;
+  const str = String(value).trim();
+  const ymdMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymdMatch) return `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
+  const dmy4Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy4Match) {
+    return `${dmy4Match[3]}-${dmy4Match[2].padStart(2, "0")}-${dmy4Match[1].padStart(2, "0")}`;
+  }
+  const dmy2Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2})$/);
+  if (dmy2Match) {
+    return `20${dmy2Match[3]}-${dmy2Match[2].padStart(2, "0")}-${dmy2Match[1].padStart(2, "0")}`;
+  }
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) {
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const day = String(parsed.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return null;
+};
+
+const formatTargetDate = (value?: string | null): string => {
+  if (!value) return "—";
+  const iso = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}-${iso[2]}-${iso[1]}`;
+  const d = new Date(value);
+  if (!Number.isNaN(d.getTime())) {
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    return `${day}-${month}-${d.getFullYear()}`;
+  }
+  return String(value);
+};
+
+const isTestingSampleOverdue = (s?: TestingSampleItem | null): boolean => {
+  if (!s || s.status === "COMPLETED") return false;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const iso = s.targetDateIso || (s.targetDate ? normalizeToIsoDate(s.targetDate) : null);
+  if (!iso) return false;
+  return iso < todayIso;
+};
 
 export interface TestParameter {
   id: string;
@@ -490,6 +543,8 @@ export const INITIAL_TESTING_SAMPLES: TestingSampleItem[] = [
     sampleType: "Serum (SST)",
     receivedDate: "20 May 2024",
     receivedBy: "John Doe",
+    targetDate: "22-05-2024",
+    targetDateIso: "2024-05-22",
   },
   {
     id: "s3",
@@ -506,6 +561,8 @@ export const INITIAL_TESTING_SAMPLES: TestingSampleItem[] = [
     receivedDate: "20 May 2024",
     receivedBy: "John Doe",
     testResult: "Creatinine: 0.8 mg/dL, Urea: 22 mg/dL",
+    targetDate: "22-05-2024",
+    targetDateIso: "2024-05-22",
   },
   {
     id: "s1",
@@ -789,25 +846,31 @@ export default function TestingSamples() {
             ? localStorage.getItem(`testing_sample_comments_${item.lab_order_item_id}`)
             : null;
 
-          return {
-            id: item.lab_order_item_id,
-            sampleId,
-            barcode: resolvedBarcode,
-            patientId: pId,
-            patientName: pName,
-            testName,
-            analyzerBench: determineAnalyzerBench(testName, sampleType),
-            startTime,
-            estimatedCompletion,
-            status,
-            sampleType,
-            receivedDate,
-            receivedBy: item.sample_collection?.[0]?.collected_by || currentUsername,
-            comments: storedComments || item.remarks || "",
-            testResult,
-            parameters: params,
-          };
-        });
+            const rawTargetDate = item.target_date || (parentOrder as any)?.target_date;
+            const targetDateFormatted = rawTargetDate ? formatTargetDate(rawTargetDate) : undefined;
+            const targetDateIso = rawTargetDate ? (normalizeToIsoDate(rawTargetDate) || undefined) : undefined;
+
+            return {
+              id: item.lab_order_item_id,
+              sampleId,
+              barcode: resolvedBarcode,
+              patientId: pId,
+              patientName: pName,
+              testName,
+              analyzerBench: determineAnalyzerBench(testName, sampleType),
+              startTime,
+              estimatedCompletion,
+              status,
+              sampleType,
+              receivedDate,
+              receivedBy: item.sample_collection?.[0]?.collected_by || currentUsername,
+              comments: storedComments || item.remarks || "",
+              testResult,
+              parameters: params,
+              targetDate: targetDateFormatted,
+              targetDateIso,
+            };
+          });
 
         // Also merge any verified samples from local cache (from Sample Verification)
         const verifiedCache: any[] = typeof window !== "undefined"
@@ -838,6 +901,8 @@ export default function TestingSamples() {
               receivedBy: cached.technician || currentUsername,
               comments: "",
               parameters: getDefaultParametersForTest(testName),
+              targetDate: cached.targetDate,
+              targetDateIso: cached.targetDateIso,
             });
             existingIds.add(cached.id);
             if (cached.barcode) existingBarcodes.add(cached.barcode);
@@ -1205,6 +1270,86 @@ export default function TestingSamples() {
     }).length;
   }, [samples]);
 
+  /* ---------- Admin Dashboard Horizontal KPI Track Scroll State ---------- */
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollButtons = useCallback(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }, []);
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    updateScrollButtons();
+    el.addEventListener("scroll", updateScrollButtons, { passive: true });
+    window.addEventListener("resize", updateScrollButtons);
+    return () => {
+      el.removeEventListener("scroll", updateScrollButtons);
+      window.removeEventListener("resize", updateScrollButtons);
+    };
+  }, [updateScrollButtons]);
+
+  const handleKpiScroll = (direction: "left" | "right") => {
+    const el = trackRef.current;
+    if (!el) return;
+    const scrollAmount = 450;
+    el.scrollBy({
+      left: direction === "left" ? -scrollAmount : scrollAmount,
+      behavior: "smooth",
+    });
+  };
+
+  /* ---------- KPI Cards configuration (Admin Dashboard style) ---------- */
+  const kpiCards = useMemo(
+    () => [
+      {
+        id: "total-worklist",
+        label: "Total Worklist",
+        subLabel: "Specimens in testing queue",
+        value: samples.length,
+        tag: "Total",
+        bg: "#D6E3FF",
+        valueColor: "#00488D",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <FlaskConical className="w-[17px] h-[17px]" color="#00488D" />,
+        isActive: statusFilter === "ALL",
+        onClick: () => setStatusFilter("ALL"),
+      },
+      {
+        id: "in-testing",
+        label: "In Testing",
+        subLabel: "Running on analyzers",
+        value: runningCount,
+        tag: `${samples.length > 0 ? Math.round((runningCount / samples.length) * 100) : 0}%`,
+        bg: "rgba(255, 107, 53, 0.12)",
+        valueColor: "#7B3200",
+        iconBg: "#FFDBCB",
+        icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
+        isActive: statusFilter === "RUNNING",
+        onClick: () => setStatusFilter((prev) => (prev === "RUNNING" ? "ALL" : "RUNNING")),
+      },
+      {
+        id: "test-completed",
+        label: "Test Completed",
+        subLabel: "Results verified & ready",
+        value: completedCount,
+        tag: `${samples.length > 0 ? Math.round((completedCount / samples.length) * 100) : 0}%`,
+        bg: "rgba(0, 200, 150, 0.12)",
+        valueColor: "#00A87E",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <CheckCircle2 className="w-[17px] h-[17px]" color="#00A87E" />,
+        isActive: statusFilter === "COMPLETED",
+        onClick: () => setStatusFilter((prev) => (prev === "COMPLETED" ? "ALL" : "COMPLETED")),
+      },
+    ],
+    [samples.length, runningCount, completedCount, statusFilter]
+  );
+
   return (
     <div className="min-h-screen flex bg-[#f8fafd] text-[#1e293b] antialiased selection:bg-blue-100 font-sans">
       {/* Global Lab Navigation Sidebar */}
@@ -1283,15 +1428,41 @@ export default function TestingSamples() {
 
               {/* Page Header */}
               <header className="mb-7" data-purpose="page-header">
+                {isTestingSampleOverdue(selectedSample) && (
+                  <div className="mb-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-between text-rose-900 gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <Clock className="w-4 h-4 text-rose-600 shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold text-rose-900">
+                          This Test Exceeded Target Date ({selectedSample.targetDate})
+                        </p>
+                        <p className="text-[11px] text-rose-700">
+                          Please prioritize parameter entry and submit results to unblock report generation.
+                        </p>
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wider uppercase shrink-0">
+                      OVERDUE
+                    </span>
+                  </div>
+                )}
                 <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
                   Enter Test Results
                 </h1>
-                <div className="mt-1 flex items-center text-sm text-slate-600">
-                  <span>Barcode: {selectedSample.barcode || selectedSample.sampleId}</span>
-                  <span
-                    aria-hidden="true"
-                    className="inline-block w-px h-[1.15rem] bg-[#94a3b8] align-middle ml-1.5 animate-pulse"
-                  />
+                <div className="mt-1 flex items-center gap-3 text-sm text-slate-600 flex-wrap">
+                  <span>Barcode: <strong>{selectedSample.barcode || selectedSample.sampleId}</strong></span>
+                  <span>Patient: <strong>{selectedSample.patientName}</strong> ({selectedSample.patientId})</span>
+                  <span>Test: <strong>{selectedSample.testName}</strong></span>
+                  {selectedSample.targetDate && (
+                    <span className={`flex items-center gap-1.5 ${isTestingSampleOverdue(selectedSample) ? "text-rose-700 font-bold" : "text-slate-600"}`}>
+                      Target Date: {selectedSample.targetDate}
+                      {isTestingSampleOverdue(selectedSample) && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white uppercase">
+                          OVERDUE
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </div>
               </header>
 
@@ -1574,56 +1745,118 @@ export default function TestingSamples() {
           </main>
         ) : (
           <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
-          {/* StatCardsRow */}
-          <section
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4"
-            data-purpose="kpi-metric-cards"
-          >
-            {/* Card 1: Test Completed */}
-            <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-xs flex items-center justify-between relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
-              <div className="relative">
-                <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
-                  Test Completed
-                </span>
-                <h3 className="text-2xl font-extrabold text-emerald-950 mt-1">
-                  {completedCount}
-                </h3>
-                <p className="text-[11px] text-emerald-600/80 mt-0.5">
-                  Tests completed successfully
-                </p>
-              </div>
-              <div className="w-11 h-11 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 relative">
-                <svg className="w-5 h-5 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                </svg>
+          {/* Key Performance Indicators - Admin Dashboard Style Scrollable Track */}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between flex-wrap gap-2 px-1">
+              <div>
+                <h2 className="text-base font-bold text-[#1c1e21] tracking-tight">Key Performance Indicators</h2>
+                <p className="text-xs text-[#70747c]">Real-time analyzer metrics and test execution status</p>
               </div>
             </div>
 
-            {/* Card 2: Test Result Pending */}
-            <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs flex items-center justify-between relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-20 h-20 bg-blue-50/50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
-              <div className="relative">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                    Test Result Pending
-                  </span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                </div>
-                <h3 className="text-2xl font-extrabold text-slate-900 mt-1">
-                  {runningCount}
-                </h3>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Results pending entry
-                </p>
+            <div className="relative">
+              {canScrollLeft && (
+                <button
+                  type="button"
+                  onClick={() => handleKpiScroll("left")}
+                  aria-label="Scroll left"
+                  className="absolute -left-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+              )}
+
+              <div
+                className={`absolute left-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-r from-[#f8fafd] to-transparent ${
+                  canScrollLeft ? "opacity-100" : "opacity-0"
+                }`}
+              />
+
+              <div
+                ref={trackRef}
+                className="flex gap-[14px] overflow-x-auto scroll-smooth py-[6px] px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              >
+                {kpiCards.map((card) => (
+                  <div
+                    key={card.id}
+                    onClick={card.onClick}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        card.onClick?.();
+                      }
+                    }}
+                    style={{
+                      background: card.bg,
+                      border: card.isActive ? `2.5px solid ${card.valueColor}` : "2.5px solid transparent",
+                      boxShadow: card.isActive
+                        ? `0 0 0 1px ${card.valueColor}20, 0 6px 18px ${card.valueColor}28`
+                        : "0 2px 10px rgba(0,0,0,0.06)",
+                    }}
+                    className="flex-[0_0_206px] min-w-[206px] rounded-[12px] p-[14px_16px] flex flex-col gap-[10px] cursor-pointer transition-all duration-200 select-none hover:-translate-y-[2px] hover:shadow-[0_6px_20px_rgba(0,0,0,0.10)]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div
+                        style={{ background: card.iconBg }}
+                        className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm"
+                      >
+                        {card.icon}
+                      </div>
+                      {card.tag && (
+                        <span
+                          style={{ color: card.valueColor }}
+                          className="text-[11px] font-bold px-[7px] py-[2px] rounded-full tracking-[-0.2px] bg-white/60 shadow-sm inline-flex items-center gap-1"
+                        >
+                          <span>{card.tag}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div
+                      style={{ color: card.valueColor }}
+                      className="text-[26px] font-extrabold leading-[1.05] tracking-[-0.6px]"
+                    >
+                      {card.value}
+                    </div>
+
+                    <div className="flex flex-col gap-[2px] min-w-0">
+                      <span
+                        style={{ color: card.valueColor }}
+                        className="text-[12.5px] font-bold tracking-tight truncate"
+                      >
+                        {card.label}
+                      </span>
+                      <span
+                        style={{ color: card.valueColor, opacity: 0.75 }}
+                        className="text-[11px] font-medium truncate"
+                      >
+                        {card.subLabel}
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 relative">
-                <svg className="w-5 h-5 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                </svg>
-              </div>
+
+              <div
+                className={`absolute right-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-l from-[#f8fafd] to-transparent ${
+                  canScrollRight ? "opacity-100" : "opacity-0"
+                }`}
+              />
+
+              {canScrollRight && (
+                <button
+                  type="button"
+                  onClick={() => handleKpiScroll("right")}
+                  aria-label="Scroll right"
+                  className="absolute -right-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              )}
             </div>
-          </section>
+          </div>
 
           {/* BEGIN: MainContainer */}
           <section
@@ -1889,35 +2122,56 @@ export default function TestingSamples() {
                       </td>
                     </tr>
                   ) : (
-                    filteredSamples.map((s) => (
-                      <tr
-                        key={s.id}
-                        onClick={() => handleOpenEnterResults(s)}
-                        className="hover:bg-slate-50/70 transition-colors cursor-pointer"
-                      >
-                        <td className="py-5 px-8 whitespace-nowrap">
-                          <span className="font-mono text-slate-900 text-sm font-semibold">
-                            {s.barcode || s.sampleId}
-                          </span>
-                        </td>
-                        <td className="py-5 px-6 whitespace-nowrap">
-                          <span className="font-semibold text-slate-900 block">
-                            {s.patientName}
-                          </span>
-                          <span className="text-[11px] text-slate-400 font-mono">
-                            {s.patientId}
-                          </span>
-                        </td>
-                        <td className="py-5 px-6 whitespace-nowrap">
-                          <span className="font-medium text-slate-800 block">
-                            {s.testName}
-                          </span>
-                          {s.testResult && (
-                            <span className="text-[11px] text-slate-500 block truncate max-w-xs">
-                              {s.testResult}
+                    filteredSamples.map((s) => {
+                      const isOverdue = isTestingSampleOverdue(s);
+                      return (
+                        <tr
+                          key={s.id}
+                          onClick={() => handleOpenEnterResults(s)}
+                          className={`transition-colors cursor-pointer ${
+                            isOverdue
+                              ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                              : "hover:bg-slate-50/70"
+                          }`}
+                        >
+                          <td className="py-5 px-8 whitespace-nowrap">
+                            <span className="font-mono text-slate-900 text-sm font-semibold">
+                              {s.barcode || s.sampleId}
                             </span>
-                          )}
-                        </td>
+                          </td>
+                          <td className="py-5 px-6 whitespace-nowrap">
+                            <span className="font-semibold text-slate-900 block">
+                              {s.patientName}
+                            </span>
+                            <span className="text-[11px] text-slate-400 font-mono">
+                              {s.patientId}
+                            </span>
+                          </td>
+                          <td className="py-5 px-6 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-slate-800 block">
+                                {s.testName}
+                              </span>
+                              {isOverdue && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                  OVERDUE
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
+                              {s.sampleType && <span>{s.sampleType}</span>}
+                              {s.targetDate && (
+                                <span className={`font-semibold ${isOverdue ? "text-rose-700" : "text-slate-500"}`}>
+                                  · Target: {s.targetDate}
+                                </span>
+                              )}
+                            </div>
+                            {s.testResult && (
+                              <span className="text-[11px] text-slate-500 block truncate max-w-xs mt-0.5">
+                                {s.testResult}
+                              </span>
+                            )}
+                          </td>
                         <td className="py-5 px-6 text-slate-700 text-xs font-normal whitespace-nowrap">
                           {s.analyzerBench}
                         </td>
@@ -2026,8 +2280,9 @@ export default function TestingSamples() {
                           </div>
                         </td>
                       </tr>
-                    ))
-                  )}
+                    );
+                  })
+                )}
                 </tbody>
               </table>
             </div>

@@ -1,6 +1,13 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { getUser, remove } from "@/utils/token";
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  CheckCircle2,
+  Clock,
+} from "lucide-react";
 import LabNav from "./labnav";
 import { labOrderApi, labOrderItemApi, LabOrderRecord, LabOrderItemRecord } from "@/api/labOrder.api";
 import { patientApi, PatientRecord } from "@/api/patient.api";
@@ -15,6 +22,7 @@ export interface TestItemDetail {
   sampleType: string;
   priority: string;
   barcode?: string;
+  targetDate?: string;
   deadlineDate?: string;
 }
 
@@ -28,6 +36,9 @@ export interface TestRecord {
   tests: string;
   date?: string;
   time?: string;
+  orderDateIso?: string;
+  targetDate?: string;
+  targetDateIso?: string;
   status: "PROCESSING" | "COMPLETED";
   dob: string;
   gender: string;
@@ -51,6 +62,9 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "CBC, LFT",
     date: "10/04/26",
     time: "10:30 AM",
+    orderDateIso: "2026-04-10",
+    targetDate: "12-04-2026",
+    targetDateIso: "2026-04-12",
     status: "PROCESSING",
     dob: "15/06/1985",
     gender: "Male",
@@ -68,6 +82,9 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "30/03/26",
     time: "11:30 AM",
+    orderDateIso: "2026-03-30",
+    targetDate: "01-04-2026",
+    targetDateIso: "2026-04-01",
     status: "COMPLETED",
     dob: "22/08/1992",
     gender: "Female",
@@ -85,6 +102,9 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "03/04/26",
     time: "10:45AM",
+    orderDateIso: "2026-04-03",
+    targetDate: "05-04-2026",
+    targetDateIso: "2026-04-05",
     status: "PROCESSING",
     dob: "10/11/1980",
     gender: "Male",
@@ -102,6 +122,9 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "05/04/26",
     time: "10:30 AM",
+    orderDateIso: "2026-04-05",
+    targetDate: "07-04-2026",
+    targetDateIso: "2026-04-07",
     status: "PROCESSING",
     dob: "04/02/1995",
     gender: "Female",
@@ -119,6 +142,9 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "20/03/26",
     time: "12:15 AM",
+    orderDateIso: "2026-03-20",
+    targetDate: "22-03-2026",
+    targetDateIso: "2026-03-22",
     status: "COMPLETED",
     dob: "19/07/1978",
     gender: "Male",
@@ -136,6 +162,9 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "21/03/26",
     time: "01:16 PM",
+    orderDateIso: "2026-03-21",
+    targetDate: "23-03-2026",
+    targetDateIso: "2026-03-23",
     status: "COMPLETED",
     dob: "30/09/1988",
     gender: "Male",
@@ -153,6 +182,9 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "11/04/26",
     time: "10:30 AM",
+    orderDateIso: "2026-04-11",
+    targetDate: "13-04-2026",
+    targetDateIso: "2026-04-13",
     status: "PROCESSING",
     dob: "12/12/1975",
     gender: "Male",
@@ -168,6 +200,11 @@ const INITIAL_TESTS: TestRecord[] = [
     requestedBy: "Dr. Verma",
     requestTime: "15 Apr 2026 09:00 AM",
     tests: "KFT, Lipid Profile",
+    date: "15/04/26",
+    time: "09:00 AM",
+    orderDateIso: "2026-04-15",
+    targetDate: "17-04-2026",
+    targetDateIso: "2026-04-17",
     status: "COMPLETED",
     dob: "05/05/1996",
     gender: "Female",
@@ -176,6 +213,58 @@ const INITIAL_TESTS: TestRecord[] = [
     address: "33, Saket, New Delhi",
   },
 ];
+
+// Helper to extract YYYY-MM-DD from a Date object in local time
+const toIsoDateString = (d: Date): string => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+// Helper to format Date as DD-MM-YYYY for display
+const formatPickedDisplayDate = (d: Date): string => {
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const year = d.getFullYear();
+  return `${day}-${month}-${year}`;
+};
+
+// Helper to normalize any date string to YYYY-MM-DD for comparison
+const normalizeToIsoDate = (value?: string | null): string | null => {
+  if (!value || value === "—") return null;
+  const str = String(value).trim();
+
+  // Format: YYYY-MM-DD
+  const ymdMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymdMatch) return `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
+
+  // Format: DD-MM-YYYY or DD/MM/YYYY
+  const dmy4Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy4Match) {
+    const day = dmy4Match[1].padStart(2, "0");
+    const month = dmy4Match[2].padStart(2, "0");
+    const year = dmy4Match[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // Format: DD/MM/YY or DD-MM-YY (e.g. "10/04/26")
+  const dmy2Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2})$/);
+  if (dmy2Match) {
+    const day = dmy2Match[1].padStart(2, "0");
+    const month = dmy2Match[2].padStart(2, "0");
+    const year = `20${dmy2Match[3]}`;
+    return `${year}-${month}-${day}`;
+  }
+
+  // Format like "20 May 2024" or "05 Apr 2026 10:30 AM"
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) {
+    return toIsoDateString(parsed);
+  }
+
+  return null;
+};
 
 // Helper to calculate age from DOB string (e.g. 15/06/1985 -> 38)
 const calculateAge = (dobString?: string): number => {
@@ -201,6 +290,31 @@ const getPatientInitials = (name?: string): string => {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
+/* target_date is a DATE column (serialised as UTC midnight), so it is read
+   from the string rather than through the local timezone. */
+const formatTargetDate = (value?: string | null): string => {
+  if (!value) return "—";
+  const iso = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    return `${iso[3]}-${iso[2]}-${iso[1]}`;
+  }
+  const d = new Date(value);
+  if (!Number.isNaN(d.getTime())) {
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    return `${day}-${month}-${d.getFullYear()}`;
+  }
+  return String(value);
+};
+
+const isTargetDateOverdue = (targetDateIso?: string, targetDateFormatted?: string, status?: string): boolean => {
+  if (status === "COMPLETED") return false;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const iso = targetDateIso || normalizeToIsoDate(targetDateFormatted);
+  if (!iso) return false;
+  return iso < todayIso;
+};
+
 interface SampleBarcodeItem {
   id: string;
   testCode: string;
@@ -208,6 +322,7 @@ interface SampleBarcodeItem {
   sampleType: string;
   barcode: string;
   count: number;
+  targetDate?: string;
   deadlineDate?: string;
 }
 
@@ -219,7 +334,8 @@ const INITIAL_SAMPLES: SampleBarcodeItem[] = [
     sampleType: "Whole Blood",
     barcode: "BC2405200001",
     count: 1,
-    deadlineDate: "20 May 2024, 02:30 PM",
+    targetDate: "22-05-2024",
+    deadlineDate: "22-05-2024",
   },
   {
     id: "lft",
@@ -228,7 +344,8 @@ const INITIAL_SAMPLES: SampleBarcodeItem[] = [
     sampleType: "Serum",
     barcode: "BC2405200002",
     count: 1,
-    deadlineDate: "20 May 2024, 04:30 PM",
+    targetDate: "22-05-2024",
+    deadlineDate: "22-05-2024",
   },
   {
     id: "kft",
@@ -237,14 +354,15 @@ const INITIAL_SAMPLES: SampleBarcodeItem[] = [
     sampleType: "Serum",
     barcode: "BC2405200003",
     count: 1,
-    deadlineDate: "20 May 2024, 05:00 PM",
+    targetDate: "22-05-2024",
+    deadlineDate: "22-05-2024",
   },
 ];
 
 const DEFAULT_TEST_ITEMS: TestItemDetail[] = [
-  { id: "cbc", testCode: "CBC", testName: "Complete Blood Count", sampleType: "Whole Blood", priority: "Normal", deadlineDate: "20 May 2024, 02:30 PM" },
-  { id: "lft", testCode: "LFT", testName: "Liver Function Test", sampleType: "Serum", priority: "Normal", deadlineDate: "20 May 2024, 04:30 PM" },
-  { id: "kft", testCode: "KFT", testName: "Kidney Function Test", sampleType: "Serum", priority: "Normal", deadlineDate: "20 May 2024, 05:00 PM" },
+  { id: "cbc", testCode: "CBC", testName: "Complete Blood Count", sampleType: "Whole Blood", priority: "Normal", targetDate: "22-05-2024", deadlineDate: "22-05-2024" },
+  { id: "lft", testCode: "LFT", testName: "Liver Function Test", sampleType: "Serum", priority: "Normal", targetDate: "22-05-2024", deadlineDate: "22-05-2024" },
+  { id: "kft", testCode: "KFT", testName: "Kidney Function Test", sampleType: "Serum", priority: "Normal", targetDate: "22-05-2024", deadlineDate: "22-05-2024" },
 ];
 
 export default function LabDashboard() {
@@ -274,6 +392,54 @@ export default function LabDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "PROCESSING" | "COMPLETED">("ALL");
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
+
+  /* ---------- KPI Track Scroll (Admin Dashboard style) ---------- */
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollButtons = useCallback(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(maxScroll > 0 && el.scrollLeft < maxScroll - 4);
+  }, []);
+
+  const handleKpiScroll = (direction: "left" | "right") => {
+    const el = trackRef.current;
+    if (!el) return;
+    const scrollAmount = 320;
+    el.scrollBy({
+      left: direction === "left" ? -scrollAmount : scrollAmount,
+      behavior: "smooth",
+    });
+  };
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+
+    updateScrollButtons();
+
+    const handleScroll = () => {
+      updateScrollButtons();
+    };
+
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    window.addEventListener("resize", updateScrollButtons);
+
+    const ro = new ResizeObserver(() => {
+      updateScrollButtons();
+    });
+    ro.observe(el);
+
+    return () => {
+      el.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("resize", updateScrollButtons);
+      ro.disconnect();
+    };
+  }, [updateScrollButtons]);
 
   // Editable tests list populated with real backend lab orders
   const [testsList, setTestsList] = useState<TestRecord[]>(INITIAL_TESTS);
@@ -326,7 +492,8 @@ export default function LabDashboard() {
             (order.patient_history?.patient_id
               ? patientMap.get(order.patient_history.patient_id)
               : undefined);
-          const orderItems = orderItemsMap.get(order.lab_order_id) || [];
+          const orderItems =
+            orderItemsMap.get(order.lab_order_id) || order.lab_order_item || [];
 
           // Test names summary
           const testNames =
@@ -404,28 +571,7 @@ export default function LabDashboard() {
                       ? localStorage.getItem(`generated_barcode_item_${oi.lab_order_item_id}`) || undefined
                       : undefined);
 
-                  // Calculate deadline date using turnaround time (tat_hours) from backend lab_test_master
-                  const tatHours = Number(oi.lab_test_master?.tat_hours) || 2;
-                  const itemCreatedDate =
-                    oi.created_at || order.order_datetime || order.created_at
-                      ? new Date(oi.created_at || order.order_datetime || order.created_at!)
-                      : new Date();
-                  const deadlineDateObj = new Date(
-                    itemCreatedDate.getTime() + tatHours * 3600 * 1000
-                  );
-                  const formattedDeadline = !isNaN(deadlineDateObj.getTime())
-                    ? deadlineDateObj.toLocaleDateString("en-GB", {
-                        day: "2-digit",
-                        month: "short",
-                        year: "numeric",
-                      }) +
-                      ", " +
-                      deadlineDateObj.toLocaleTimeString("en-US", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        hour12: true,
-                      })
-                    : "—";
+                  const formattedTargetDate = formatTargetDate(oi.target_date);
 
                   return {
                     id: oi.lab_order_item_id || oi.lab_test_id,
@@ -439,7 +585,8 @@ export default function LabDashboard() {
                       oi.lab_test_master?.sample_type || "Whole Blood",
                     priority: oi.priority || order.priority || "Normal",
                     barcode: sampleBarcode,
-                    deadlineDate: formattedDeadline,
+                    targetDate: formattedTargetDate,
+                    deadlineDate: formattedTargetDate,
                   };
                 })
               : [
@@ -449,9 +596,20 @@ export default function LabDashboard() {
                     testName: "Complete Blood Count",
                     sampleType: "Whole Blood",
                     priority: order.priority || "Normal",
-                    deadlineDate: formattedReqTime,
+                    targetDate: "—",
+                    deadlineDate: "—",
                   },
                 ];
+
+          const itemTargetDates = Array.from(
+            new Set(
+              orderItems
+                .map((oi) => (oi.target_date ? formatTargetDate(oi.target_date) : null))
+                .filter((d): d is string => Boolean(d && d !== "—"))
+            )
+          );
+          const orderTargetDate =
+            itemTargetDates.length > 0 ? itemTargetDates.join(", ") : "—";
 
           const isBarcodeGenerated =
             structuredItems.some((it) => !!it.barcode) ||
@@ -480,6 +638,9 @@ export default function LabDashboard() {
             tests: testNames,
             date: formattedDate,
             time: formattedTime,
+            orderDateIso: toIsoDateString(dateObj),
+            targetDate: orderTargetDate,
+            targetDateIso: itemTargetDates[0] ? normalizeToIsoDate(itemTargetDates[0]) || undefined : undefined,
             status: isCompleted ? "COMPLETED" : "PROCESSING",
             dob: patient?.patient_dob
               ? new Date(patient.patient_dob).toLocaleDateString("en-GB")
@@ -686,6 +847,7 @@ export default function LabDashboard() {
           sampleType: ti.sampleType,
           barcode: `BC${patient.requestId.replace(/\D/g, "").slice(-6) || "2405"}${String(idx + 1).padStart(4, "0")}`,
           count: 1,
+          targetDate: ti.targetDate || ti.deadlineDate,
           deadlineDate: ti.deadlineDate,
         }))
       );
@@ -782,6 +944,52 @@ export default function LabDashboard() {
   const repeatCount = useMemo(() => {
     return Math.max(0, Math.floor(testsList.length * 0.05));
   }, [testsList]);
+
+  /* ---------- KPI Cards configuration (Admin Dashboard style) ---------- */
+  const kpiCards = useMemo(
+    () => [
+      {
+        id: "total-requests",
+        label: "Total Requests",
+        subLabel: "Accession order queue",
+        value: testsList.length,
+        tag: "Total",
+        bg: "#D6E3FF",
+        valueColor: "#00488D",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <FileText className="w-[17px] h-[17px]" color="#00488D" />,
+        isActive: statusFilter === "ALL",
+        onClick: () => setStatusFilter("ALL"),
+      },
+      {
+        id: "sample-registered",
+        label: "Sample Registered",
+        subLabel: "Accessioned & barcoded",
+        value: completedCount,
+        tag: `${testsList.length > 0 ? Math.round((completedCount / testsList.length) * 100) : 0}%`,
+        bg: "rgba(0, 200, 150, 0.12)",
+        valueColor: "#00A87E",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <CheckCircle2 className="w-[17px] h-[17px]" color="#00A87E" />,
+        isActive: statusFilter === "COMPLETED",
+        onClick: () => setStatusFilter((prev) => (prev === "COMPLETED" ? "ALL" : "COMPLETED")),
+      },
+      {
+        id: "registration-pending",
+        label: "Registration Pending",
+        subLabel: "Awaiting sample registration",
+        value: pendingCount,
+        tag: "Pending",
+        bg: "rgba(255, 107, 53, 0.12)",
+        valueColor: "#7B3200",
+        iconBg: "#FFDBCB",
+        icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
+        isActive: statusFilter === "PROCESSING",
+        onClick: () => setStatusFilter((prev) => (prev === "PROCESSING" ? "ALL" : "PROCESSING")),
+      },
+    ],
+    [testsList.length, completedCount, pendingCount, statusFilter]
+  );
 
   return (
     <div className="min-h-screen flex bg-[#f8fafd] text-[#1e293b] antialiased selection:bg-blue-100 font-sans">
@@ -1222,9 +1430,16 @@ export default function LabDashboard() {
                           <span className="block text-xs font-bold uppercase tracking-wider text-slate-500">
                             Request ID
                           </span>
-                          <span className="mt-1.5 block text-xl font-bold text-slate-900">
-                            {selectedPatient.requestId}
-                          </span>
+                          <div className="mt-1.5 flex items-center gap-2">
+                            <span className="text-xl font-bold text-slate-900">
+                              {selectedPatient.requestId}
+                            </span>
+                            {selectedPatient && isTargetDateOverdue(selectedPatient.targetDateIso, selectedPatient.targetDate, selectedPatient.status) && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                OVERDUE
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </section>
@@ -1285,7 +1500,7 @@ export default function LabDashboard() {
                                 Priority
                               </th>
                               <th className="py-4 px-6" scope="col">
-                                Deadline Date
+                                Target Date
                               </th>
                             </tr>
                           </thead>
@@ -1293,35 +1508,63 @@ export default function LabDashboard() {
                             {(selectedPatient?.testItems && selectedPatient.testItems.length > 0
                               ? selectedPatient.testItems
                               : DEFAULT_TEST_ITEMS
-                            ).map((testItem) => (
-                              <tr key={testItem.id} className="hover:bg-slate-50/50 transition-colors">
-                                <td className="py-4 px-6">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedValidTests.includes(testItem.id)}
-                                    onChange={() => handleToggleValidTest(testItem.id)}
-                                    className="h-5 w-5 rounded bg-[#1d6bf3] border-slate-300 text-[#1d6bf3] focus:ring-0 focus:ring-offset-0 cursor-pointer"
-                                  />
-                                </td>
-                                <td className="py-4 px-6 font-medium text-slate-800">
-                                  {testItem.testName}
-                                </td>
-                                <td className="py-4 px-6 text-slate-700">{testItem.sampleType}</td>
-                                <td className="py-4 px-6 text-slate-700">{testItem.priority}</td>
-                                <td className="py-4 px-6 text-slate-700 font-medium whitespace-nowrap">
-                                  {testItem.deadlineDate ? (
-                                    <div className="flex items-center gap-1.5 text-slate-700">
-                                      <svg className="w-4 h-4 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                      </svg>
-                                      <span>{testItem.deadlineDate}</span>
+                            ).map((testItem) => {
+                              const isItemOverdue = isTargetDateOverdue(undefined, testItem.targetDate || testItem.deadlineDate, selectedPatient?.status);
+                              return (
+                                <tr
+                                  key={testItem.id}
+                                  className={`transition-colors ${
+                                    isItemOverdue
+                                      ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                                      : "hover:bg-slate-50/50"
+                                  }`}
+                                >
+                                  <td className="py-4 px-6">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedValidTests.includes(testItem.id)}
+                                      onChange={() => handleToggleValidTest(testItem.id)}
+                                      className="h-5 w-5 rounded bg-[#1d6bf3] border-slate-300 text-[#1d6bf3] focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                                    />
+                                  </td>
+                                  <td className="py-4 px-6 font-medium text-slate-800">
+                                    <div className="flex items-center gap-2">
+                                      <span>{testItem.testName}</span>
+                                      {isItemOverdue && (
+                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                          OVERDUE
+                                        </span>
+                                      )}
                                     </div>
-                                  ) : (
-                                    "—"
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
+                                  </td>
+                                  <td className="py-4 px-6 text-slate-700">{testItem.sampleType}</td>
+                                  <td className="py-4 px-6 text-slate-700">{testItem.priority}</td>
+                                  <td className="py-4 px-6 text-slate-700 font-medium whitespace-nowrap">
+                                    {(testItem.targetDate || testItem.deadlineDate) &&
+                                    (testItem.targetDate || testItem.deadlineDate) !== "—" ? (
+                                      <div className="flex flex-col gap-0.5">
+                                        <div className={`flex items-center gap-1.5 ${isItemOverdue ? "text-rose-700 font-bold" : "text-slate-700"}`}>
+                                          <svg className={`w-4 h-4 shrink-0 ${isItemOverdue ? "text-rose-600" : "text-slate-400"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <rect height="18" rx="2" ry="2" width="18" x="3" y="4" strokeWidth="2" />
+                                            <line x1="16" x2="16" y1="2" y2="6" strokeWidth="2" />
+                                            <line x1="8" x2="8" y1="2" y2="6" strokeWidth="2" />
+                                            <line x1="3" x2="21" y1="10" y2="10" strokeWidth="2" />
+                                          </svg>
+                                          <span>{testItem.targetDate || testItem.deadlineDate}</span>
+                                        </div>
+                                        {isItemOverdue && (
+                                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 w-fit">
+                                            Overdue
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -1437,25 +1680,54 @@ export default function LabDashboard() {
                               <th className="py-3.5 px-6 font-semibold w-1/6">TEST CODE</th>
                               <th className="py-3.5 px-6 font-semibold w-1/4">TEST NAME</th>
                               <th className="py-3.5 px-6 font-semibold w-1/6">SAMPLE TYPE</th>
-                              <th className="py-3.5 px-6 font-semibold w-1/5">DEADLINE DATE</th>
+                              <th className="py-3.5 px-6 font-semibold w-1/5">TARGET DATE</th>
                               <th className="py-3.5 px-6 font-semibold">BARCODE</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-sm">
-                            {sampleBarcodes.map((item) => (
-                              <tr key={item.id} className="hover:bg-slate-50/40 transition-colors">
-                                <td className="py-4 px-6 font-semibold text-slate-900">
-                                  {item.testCode}
-                                </td>
-                                <td className="py-4 px-6 text-slate-600">
-                                  {item.testName}
-                                </td>
-                                <td className="py-4 px-6 text-slate-600">
-                                  {item.sampleType}
-                                </td>
-                                <td className="py-4 px-6 text-slate-700 font-medium whitespace-nowrap">
-                                  {item.deadlineDate || "—"}
-                                </td>
+                            {sampleBarcodes.map((item) => {
+                              const isBarcodeOverdue = isTargetDateOverdue(undefined, item.targetDate || item.deadlineDate, selectedPatient?.status);
+                              return (
+                                <tr
+                                  key={item.id}
+                                  className={`transition-colors ${
+                                    isBarcodeOverdue
+                                      ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                                      : "hover:bg-slate-50/40"
+                                  }`}
+                                >
+                                  <td className="py-4 px-6 font-semibold text-slate-900">
+                                    <div className="flex items-center gap-2">
+                                      <span>{item.testCode}</span>
+                                      {isBarcodeOverdue && (
+                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                          OVERDUE
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="py-4 px-6 text-slate-600">
+                                    {item.testName}
+                                  </td>
+                                  <td className="py-4 px-6 text-slate-600">
+                                    {item.sampleType}
+                                  </td>
+                                  <td className="py-4 px-6 text-slate-700 font-medium whitespace-nowrap">
+                                    {(item.targetDate || item.deadlineDate) && (item.targetDate || item.deadlineDate) !== "—" ? (
+                                      <div className="flex flex-col gap-0.5">
+                                        <span className={isBarcodeOverdue ? "text-rose-700 font-bold" : "text-slate-700"}>
+                                          {item.targetDate || item.deadlineDate}
+                                        </span>
+                                        {isBarcodeOverdue && (
+                                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 w-fit">
+                                            Overdue
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
                                 <td className="py-4 px-6">
                                   <div className="flex items-center gap-3">
                                     <input
@@ -1523,7 +1795,8 @@ export default function LabDashboard() {
                                   </div>
                                 </td>
                               </tr>
-                            ))}
+                            );
+                          })}
                           </tbody>
                         </table>
                       </div>
@@ -1611,56 +1884,118 @@ export default function LabDashboard() {
 
             {/* DashboardBody */}
             <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
-              {/* StatCardsRow */}
-              <section
-                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4"
-                data-purpose="kpi-metric-cards"
-              >
-                {/* Card 1: Sample Registered */}
-                <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-xs flex items-center justify-between relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
-                  <div className="relative">
-                    <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
-                      Sample Registered
-                    </span>
-                    <h3 className="text-2xl font-extrabold text-emerald-950 mt-1">
-                      {completedCount}
-                    </h3>
-                    <p className="text-[11px] text-emerald-600/80 mt-0.5">
-                      Samples registered successfully
-                    </p>
-                  </div>
-                  <div className="w-11 h-11 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 relative">
-                    <svg className="w-5 h-5 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                    </svg>
+              {/* Key Performance Indicators - Admin Dashboard Style Scrollable Track */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between flex-wrap gap-2 px-1">
+                  <div>
+                    <h2 className="text-base font-bold text-[#1c1e21] tracking-tight">Key Performance Indicators</h2>
+                    <p className="text-xs text-[#70747c]">Real-time sample accession & registration metrics</p>
                   </div>
                 </div>
 
-                {/* Card 2: Sample Registration Pending */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs flex items-center justify-between relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-20 h-20 bg-blue-50/50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
-                  <div className="relative">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                        Sample Registration Pending
-                      </span>
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                    </div>
-                    <h3 className="text-2xl font-extrabold text-slate-900 mt-1">
-                      {pendingCount}
-                    </h3>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Awaiting sample registration
-                    </p>
+                <div className="relative">
+                  {canScrollLeft && (
+                    <button
+                      type="button"
+                      onClick={() => handleKpiScroll("left")}
+                      aria-label="Scroll left"
+                      className="absolute -left-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  <div
+                    className={`absolute left-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-r from-[#F8FAFC] to-transparent ${
+                      canScrollLeft ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+
+                  <div
+                    ref={trackRef}
+                    className="flex gap-[14px] overflow-x-auto scroll-smooth py-[6px] px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  >
+                    {kpiCards.map((card) => (
+                      <div
+                        key={card.id}
+                        onClick={card.onClick}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            card.onClick?.();
+                          }
+                        }}
+                        style={{
+                          background: card.bg,
+                          border: card.isActive ? `2.5px solid ${card.valueColor}` : "2.5px solid transparent",
+                          boxShadow: card.isActive
+                            ? `0 0 0 1px ${card.valueColor}20, 0 6px 18px ${card.valueColor}28`
+                            : "0 2px 10px rgba(0,0,0,0.06)",
+                        }}
+                        className="flex-[0_0_206px] min-w-[206px] rounded-[12px] p-[14px_16px] flex flex-col gap-[10px] cursor-pointer transition-all duration-200 select-none hover:-translate-y-[2px] hover:shadow-[0_6px_20px_rgba(0,0,0,0.10)]"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div
+                            style={{ background: card.iconBg }}
+                            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm"
+                          >
+                            {card.icon}
+                          </div>
+                          {card.tag && (
+                            <span
+                              style={{ color: card.valueColor }}
+                              className="text-[11px] font-bold px-[7px] py-[2px] rounded-full tracking-[-0.2px] bg-white/60 shadow-sm inline-flex items-center gap-1"
+                            >
+                              <span>{card.tag}</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <div
+                          style={{ color: card.valueColor }}
+                          className="text-[26px] font-extrabold leading-[1.05] tracking-[-0.6px]"
+                        >
+                          {card.value}
+                        </div>
+
+                        <div className="flex flex-col gap-[2px] min-w-0">
+                          <span
+                            style={{ color: card.valueColor }}
+                            className="text-[12.5px] font-bold tracking-tight truncate"
+                          >
+                            {card.label}
+                          </span>
+                          <span
+                            style={{ color: card.valueColor, opacity: 0.75 }}
+                            className="text-[11px] font-medium truncate"
+                          >
+                            {card.subLabel}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 relative">
-                    <svg className="w-5 h-5 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                    </svg>
-                  </div>
+
+                  <div
+                    className={`absolute right-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-l from-[#F8FAFC] to-transparent ${
+                      canScrollRight ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+
+                  {canScrollRight && (
+                    <button
+                      type="button"
+                      onClick={() => handleKpiScroll("right")}
+                      aria-label="Scroll right"
+                      className="absolute -right-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
-              </section>
+              </div>
 
               {/* BEGIN: MainContainer */}
               <section
@@ -1855,6 +2190,9 @@ export default function LabDashboard() {
                           <br />
                           &amp; TIME
                         </th>
+                        <th className="py-5 px-6 font-bold" scope="col">
+                          TARGET DATE
+                        </th>
                         <th
                           className="py-5 px-8 font-bold text-center"
                           scope="col"
@@ -1867,7 +2205,7 @@ export default function LabDashboard() {
                     <tbody className="divide-y divide-slate-100 text-[14px] text-slate-600">
                       {isLoading ? (
                         <tr>
-                          <td colSpan={5} className="py-14 text-center text-slate-500">
+                          <td colSpan={6} className="py-14 text-center text-slate-500">
                             <div className="flex flex-col items-center justify-center gap-3">
                               <div className="w-8 h-8 border-3 border-[#0b57d0] border-t-transparent rounded-full animate-spin"></div>
                               <span className="text-sm font-medium text-slate-600">
@@ -1879,52 +2217,83 @@ export default function LabDashboard() {
                       ) : filteredTests.length === 0 ? (
                         <tr>
                           <td
-                            colSpan={5}
+                            colSpan={6}
                             className="py-10 text-center text-slate-400 text-sm"
                           >
                             No test records found matching your search.
                           </td>
                         </tr>
                       ) : (
-                        filteredTests.map((test) => (
-                          <tr
-                            key={test.id}
-                            onClick={() => handleSelectPatient(test)}
-                            className="hover:bg-slate-50/60 transition-colors cursor-pointer"
-                            title={`Click to open registration details for ${test.patientName}`}
-                          >
-                            <td className="py-5 px-8 font-normal text-slate-600 whitespace-nowrap">
-                              {test.requestId}
-                            </td>
-                            <td className="py-5 px-6 font-bold text-slate-900 whitespace-nowrap">
-                              {test.patientName}
-                            </td>
-                            <td className="py-5 px-6 whitespace-nowrap">
-                              {test.requestedBy}
-                            </td>
-                            <td className="py-5 px-6 leading-snug whitespace-nowrap">
-                              {test.date ? (
-                                <>
-                                  <div>{test.date}</div>
-                                  <div className="text-slate-600">
-                                    {test.time}
+                        filteredTests.map((test) => {
+                          const isOverdue = isTargetDateOverdue(test.targetDateIso, test.targetDate, test.status);
+                          return (
+                            <tr
+                              key={test.id}
+                              onClick={() => handleSelectPatient(test)}
+                              className={`transition-colors cursor-pointer ${
+                                isOverdue
+                                  ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                                  : "hover:bg-slate-50/60"
+                              }`}
+                              title={`Click to open registration details for ${test.patientName}`}
+                            >
+                              <td className="py-5 px-8 font-normal text-slate-600 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-slate-800">{test.requestId}</span>
+                                  {isOverdue && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                      OVERDUE
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-5 px-6 font-bold text-slate-900 whitespace-nowrap">
+                                {test.patientName}
+                              </td>
+                              <td className="py-5 px-6 whitespace-nowrap">
+                                {test.requestedBy}
+                              </td>
+                              <td className="py-5 px-6 leading-snug whitespace-nowrap">
+                                {test.date ? (
+                                  <>
+                                    <div>{test.date}</div>
+                                    <div className="text-slate-600">
+                                      {test.time}
+                                    </div>
+                                  </>
+                                ) : null}
+                              </td>
+                              <td className="py-5 px-6 whitespace-nowrap font-semibold">
+                                {test.targetDate && test.targetDate !== "—" ? (
+                                  <div className="flex flex-col gap-0.5">
+                                    <div className={`flex items-center gap-1.5 ${isOverdue ? "text-rose-700 font-bold" : "text-slate-700"}`}>
+                                      <Clock className={`w-3.5 h-3.5 shrink-0 ${isOverdue ? "text-rose-600" : "text-slate-400"}`} />
+                                      <span>{test.targetDate}</span>
+                                    </div>
+                                    {isOverdue && (
+                                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 w-fit">
+                                        Overdue
+                                      </span>
+                                    )}
                                   </div>
-                                </>
-                              ) : null}
-                            </td>
-                            <td className="py-5 px-8 text-center whitespace-nowrap">
-                              {test.status === "PROCESSING" ? (
-                                <span className="inline-block px-4 py-1.5 rounded-full text-xs font-bold tracking-wider bg-[#faecc5] text-[#715e17]">
-                                  PROCESSING
-                                </span>
-                              ) : (
-                                <span className="inline-block px-4 py-1.5 rounded-full text-xs font-bold tracking-wider bg-[#bbf7d0] text-[#15803d]">
-                                  COMPLETED
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        ))
+                                ) : (
+                                  <span className="text-slate-400 font-normal">—</span>
+                                )}
+                              </td>
+                              <td className="py-5 px-8 text-center whitespace-nowrap">
+                                {test.status === "PROCESSING" ? (
+                                  <span className="inline-block px-4 py-1.5 rounded-full text-xs font-bold tracking-wider bg-[#faecc5] text-[#715e17]">
+                                    PROCESSING
+                                  </span>
+                                ) : (
+                                  <span className="inline-block px-4 py-1.5 rounded-full text-xs font-bold tracking-wider bg-[#bbf7d0] text-[#15803d]">
+                                    COMPLETED
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>

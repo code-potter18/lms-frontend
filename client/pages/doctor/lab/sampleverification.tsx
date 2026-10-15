@@ -1,7 +1,26 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { getUser, remove } from "@/utils/token";
 import { toast } from "@/hooks/use-toast";
+import {
+  ChevronLeft,
+  ChevronRight,
+  FlaskConical,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  X,
+} from "lucide-react";
+
+const COMMON_REJECTION_REASONS = [
+  "Hemolyzed specimen",
+  "Insufficient sample volume (QNS)",
+  "Clotted whole blood sample",
+  "Incorrect container / tube type",
+  "Mislabeled / barcode unreadable",
+  "Transport delay / temperature breach",
+  "Leaking / damaged tube container",
+];
 import LabNav from "./labnav";
 import {
   labOrderApi,
@@ -72,7 +91,53 @@ interface SampleItem {
   barcode: string;
   status: "VERIFIED" | "PENDING" | "REJECTED";
   rejectionReason?: string;
+  targetDate?: string;
+  targetDateIso?: string;
 }
+
+const normalizeToIsoDate = (value?: string | null): string | null => {
+  if (!value || value === "—") return null;
+  const str = String(value).trim();
+  const ymdMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymdMatch) return `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
+  const dmy4Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy4Match) {
+    return `${dmy4Match[3]}-${dmy4Match[2].padStart(2, "0")}-${dmy4Match[1].padStart(2, "0")}`;
+  }
+  const dmy2Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2})$/);
+  if (dmy2Match) {
+    return `20${dmy2Match[3]}-${dmy2Match[2].padStart(2, "0")}-${dmy2Match[1].padStart(2, "0")}`;
+  }
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) {
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const day = String(parsed.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return null;
+};
+
+const formatTargetDate = (value?: string | null): string => {
+  if (!value) return "—";
+  const iso = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}-${iso[2]}-${iso[1]}`;
+  const d = new Date(value);
+  if (!Number.isNaN(d.getTime())) {
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    return `${day}-${month}-${d.getFullYear()}`;
+  }
+  return String(value);
+};
+
+const isSampleOverdue = (s?: SampleItem | null): boolean => {
+  if (!s || s.status === "VERIFIED") return false;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const iso = s.targetDateIso || (s.targetDate ? normalizeToIsoDate(s.targetDate) : null);
+  if (!iso) return false;
+  return iso < todayIso;
+};
 
 const INITIAL_SAMPLES: SampleItem[] = [
   {
@@ -238,6 +303,54 @@ export default function SampleVerification() {
   >("ALL");
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
 
+  /* ---------- KPI Track Scroll (Admin Dashboard style) ---------- */
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollButtons = useCallback(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(maxScroll > 0 && el.scrollLeft < maxScroll - 4);
+  }, []);
+
+  const handleKpiScroll = (direction: "left" | "right") => {
+    const el = trackRef.current;
+    if (!el) return;
+    const scrollAmount = 320;
+    el.scrollBy({
+      left: direction === "left" ? -scrollAmount : scrollAmount,
+      behavior: "smooth",
+    });
+  };
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+
+    updateScrollButtons();
+
+    const handleScroll = () => {
+      updateScrollButtons();
+    };
+
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    window.addEventListener("resize", updateScrollButtons);
+
+    const ro = new ResizeObserver(() => {
+      updateScrollButtons();
+    });
+    ro.observe(el);
+
+    return () => {
+      el.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("resize", updateScrollButtons);
+      ro.disconnect();
+    };
+  }, [updateScrollButtons]);
+
   // Real backend data fetch
   const fetchRealData = useCallback(async () => {
     try {
@@ -374,6 +487,10 @@ export default function SampleVerification() {
               ? "Inpatient - Ward"
               : "Outpatient - OPD";
 
+          const rawTargetDate = item.target_date || (parentOrder as any)?.target_date;
+          const targetDateFormatted = rawTargetDate ? formatTargetDate(rawTargetDate) : undefined;
+          const targetDateIso = rawTargetDate ? (normalizeToIsoDate(rawTargetDate) || undefined) : undefined;
+
           return {
             id: item.lab_order_item_id,
             sampleId,
@@ -394,6 +511,8 @@ export default function SampleVerification() {
             remarks: item.remarks || "-",
             status,
             rejectionReason: status === "REJECTED" ? (item.remarks || "Sample rejected") : undefined,
+            targetDate: targetDateFormatted,
+            targetDateIso,
           };
         });
 
@@ -521,45 +640,96 @@ export default function SampleVerification() {
     }
   };
 
-  const handleRejectSample = async (id: string) => {
-    const reason = prompt("Enter reason for rejection:", "Hemolyzed specimen");
-    if (reason) {
-      setSamples((prev) =>
-        prev.map((s) =>
-          s.id === id
-            ? { ...s, status: "REJECTED", rejectionReason: reason }
-            : s
-        )
-      );
-      if (selectedSample.id === id) {
-        setSelectedSample((prev) => ({
-          ...prev,
-          status: "REJECTED",
-          rejectionReason: reason,
-        }));
-      }
+  // Reject Modal State
+  const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
+  const [sampleToReject, setSampleToReject] = useState<SampleItem | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [rejectError, setRejectError] = useState<string | null>(null);
+  const [isRejecting, setIsRejecting] = useState(false);
 
+  const handleOpenRejectModal = (sampleOrId: SampleItem | string, defaultReason?: string) => {
+    let target: SampleItem | undefined;
+    if (typeof sampleOrId === "string") {
+      target =
+        samples.find((s) => s.id === sampleOrId) ||
+        (selectedSample?.id === sampleOrId ? selectedSample : undefined);
+    } else {
+      target = sampleOrId;
+    }
+    if (!target) return;
+    setSampleToReject(target);
+    setRejectionReason(defaultReason || "");
+    setRejectError(null);
+    setIsRejectModalOpen(true);
+  };
+
+  const handleCloseRejectModal = () => {
+    setIsRejectModalOpen(false);
+    setSampleToReject(null);
+    setRejectionReason("");
+    setRejectError(null);
+  };
+
+  const handleConfirmReject = async () => {
+    if (!sampleToReject) return;
+    const trimmed = rejectionReason.trim();
+    if (!trimmed) {
+      setRejectError("Please enter a reason for rejecting this sample.");
+      return;
+    }
+
+    const id = sampleToReject.id;
+    const reason = trimmed;
+    setIsRejecting(true);
+
+    setSamples((prev) =>
+      prev.map((s) =>
+        s.id === id
+          ? { ...s, status: "REJECTED", rejectionReason: reason }
+          : s
+      )
+    );
+    if (selectedSample.id === id) {
+      setSelectedSample((prev) => ({
+        ...prev,
+        status: "REJECTED",
+        rejectionReason: reason,
+      }));
+    }
+
+    try {
+      localStorage.removeItem(`verified_sample_${id}`);
+      localStorage.setItem(`rejected_sample_${id}`, "true");
+    } catch {}
+
+    toast({
+      title: "Sample Rejected",
+      description: `Sample marked for recollection. Reason: ${reason}`,
+      variant: "destructive",
+    });
+
+    if (!id.startsWith("s") || id.startsWith("LOI")) {
       try {
-        localStorage.removeItem(`verified_sample_${id}`);
-        localStorage.setItem(`rejected_sample_${id}`, "true");
-      } catch {}
-      toast({
-        title: "Sample Rejected",
-        description: `Sample marked for recollection. Reason: ${reason}`,
-        variant: "destructive",
-      });
-
-      if (!id.startsWith("s") || id.startsWith("LOI")) {
-        try {
-          await labOrderItemApi.update(id, {
-            item_status: "Rejected",
-            remarks: reason,
-          });
-        } catch (err) {
-          console.error("Failed to update sample rejection in backend:", err);
-        }
+        await labOrderItemApi.update(id, {
+          item_status: "Rejected",
+          remarks: reason,
+        });
+      } catch (err) {
+        console.error("Failed to update sample rejection in backend:", err);
       }
     }
+
+    setIsRejecting(false);
+    setIsRejectModalOpen(false);
+    setSampleToReject(null);
+    setRejectionReason("");
+    if (viewMode === "workflow") {
+      setViewMode("table");
+    }
+  };
+
+  const handleRejectSample = (idOrSample: string | SampleItem, defaultReason?: string) => {
+    handleOpenRejectModal(idOrSample, defaultReason);
   };
 
   const filteredSamples = useMemo(() => {
@@ -598,6 +768,65 @@ export default function SampleVerification() {
       return isNaN(t) || now - t > 4 * 3600 * 1000;
     }).length;
   }, [samples]);
+
+  /* ---------- KPI Cards configuration (Admin Dashboard style) ---------- */
+  const kpiCards = useMemo(
+    () => [
+      {
+        id: "total-specimens",
+        label: "Total Specimens",
+        subLabel: "In accession worklist",
+        value: samples.length,
+        tag: "Total",
+        bg: "#D6E3FF",
+        valueColor: "#00488D",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <FlaskConical className="w-[17px] h-[17px]" color="#00488D" />,
+        isActive: statusFilter === "ALL",
+        onClick: () => setStatusFilter("ALL"),
+      },
+      {
+        id: "sample-verified",
+        label: "Sample Verified",
+        subLabel: "Verified & accessioned",
+        value: verifiedCount,
+        tag: `${samples.length > 0 ? Math.round((verifiedCount / samples.length) * 100) : 0}%`,
+        bg: "rgba(0, 200, 150, 0.12)",
+        valueColor: "#00A87E",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <CheckCircle2 className="w-[17px] h-[17px]" color="#00A87E" />,
+        isActive: statusFilter === "VERIFIED",
+        onClick: () => setStatusFilter((prev) => (prev === "VERIFIED" ? "ALL" : "VERIFIED")),
+      },
+      {
+        id: "verification-pending",
+        label: "Verification Pending",
+        subLabel: "Awaiting tube verification",
+        value: pendingCount,
+        tag: "Pending",
+        bg: "rgba(255, 107, 53, 0.12)",
+        valueColor: "#7B3200",
+        iconBg: "#FFDBCB",
+        icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
+        isActive: statusFilter === "PENDING",
+        onClick: () => setStatusFilter((prev) => (prev === "PENDING" ? "ALL" : "PENDING")),
+      },
+      {
+        id: "sample-rejected",
+        label: "Sample Rejected",
+        subLabel: "Hemolyzed / insufficient",
+        value: rejectedCount,
+        tag: rejectedCount > 0 ? "Rejected" : "None",
+        bg: "rgba(220, 38, 38, 0.12)",
+        valueColor: "#DC2626",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <AlertTriangle className="w-[17px] h-[17px]" color="#DC2626" />,
+        isActive: statusFilter === "REJECTED",
+        onClick: () => setStatusFilter((prev) => (prev === "REJECTED" ? "ALL" : "REJECTED")),
+      },
+    ],
+    [samples.length, verifiedCount, pendingCount, rejectedCount, statusFilter]
+  );
 
   return (
     <div className="bg-[#f8fafc] text-slate-800 min-h-screen flex flex-row font-sans selection:bg-blue-100 antialiased">
@@ -891,6 +1120,26 @@ export default function SampleVerification() {
               >
                 {/* Left Column */}
                 <div className="space-y-6">
+                  {/* Overdue alert banner if selected sample is overdue */}
+                  {isSampleOverdue(selectedSample) && (
+                    <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-between text-rose-900 gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <Clock className="w-4 h-4 text-rose-600 shrink-0" />
+                        <div>
+                          <p className="text-xs font-bold text-rose-900">
+                            Specimen Exceeded Target Date ({selectedSample.targetDate})
+                          </p>
+                          <p className="text-[11px] text-rose-700">
+                            Immediate lab attention required. Expedite verification and bench routing.
+                          </p>
+                        </div>
+                      </div>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wider uppercase shrink-0">
+                        OVERDUE
+                      </span>
+                    </div>
+                  )}
+
                   {/* Card 1: Sample Collected Successfully Banner */}
                   <div
                     className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-sm"
@@ -940,6 +1189,23 @@ export default function SampleVerification() {
                           {selectedSample.collectedOn}
                         </span>
                       </div>
+                      {selectedSample.targetDate && (
+                        <div>
+                          <span className="block text-[11px] font-semibold tracking-wider text-slate-400 uppercase mb-1.5">
+                            Target Date
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-sm font-bold tracking-tight ${isSampleOverdue(selectedSample) ? "text-rose-700" : "text-slate-800"}`}>
+                              {selectedSample.targetDate}
+                            </span>
+                            {isSampleOverdue(selectedSample) && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                OVERDUE
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1100,6 +1366,19 @@ export default function SampleVerification() {
                             {selectedSample.testCode}
                           </span>
                         </div>
+                        {selectedSample.targetDate && (
+                          <div className="grid grid-cols-12 gap-2 text-sm">
+                            <span className="col-span-5 text-slate-500">Target Date</span>
+                            <span className={`col-span-7 font-bold flex items-center gap-2 ${isSampleOverdue(selectedSample) ? "text-rose-700" : "text-slate-900"}`}>
+                              {selectedSample.targetDate}
+                              {isSampleOverdue(selectedSample) && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                  OVERDUE
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1894,7 +2173,7 @@ export default function SampleVerification() {
                       <button
                         className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 font-semibold text-base hover:bg-rose-100 transition-colors focus:outline-none focus:ring-2 focus:ring-rose-400 cursor-pointer"
                         type="button"
-                        onClick={() => handleRejectSample(selectedSample.id)}
+                        onClick={() => handleRejectSample(selectedSample.id, "Incorrect container / tube type")}
                       >
                         <span>Container is Incorrect</span>
                         <svg
@@ -2284,7 +2563,7 @@ export default function SampleVerification() {
                     <button
                       className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg border border-rose-300 bg-rose-50 text-rose-600 font-semibold text-sm hover:bg-rose-100 transition-colors shadow-xs cursor-pointer"
                       type="button"
-                      onClick={() => handleRejectSample(selectedSample.id)}
+                      onClick={() => handleRejectSample(selectedSample.id, "Labelling is incorrect / missing barcode")}
                     >
                       <span>Labelling is Incorrect</span>
                       <svg
@@ -2584,7 +2863,7 @@ export default function SampleVerification() {
                     <button
                       className="flex items-center gap-2 px-7 py-2.5 rounded-lg bg-[#fdeeee] border border-[#f8c6c6] text-[#eb3b5a] hover:bg-[#fbdada] text-[15px] font-semibold transition-all focus:outline-none cursor-pointer"
                       type="button"
-                      onClick={() => handleRejectSample(selectedSample.id)}
+                      onClick={() => handleRejectSample(selectedSample.id, "Transport temperature / condition integrity compromised")}
                     >
                       <span>Transport is Incorrect</span>
                       <svg
@@ -2630,56 +2909,118 @@ export default function SampleVerification() {
               </div>
             </header>
             <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
-            {/* StatCardsRow */}
-            <section
-              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4"
-              data-purpose="kpi-metric-cards"
-            >
-              {/* Card 1: Sample Verified */}
-              <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-xs flex items-center justify-between relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
-                <div className="relative">
-                  <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
-                    Sample Verified
-                  </span>
-                  <h3 className="text-2xl font-extrabold text-emerald-950 mt-1">
-                    {verifiedCount}
-                  </h3>
-                  <p className="text-[11px] text-emerald-600/80 mt-0.5">
-                    Samples verified successfully
-                  </p>
-                </div>
-                <div className="w-11 h-11 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 relative">
-                  <svg className="w-5 h-5 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                  </svg>
+            {/* Key Performance Indicators - Admin Dashboard Style Scrollable Track */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between flex-wrap gap-2 px-1">
+                <div>
+                  <h2 className="text-base font-bold text-[#1c1e21] tracking-tight">Key Performance Indicators</h2>
+                  <p className="text-xs text-[#70747c]">Real-time specimen verification & integrity check metrics</p>
                 </div>
               </div>
 
-              {/* Card 2: Sample Verification Pending */}
-              <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs flex items-center justify-between relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-20 h-20 bg-blue-50/50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
-                <div className="relative">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                      Sample Verification Pending
-                    </span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                  </div>
-                  <h3 className="text-2xl font-extrabold text-slate-900 mt-1">
-                    {pendingCount}
-                  </h3>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Samples pending verification
-                  </p>
+              <div className="relative">
+                {canScrollLeft && (
+                  <button
+                    type="button"
+                    onClick={() => handleKpiScroll("left")}
+                    aria-label="Scroll left"
+                    className="absolute -left-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                )}
+
+                <div
+                  className={`absolute left-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-r from-[#F8FAFC] to-transparent ${
+                    canScrollLeft ? "opacity-100" : "opacity-0"
+                  }`}
+                />
+
+                <div
+                  ref={trackRef}
+                  className="flex gap-[14px] overflow-x-auto scroll-smooth py-[6px] px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                >
+                  {kpiCards.map((card) => (
+                    <div
+                      key={card.id}
+                      onClick={card.onClick}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          card.onClick?.();
+                        }
+                      }}
+                      style={{
+                        background: card.bg,
+                        border: card.isActive ? `2.5px solid ${card.valueColor}` : "2.5px solid transparent",
+                        boxShadow: card.isActive
+                          ? `0 0 0 1px ${card.valueColor}20, 0 6px 18px ${card.valueColor}28`
+                          : "0 2px 10px rgba(0,0,0,0.06)",
+                      }}
+                      className="flex-[0_0_206px] min-w-[206px] rounded-[12px] p-[14px_16px] flex flex-col gap-[10px] cursor-pointer transition-all duration-200 select-none hover:-translate-y-[2px] hover:shadow-[0_6px_20px_rgba(0,0,0,0.10)]"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div
+                          style={{ background: card.iconBg }}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm"
+                        >
+                          {card.icon}
+                        </div>
+                        {card.tag && (
+                          <span
+                            style={{ color: card.valueColor }}
+                            className="text-[11px] font-bold px-[7px] py-[2px] rounded-full tracking-[-0.2px] bg-white/60 shadow-sm inline-flex items-center gap-1"
+                          >
+                            <span>{card.tag}</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <div
+                        style={{ color: card.valueColor }}
+                        className="text-[26px] font-extrabold leading-[1.05] tracking-[-0.6px]"
+                      >
+                        {card.value}
+                      </div>
+
+                      <div className="flex flex-col gap-[2px] min-w-0">
+                        <span
+                          style={{ color: card.valueColor }}
+                          className="text-[12.5px] font-bold tracking-tight truncate"
+                        >
+                          {card.label}
+                        </span>
+                        <span
+                          style={{ color: card.valueColor, opacity: 0.75 }}
+                          className="text-[11px] font-medium truncate"
+                        >
+                          {card.subLabel}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 relative">
-                  <svg className="w-5 h-5 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                  </svg>
-                </div>
+
+                <div
+                  className={`absolute right-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-l from-[#F8FAFC] to-transparent ${
+                    canScrollRight ? "opacity-100" : "opacity-0"
+                  }`}
+                />
+
+                {canScrollRight && (
+                  <button
+                    type="button"
+                    onClick={() => handleKpiScroll("right")}
+                    aria-label="Scroll right"
+                    className="absolute -right-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                )}
               </div>
-            </section>
+            </div>
 
             {/* BEGIN: MainContainer */}
             <section
@@ -2966,33 +3307,51 @@ export default function SampleVerification() {
                         </td>
                       </tr>
                     ) : (
-                      filteredSamples.map((s) => (
-                        <tr
-                          key={s.id}
-                          onClick={() => handleSelectSample(s)}
-                          className="hover:bg-slate-50/60 transition-colors cursor-pointer group"
-                        >
-                          <td className="py-5 px-8 whitespace-nowrap">
-                            <span className="font-mono text-slate-900 text-sm font-semibold">
-                              {s.barcode}
-                            </span>
-                          </td>
-                          <td className="py-5 px-6 whitespace-nowrap">
-                            <span className="font-semibold text-slate-900 block group-hover:text-blue-600 transition-colors">
-                              {s.patientName}
-                            </span>
-                            <span className="text-xs text-slate-400 font-mono">
-                              {s.patientId}
-                            </span>
-                          </td>
-                          <td className="py-5 px-6 whitespace-nowrap">
-                            <span className="font-medium text-slate-800 block">
-                              {s.testName}
-                            </span>
-                            <span className="text-xs text-slate-500">
-                              {s.sampleType}
-                            </span>
-                          </td>
+                      filteredSamples.map((s) => {
+                        const isOverdue = isSampleOverdue(s);
+                        return (
+                          <tr
+                            key={s.id}
+                            onClick={() => handleSelectSample(s)}
+                            className={`transition-colors cursor-pointer group ${
+                              isOverdue
+                                ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                                : "hover:bg-slate-50/60"
+                            }`}
+                          >
+                            <td className="py-5 px-8 whitespace-nowrap">
+                              <span className="font-mono text-slate-900 text-sm font-semibold">
+                                {s.barcode}
+                              </span>
+                            </td>
+                            <td className="py-5 px-6 whitespace-nowrap">
+                              <span className="font-semibold text-slate-900 block group-hover:text-blue-600 transition-colors">
+                                {s.patientName}
+                              </span>
+                              <span className="text-xs text-slate-400 font-mono">
+                                {s.patientId}
+                              </span>
+                            </td>
+                            <td className="py-5 px-6 whitespace-nowrap">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-slate-800 block">
+                                  {s.testName}
+                                </span>
+                                {isOverdue && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                    OVERDUE
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+                                <span>{s.sampleType}</span>
+                                {s.targetDate && (
+                                  <span className={`font-medium ${isOverdue ? "text-rose-700 font-bold" : "text-slate-400"}`}>
+                                    · Target: {s.targetDate}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
                           <td className="py-5 px-6 text-center text-slate-600 font-normal whitespace-nowrap">
                             {s.collectionTime}
                           </td>
@@ -3041,8 +3400,9 @@ export default function SampleVerification() {
                             </div>
                           </td>
                         </tr>
-                      ))
-                    )}
+                      );
+                    })
+                  )}
                   </tbody>
                 </table>
               </div>
@@ -3052,6 +3412,183 @@ export default function SampleVerification() {
         </div>
       )}
       </div>
+
+      {/* ========================================================================= */}
+      {/* Sample Rejection Modal Dialog                                             */}
+      {/* ========================================================================= */}
+      {isRejectModalOpen && sampleToReject && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reject-dialog-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
+          onClick={handleCloseRejectModal}
+        >
+          <div
+            className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden transform transition-all animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Top red header stripe */}
+            <div className="h-1.5 w-full bg-gradient-to-r from-rose-500 via-red-500 to-rose-600" />
+
+            <div className="p-6 sm:p-7">
+              {/* Header with Icon and Close Button */}
+              <div className="flex items-start justify-between gap-4 mb-5">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-11 h-11 rounded-xl bg-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                    <AlertTriangle className="w-6 h-6 stroke-[2.2]" />
+                  </div>
+                  <div>
+                    <h2
+                      id="reject-dialog-title"
+                      className="text-lg font-bold text-slate-900 tracking-tight"
+                    >
+                      Reject Sample Requisition
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Specify the clinical reason for rejecting this specimen
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseRejectModal}
+                  aria-label="Close"
+                  className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Sample Details Summary Box */}
+              <div className="rounded-xl border border-rose-200/80 bg-rose-50/50 p-3.5 mb-5 text-xs text-slate-700">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                  <div>
+                    <span className="text-[11px] font-semibold text-rose-900 block uppercase tracking-wider">
+                      Patient
+                    </span>
+                    <span className="font-bold text-slate-900 text-[13px]">
+                      {sampleToReject.patientName}
+                    </span>
+                    <span className="text-slate-500 block font-mono text-[11px]">
+                      {sampleToReject.patientId}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[11px] font-semibold text-rose-900 block uppercase tracking-wider">
+                      Specimen &amp; Test
+                    </span>
+                    <span className="font-bold text-slate-900 text-[13px] block truncate" title={sampleToReject.testName}>
+                      {sampleToReject.testName}
+                    </span>
+                    <span className="text-slate-500 block font-mono text-[11px]">
+                      Barcode: {sampleToReject.barcode}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Common Reasons Quick Select */}
+              <div className="mb-4">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-2">
+                  Common Reasons (Click to fill)
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {COMMON_REJECTION_REASONS.map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => {
+                        setRejectionReason(r);
+                        if (rejectError) setRejectError(null);
+                      }}
+                      className={`text-[11px] px-2.5 py-1 rounded-md font-medium border transition-colors cursor-pointer ${
+                        rejectionReason === r
+                          ? "bg-rose-600 text-white border-rose-600 shadow-2xs"
+                          : "bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200"
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Rejection Reason Text Box */}
+              <div className="mb-5">
+                <label
+                  htmlFor="rejection-reason-input"
+                  className="block text-xs font-bold text-slate-800 mb-1.5"
+                >
+                  Reason for Rejection <span className="text-rose-600">*</span>
+                </label>
+                <textarea
+                  id="rejection-reason-input"
+                  rows={3}
+                  autoFocus
+                  value={rejectionReason}
+                  onChange={(e) => {
+                    setRejectionReason(e.target.value);
+                    if (rejectError) setRejectError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault();
+                      handleConfirmReject();
+                    }
+                  }}
+                  placeholder="Enter detailed reason for sample rejection (e.g., Hemolyzed specimen, requires fresh sample collection)..."
+                  className={`w-full rounded-xl border p-3 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none transition-colors shadow-2xs ${
+                    rejectError
+                      ? "border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-200 bg-rose-50/20"
+                      : "border-slate-300 focus:border-rose-500 focus:ring-2 focus:ring-rose-100 bg-white"
+                  }`}
+                />
+                {rejectError ? (
+                  <p className="text-xs text-rose-600 font-medium mt-1 flex items-center gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    {rejectError}
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    This reason will be logged on the requisition and flagged for recollect.
+                  </p>
+                )}
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={handleCloseRejectModal}
+                  disabled={isRejecting}
+                  className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmReject}
+                  disabled={isRejecting}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-xs font-bold tracking-wide shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isRejecting ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Rejecting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="w-4 h-4 stroke-[2.2]" />
+                      <span>Reject Sample</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

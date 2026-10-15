@@ -1,5 +1,13 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+} from "lucide-react";
 import { getUser, remove } from "@/utils/token";
 import { toast } from "@/hooks/use-toast";
 import LabNav from "./labnav";
@@ -43,6 +51,8 @@ export interface TransferItem {
   clinicalRemarks?: string;
   clinicalCorrelation?: string;
   parameters?: DiagnosticParameter[];
+  targetDate?: string;
+  targetDateIso?: string;
 }
 
 const DEFAULT_CBC_PARAMETERS: DiagnosticParameter[] = [
@@ -104,7 +114,6 @@ const DEFAULT_CBC_PARAMETERS: DiagnosticParameter[] = [
   },
 ];
 
-
 function calculateAge(dob: string): number {
   const birth = new Date(dob);
   const now = new Date();
@@ -112,6 +121,47 @@ function calculateAge(dob: string): number {
   const m = now.getMonth() - birth.getMonth();
   if (m < 0 || (m === 0 && now.getDate() < birth.getDate())) age--;
   return Math.max(0, age);
+}
+
+function normalizeToIsoDate(dateVal?: string | Date | null): string | null {
+  if (!dateVal) return null;
+  if (typeof dateVal === "string") {
+    const trimmed = dateVal.trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+      return trimmed.slice(0, 10);
+    }
+    const dmyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+    if (dmyMatch) {
+      const day = dmyMatch[1].padStart(2, "0");
+      const month = dmyMatch[2].padStart(2, "0");
+      const year = dmyMatch[3];
+      return `${year}-${month}-${day}`;
+    }
+  }
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+function formatTargetDate(dateVal?: string | Date | null): string {
+  if (!dateVal) return "";
+  const iso = normalizeToIsoDate(dateVal);
+  if (iso) {
+    const [y, m, d] = iso.split("-");
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthName = months[parseInt(m, 10) - 1] || m;
+    return `${d} ${monthName} ${y}`;
+  }
+  return String(dateVal);
+}
+
+function isTransferOverdue(item?: TransferItem | null): boolean {
+  if (!item) return false;
+  if (item.status === "DELIVERED") return false;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const targetIso = item.targetDateIso || normalizeToIsoDate(item.targetDate);
+  if (!targetIso) return false;
+  return targetIso < todayIso;
 }
 
 function formatReportDate(dateVal?: string | Date | null): string {
@@ -239,6 +289,10 @@ export default function ReportTransfer() {
           ? new Date(rep.delivered_datetime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
           : "11:35 AM";
 
+        const rawTargetDate = (orderItem as any)?.target_date || (order as any)?.target_date || (rep as any)?.target_date;
+        const targetDateIso = normalizeToIsoDate(rawTargetDate) || undefined;
+        const targetDate = formatTargetDate(rawTargetDate);
+
         mappedTransfers.push({
           id: rep.lab_report_id,
           dispatchId,
@@ -267,6 +321,8 @@ export default function ReportTransfer() {
           clinicalRemarks: parsedMeta?.text || commentString || "All parameters evaluated. Laboratory diagnostics complete.",
           clinicalCorrelation: parsedMeta?.clinicalCorrelation || "Correlate clinically with physical findings and history.",
           parameters: parsedMeta?.parameters && parsedMeta.parameters.length > 0 ? parsedMeta.parameters : DEFAULT_CBC_PARAMETERS,
+          targetDate,
+          targetDateIso,
         });
       });
 
@@ -314,6 +370,10 @@ export default function ReportTransfer() {
           localStorage.getItem(`report_transferred_${item.lab_order_id}`) === "true"
         );
 
+        const rawTargetDate = (item as any)?.target_date || (parentOrder as any)?.target_date;
+        const targetDateIso = normalizeToIsoDate(rawTargetDate) || undefined;
+        const targetDate = formatTargetDate(rawTargetDate);
+
         mappedTransfers.push({
           id: `item-${item.lab_order_item_id}`,
           dispatchId: `DSP-${9100 + idx + 1}`,
@@ -342,10 +402,10 @@ export default function ReportTransfer() {
           clinicalRemarks: "Diagnostic results certified by Pathologist and ready for delivery.",
           clinicalCorrelation: "Correlate with attending physician assessment.",
           parameters: DEFAULT_CBC_PARAMETERS,
+          targetDate,
+          targetDateIso,
         });
       });
-
-      
 
       // Check any other sample completed & approved in Report Generation from registry
       if (typeof window !== "undefined") {
@@ -367,6 +427,10 @@ export default function ReportTransfer() {
           const isDelivered =
             localStorage.getItem(`report_transferred_${cs.id}`) === "true" ||
             localStorage.getItem(`report_transferred_${reportId}`) === "true";
+
+          const rawTargetDate = cs.targetDate || cs.targetDateIso || cs.target_date;
+          const targetDateIso = normalizeToIsoDate(rawTargetDate) || undefined;
+          const targetDate = formatTargetDate(rawTargetDate);
 
           mappedTransfers.push({
             id: `tx-${cs.id}`,
@@ -399,6 +463,8 @@ export default function ReportTransfer() {
               referenceRange: p.referenceRange || "Normal",
               status: ((p.status || "NORMAL").toUpperCase() === "COMPLETED" ? "NORMAL" : (p.status || "NORMAL").toUpperCase()) as any,
             })) : DEFAULT_CBC_PARAMETERS,
+            targetDate,
+            targetDateIso,
           });
         });
       }
@@ -683,6 +749,86 @@ export default function ReportTransfer() {
     [transfers],
   );
 
+  /* ---------- Admin Dashboard Horizontal KPI Track Scroll State ---------- */
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollButtons = useCallback(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }, []);
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    updateScrollButtons();
+    el.addEventListener("scroll", updateScrollButtons, { passive: true });
+    window.addEventListener("resize", updateScrollButtons);
+    return () => {
+      el.removeEventListener("scroll", updateScrollButtons);
+      window.removeEventListener("resize", updateScrollButtons);
+    };
+  }, [updateScrollButtons]);
+
+  const handleKpiScroll = (direction: "left" | "right") => {
+    const el = trackRef.current;
+    if (!el) return;
+    const scrollAmount = 450;
+    el.scrollBy({
+      left: direction === "left" ? -scrollAmount : scrollAmount,
+      behavior: "smooth",
+    });
+  };
+
+  /* ---------- KPI Cards configuration (Admin Dashboard style) ---------- */
+  const kpiCards = useMemo(
+    () => [
+      {
+        id: "total-dispatches",
+        label: "Total Dispatches",
+        subLabel: "Reports in dispatch pipeline",
+        value: transfers.length,
+        tag: "Total",
+        bg: "#D6E3FF",
+        valueColor: "#00488D",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <FileText className="w-[17px] h-[17px]" color="#00488D" />,
+        isActive: statusFilter === "ALL",
+        onClick: () => setStatusFilter("ALL"),
+      },
+      {
+        id: "report-transferred",
+        label: "Report Transferred",
+        subLabel: "Delivered to Doctor / EMR",
+        value: transferredCount,
+        tag: `${transfers.length > 0 ? Math.round((transferredCount / transfers.length) * 100) : 0}%`,
+        bg: "rgba(0, 200, 150, 0.12)",
+        valueColor: "#00A87E",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <CheckCircle2 className="w-[17px] h-[17px]" color="#00A87E" />,
+        isActive: statusFilter === "DELIVERED",
+        onClick: () => setStatusFilter((prev) => (prev === "DELIVERED" ? "ALL" : "DELIVERED")),
+      },
+      {
+        id: "transfer-pending",
+        label: "Transfer Pending",
+        subLabel: "Queued for portal delivery",
+        value: pendingTransferCount,
+        tag: "Pending",
+        bg: "rgba(255, 107, 53, 0.12)",
+        valueColor: "#7B3200",
+        iconBg: "#FFDBCB",
+        icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
+        isActive: statusFilter === "QUEUED",
+        onClick: () => setStatusFilter((prev) => (prev === "QUEUED" ? "ALL" : "QUEUED")),
+      },
+    ],
+    [transfers.length, transferredCount, pendingTransferCount, statusFilter]
+  );
+
   const activeParameters: DiagnosticParameter[] =
     selectedTransfer?.parameters && selectedTransfer.parameters.length > 0
       ? selectedTransfer.parameters
@@ -737,6 +883,20 @@ export default function ReportTransfer() {
                   {returnView === "forward" ? "Back to Forwarding" : "Back to Dispatches"}
                 </button>
               </div>
+
+              {/* Overdue Warning Banner */}
+              {isTransferOverdue(selectedTransfer) && (
+                <div className="mb-6 rounded-xl border border-rose-300 bg-rose-50/80 px-4 py-3 text-sm text-rose-900 flex items-center justify-between print-hide">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-2.5 w-2.5 rounded-full bg-rose-600 animate-pulse" />
+                    <span className="font-bold text-rose-800">TRANSFER OVERDUE:</span>
+                    <span>Target completion date was {selectedTransfer.targetDate || "passed"}. Expedite report dispatch immediately.</span>
+                  </div>
+                  <span className="px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide bg-rose-600 text-white rounded">
+                    OVERDUE
+                  </span>
+                </div>
+              )}
 
               {/* BEGIN: ReportHeader */}
               <header className="text-center pt-2">
@@ -825,6 +985,19 @@ export default function ReportTransfer() {
                     </span>
                     <span className="text-gray-900">
                       {selectedTransfer.reportedOn || "-"}
+                    </span>
+                    <span className="font-bold text-black uppercase tracking-tight">
+                      TARGET DATE:
+                    </span>
+                    <span className="text-gray-900 font-semibold flex items-center gap-1.5">
+                      <span className={isTransferOverdue(selectedTransfer) ? "text-rose-700 font-bold" : ""}>
+                        {selectedTransfer.targetDate || "-"}
+                      </span>
+                      {isTransferOverdue(selectedTransfer) && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                          OVERDUE
+                        </span>
+                      )}
                     </span>
                   </div>
                 </div>
@@ -1047,9 +1220,23 @@ export default function ReportTransfer() {
               </div>
 
               {/* Page Title */}
-              <h1 className="text-2xl font-bold text-gray-900 tracking-tight mb-8">
+              <h1 className="text-2xl font-bold text-gray-900 tracking-tight mb-6">
                 Forward Test Reports
               </h1>
+
+              {/* Overdue Warning in Forward View */}
+              {isTransferOverdue(selectedTransfer) && (
+                <div className="mb-6 rounded-xl border border-rose-300 bg-rose-50/80 px-4 py-3 text-sm text-rose-900 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-2.5 w-2.5 rounded-full bg-rose-600 animate-pulse" />
+                    <span className="font-bold text-rose-800">TRANSFER OVERDUE:</span>
+                    <span>Target completion date was {selectedTransfer.targetDate || "passed"}. Expedite dispatch immediately.</span>
+                  </div>
+                  <span className="px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide bg-rose-600 text-white rounded">
+                    OVERDUE
+                  </span>
+                </div>
+              )}
 
               {/* Content Dual-Card Grid Layout */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
@@ -1100,6 +1287,22 @@ export default function ReportTransfer() {
                       <p className="text-[15px] font-semibold text-gray-900">
                         {selectedTransfer.testProfile}
                       </p>
+                    </div>
+                    {/* Field: Target Date */}
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 mb-1.5">
+                        Target Date
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className={`text-[15px] font-semibold ${isTransferOverdue(selectedTransfer) ? "text-rose-700 font-bold" : "text-gray-900"}`}>
+                          {selectedTransfer.targetDate || "Not Specified"}
+                        </p>
+                        {isTransferOverdue(selectedTransfer) && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                            OVERDUE
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {/* Preview Action Button */}
                     <div className="pt-3">
@@ -1301,56 +1504,118 @@ export default function ReportTransfer() {
 
             {/* DashboardBody */}
             <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
-              {/* StatCardsRow */}
-              <section
-                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4"
-                data-purpose="kpi-metric-cards"
-              >
-                {/* Card 1: Report Transfer */}
-                <div className="bg-white rounded-2xl p-5 border border-emerald-200/80 shadow-xs flex items-center justify-between relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
-                  <div className="relative">
-                    <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
-                      Report Transfer
-                    </span>
-                    <h3 className="text-2xl font-extrabold text-emerald-950 mt-1">
-                      {transferredCount}
-                    </h3>
-                    <p className="text-[11px] text-emerald-600/80 mt-0.5">
-                      Reports transferred successfully
-                    </p>
-                  </div>
-                  <div className="w-11 h-11 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 relative">
-                    <svg className="w-5 h-5 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                    </svg>
+              {/* Key Performance Indicators - Admin Dashboard Style Scrollable Track */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between flex-wrap gap-2 px-1">
+                  <div>
+                    <h2 className="text-base font-bold text-[#1c1e21] tracking-tight">Key Performance Indicators</h2>
+                    <p className="text-xs text-[#70747c]">Real-time report dispatch pipeline and channel transmission logs</p>
                   </div>
                 </div>
 
-                {/* Card 2: Report Transfer Pending */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs flex items-center justify-between relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-20 h-20 bg-blue-50/50 rounded-full blur-2xl -mr-5 -mt-5 pointer-events-none" />
-                  <div className="relative">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                        Report Transfer Pending
-                      </span>
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                    </div>
-                    <h3 className="text-2xl font-extrabold text-slate-900 mt-1">
-                      {pendingTransferCount}
-                    </h3>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Awaiting report transfer
-                    </p>
+                <div className="relative">
+                  {canScrollLeft && (
+                    <button
+                      type="button"
+                      onClick={() => handleKpiScroll("left")}
+                      aria-label="Scroll left"
+                      className="absolute -left-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  <div
+                    className={`absolute left-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-r from-white to-transparent ${
+                      canScrollLeft ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+
+                  <div
+                    ref={trackRef}
+                    className="flex gap-[14px] overflow-x-auto scroll-smooth py-[6px] px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  >
+                    {kpiCards.map((card) => (
+                      <div
+                        key={card.id}
+                        onClick={card.onClick}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            card.onClick?.();
+                          }
+                        }}
+                        style={{
+                          background: card.bg,
+                          border: card.isActive ? `2.5px solid ${card.valueColor}` : "2.5px solid transparent",
+                          boxShadow: card.isActive
+                            ? `0 0 0 1px ${card.valueColor}20, 0 6px 18px ${card.valueColor}28`
+                            : "0 2px 10px rgba(0,0,0,0.06)",
+                        }}
+                        className="flex-[0_0_206px] min-w-[206px] rounded-[12px] p-[14px_16px] flex flex-col gap-[10px] cursor-pointer transition-all duration-200 select-none hover:-translate-y-[2px] hover:shadow-[0_6px_20px_rgba(0,0,0,0.10)]"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div
+                            style={{ background: card.iconBg }}
+                            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm"
+                          >
+                            {card.icon}
+                          </div>
+                          {card.tag && (
+                            <span
+                              style={{ color: card.valueColor }}
+                              className="text-[11px] font-bold px-[7px] py-[2px] rounded-full tracking-[-0.2px] bg-white/60 shadow-sm inline-flex items-center gap-1"
+                            >
+                              <span>{card.tag}</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <div
+                          style={{ color: card.valueColor }}
+                          className="text-[26px] font-extrabold leading-[1.05] tracking-[-0.6px]"
+                        >
+                          {card.value}
+                        </div>
+
+                        <div className="flex flex-col gap-[2px] min-w-0">
+                          <span
+                            style={{ color: card.valueColor }}
+                            className="text-[12.5px] font-bold tracking-tight truncate"
+                          >
+                            {card.label}
+                          </span>
+                          <span
+                            style={{ color: card.valueColor, opacity: 0.75 }}
+                            className="text-[11px] font-medium truncate"
+                          >
+                            {card.subLabel}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 relative">
-                    <svg className="w-5 h-5 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                    </svg>
-                  </div>
+
+                  <div
+                    className={`absolute right-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-l from-white to-transparent ${
+                      canScrollRight ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+
+                  {canScrollRight && (
+                    <button
+                      type="button"
+                      onClick={() => handleKpiScroll("right")}
+                      aria-label="Scroll right"
+                      className="absolute -right-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
-              </section>
+              </div>
 
               {/* TableContainerCard */}
               <section
@@ -1556,9 +1821,6 @@ export default function ReportTransfer() {
                         <th className="py-5 px-6 font-bold" scope="col">
                           RECIPIENT &amp; STATION
                         </th>
-                        <th className="py-5 px-6 font-bold" scope="col">
-                          CHANNEL
-                        </th>
                         <th
                           className="py-5 px-6 font-bold text-center"
                           scope="col"
@@ -1583,47 +1845,70 @@ export default function ReportTransfer() {
                       {filteredTransfers.length === 0 ? (
                         <tr>
                           <td
-                            colSpan={7}
+                            colSpan={6}
                             className="py-12 text-center text-slate-400 text-sm"
                           >
                             No dispatch logs found matching your criteria.
                           </td>
                         </tr>
                       ) : (
-                        filteredTransfers.map((t) => (
-                          <tr
-                            key={t.id}
-                            onClick={() => handleOpenForward(t)}
-                            className="hover:bg-slate-50/60 transition-colors cursor-pointer"
-                          >
-                            <td className="py-5 px-8 whitespace-nowrap">
-                              <span className="font-mono text-slate-900 text-sm font-semibold">
-                                {getDisplayBarcode(t)}
-                              </span>
-                            </td>
-                            <td className="py-5 px-6">
-                              <span className="font-semibold text-slate-900 block">
-                                {t.patientName}
-                              </span>
-                              <span className="text-xs text-slate-400 font-mono">
-                                {t.patientId}
-                              </span>
-                            </td>
-                            <td className="py-5 px-6">
-                              <span className="font-medium text-slate-800 block text-xs">
-                                {t.recipient}
-                              </span>
-                              {t.ackDetails && (
-                                <span className="text-xs text-slate-400 block truncate max-w-xs">
-                                  {t.ackDetails}
+                        filteredTransfers.map((t) => {
+                          const isOverdue = isTransferOverdue(t);
+                          return (
+                            <tr
+                              key={t.id}
+                              onClick={() => handleOpenForward(t)}
+                              className={`transition-colors cursor-pointer ${
+                                isOverdue
+                                  ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                                  : "hover:bg-slate-50/60"
+                              }`}
+                            >
+                              <td className="py-5 px-8 whitespace-nowrap">
+                                <span className="font-mono text-slate-900 text-sm font-semibold block">
+                                  {getDisplayBarcode(t)}
                                 </span>
-                              )}
-                            </td>
-                            <td className="py-5 px-6">
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                                {t.channel}
-                              </span>
-                            </td>
+                                {isOverdue && (
+                                  <span className="inline-flex items-center gap-1 mt-1 text-[11px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
+                                    <Clock className="w-3 h-3 text-rose-600" /> Overdue
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-5 px-6">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-semibold text-slate-900">
+                                    {t.patientName}
+                                  </span>
+                                  {isOverdue && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase shrink-0">
+                                      OVERDUE
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                  <span className="text-xs text-slate-400 font-mono">
+                                    {t.patientId}
+                                  </span>
+                                  <span className="text-xs text-slate-600 font-medium truncate max-w-[170px]" title={t.testProfile}>
+                                    · {t.testProfile}
+                                  </span>
+                                  {t.targetDate && (
+                                    <span className={`text-xs font-semibold ${isOverdue ? "text-rose-700" : "text-slate-500"}`}>
+                                      · Target: {t.targetDate}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-5 px-6">
+                                <span className="font-medium text-slate-800 block text-xs">
+                                  {t.recipient}
+                                </span>
+                                {t.ackDetails && (
+                                  <span className="text-xs text-slate-400 block truncate max-w-xs">
+                                    {t.ackDetails}
+                                  </span>
+                                )}
+                              </td>
                             <td className="py-5 px-6 text-center text-slate-600 font-mono text-xs">
                               {t.dispatchedAt}
                             </td>
@@ -1699,8 +1984,9 @@ export default function ReportTransfer() {
                               </div>
                             </td>
                           </tr>
-                        ))
-                      )}
+                        );
+                      })
+                    )}
                     </tbody>
                   </table>
                 </div>
