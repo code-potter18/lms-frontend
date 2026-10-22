@@ -66,7 +66,7 @@ interface MedicineSearchOption {
   route: string | null;
 }
 
-interface AdvicePrescriptionItemRecord {
+export interface AdvicePrescriptionItemRecord {
   prescription_item_id: string;
   medicine_id: string;
   dosage: string | null;
@@ -83,7 +83,7 @@ interface AdvicePrescriptionItemRecord {
   } | null;
 }
 
-interface AdvicePrescriptionRecord {
+export interface AdvicePrescriptionRecord {
   prescription_id: string;
   prescription_status: string | null;
   prescription_items?: AdvicePrescriptionItemRecord[];
@@ -496,6 +496,69 @@ const adviceRowsFromPrescription = (
       };
       return { ...row, savedKey: adviceRowKey(row) };
     });
+
+/* The visit's saved Advice prescription: the one this browser saved for the
+   encounter, else the appointment's latest prescription with Advice items.
+   Shared with the Summary step. */
+export const findAdvicePrescription = async (
+  encounterNo: string,
+  appointmentId?: string | null
+): Promise<AdvicePrescriptionRecord | null> => {
+  const storedId = localStorage.getItem(adviceStorageKey(encounterNo));
+  if (storedId) {
+    try {
+      const response = await API.get<{
+        success: boolean;
+        data: AdvicePrescriptionRecord;
+      }>(`/prescriptions/${encodeURIComponent(storedId)}`);
+      const record = response.data.data;
+      if (record && record.prescription_status !== "CANCELLED") {
+        return record;
+      }
+    } catch (error) {
+      console.error("Failed to load the saved Advice prescription:", error);
+    }
+  }
+  if (!appointmentId) return null;
+  const response = await API.get<{
+    success: boolean;
+    data: { prescriptions: AdvicePrescriptionRecord[] };
+  }>("/prescriptions", {
+    params: {
+      appointmentId,
+      sortBy: "created_at",
+      sortOrder: "desc",
+      limit: 20,
+    },
+  });
+  return (
+    (response.data.data?.prescriptions ?? []).find(
+      (record) =>
+        record.prescription_status !== "CANCELLED" &&
+        (record.prescription_items ?? []).some(
+          (item) => item.drug_role === ADVICE_DRUG_ROLE
+        )
+    ) ?? null
+  );
+};
+
+/* The Advice medicines of a saved prescription, as printed. */
+export const adviceMedicinesOf = (record: AdvicePrescriptionRecord | null) =>
+  record
+    ? adviceRowsFromPrescription({
+        ...record,
+        prescription_items: (record.prescription_items ?? []).filter(
+          (item) => !item.drug_role || item.drug_role === ADVICE_DRUG_ROLE
+        ),
+      }).map((row) => ({
+        form: row.drugForm,
+        name: row.drugName,
+        dosage: row.dosage,
+        frequency: row.frequency,
+        duration: row.duration,
+        instruction: row.instruction,
+      }))
+    : [];
 
 const matchesEveryWord = (text: string, query: string) => {
   const haystack = text.toLowerCase();
@@ -1146,45 +1209,7 @@ const AdviceSection = forwardRef<
     const appointmentId = encounter?.appointment_id;
     let cancelled = false;
 
-    const findSavedPrescription =
-      async (): Promise<AdvicePrescriptionRecord | null> => {
-        const storedId = localStorage.getItem(adviceStorageKey(encounterNo));
-        if (storedId) {
-          try {
-            const response = await API.get<{
-              success: boolean;
-              data: AdvicePrescriptionRecord;
-            }>(`/prescriptions/${encodeURIComponent(storedId)}`);
-            const record = response.data.data;
-            if (record && record.prescription_status !== "CANCELLED") {
-              return record;
-            }
-          } catch (error) {
-            console.error("Failed to load the saved Advice prescription:", error);
-          }
-        }
-        if (!appointmentId) return null;
-        const response = await API.get<{
-          success: boolean;
-          data: { prescriptions: AdvicePrescriptionRecord[] };
-        }>("/prescriptions", {
-          params: {
-            appointmentId,
-            sortBy: "created_at",
-            sortOrder: "desc",
-            limit: 20,
-          },
-        });
-        return (
-          (response.data.data?.prescriptions ?? []).find(
-            (record) =>
-              record.prescription_status !== "CANCELLED" &&
-              (record.prescription_items ?? []).some(
-                (item) => item.drug_role === ADVICE_DRUG_ROLE
-              )
-          ) ?? null
-        );
-      };
+    const findSavedPrescription = () => findAdvicePrescription(encounterNo, appointmentId);
 
     setAdviceLoading(true);
     findSavedPrescription()

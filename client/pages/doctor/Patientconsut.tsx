@@ -285,11 +285,15 @@ const Consultation: React.FC = () => {
     "SUMMARY",
   ];
 
+  /* Steps that open without completing the earlier ones. The Summary is
+     one of them: a review or new visit without chemotherapy still needs its
+     summary and printout. */
   const DIRECT_ACCESS_STEPS = [
     "DISCHARGE MEDICATION",
     "CHEMOTHERAPY ORDER",
     "FOLLOW UP",
     "DIAGNOSIS",
+    "SUMMARY",
   ];
 
   /* Opening straight on the Chemotherapy Order (a chemo plan in progress):
@@ -1146,6 +1150,9 @@ const Consultation: React.FC = () => {
                     appointmentId={consultationState?.appointmentId}
                     encounterNo={encounter?.encounter_no}
                     measurements={measurements}
+                    investigations={selectedInvestigations}
+                    investigationDetails={investigationDetails}
+                    investigationInstructions={investigationInstructions}
                   />
                 ) : null}
 

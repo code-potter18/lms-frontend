@@ -30,8 +30,6 @@ import InvestigationOrderCard, {
   EMPTY_INVESTIGATION_DETAIL,
 } from "./InvestigationOrderCard";
 import type { ConsultationState, InvestigationOrderDetail } from "./types";
-import { computeBmi, computeBsa } from "../../../utils/vitals";
-import { printConsultationSummary } from "../../../utils/consultationSummaryPrint";
 import {
   formatDateDMY,
   formatPickedDate,
@@ -915,142 +913,6 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
   const handleInvestigationsChange = (names: string[]) => {
     setSelectedInvestigations(names);
     setCustomInvestigations((prev) => prev.filter((item) => names.includes(item)));
-  };
-
-  /* ============================================================
-     PRINT
-  ============================================================ */
-
-  /* Prints a clean A4 report built from the current form values (see
-     utils/consultationSummaryPrint.ts), not a screenshot of the form. */
-  const printSummary = () => {
-    const clinical = clinicalDetailsRef.current?.getPrintSummary();
-    const vitalNumber = (value: number | string | null | undefined) => {
-      const parsed = parseFloat(String(value ?? ""));
-      return Number.isFinite(parsed) ? parsed : null;
-    };
-    const height = vitalNumber(encounter?.height);
-    const weight = vitalNumber(encounter?.weight);
-    const systolic = vitalNumber(encounter?.systolic_bp);
-    const diastolic = vitalNumber(encounter?.diastolic_bp);
-    const bmi = vitalNumber(encounter?.BMI) ?? computeBmi(height, weight);
-    const bsa = computeBsa(height, weight);
-    const withUnit = (value: number | null, unit: string) =>
-      value === null ? "" : `${value}${unit}`;
-
-    printConsultationSummary({
-      hospitalName: patient?.branch?.branch_name ?? "",
-      patient: {
-        name: patientName,
-        displayId: patientDisplayId,
-        age:
-          patient?.patient_age != null ? `${patient.patient_age} yrs` : "",
-        gender: patient?.patient_gender ?? "",
-        mobile: patient?.patient_primary_mobile ?? "",
-      },
-      visit: {
-        date: visitDate,
-        time: visitTime,
-        type: visitType,
-        consultedBy,
-        encounterNo: encounter?.encounter_no ?? "",
-        firstVisit: registeredOn,
-      },
-      vitals: [
-        { label: "Height", value: withUnit(height, " cm") },
-        { label: "Weight", value: withUnit(weight, " kg") },
-        { label: "BMI", value: withUnit(bmi, "") },
-        { label: "BSA", value: withUnit(bsa, " m²") },
-        {
-          label: "Blood Pressure",
-          value:
-            systolic !== null && diastolic !== null
-              ? `${systolic}/${diastolic} mmHg`
-              : "",
-        },
-        { label: "Pulse", value: withUnit(vitalNumber(encounter?.pulse), " bpm") },
-        {
-          label: "Temperature",
-          value: withUnit(vitalNumber(encounter?.temperature), " °C"),
-        },
-        { label: "SpO2", value: withUnit(vitalNumber(encounter?.spo2), "%") },
-        {
-          label: "Respiratory Rate",
-          value: withUnit(vitalNumber(encounter?.respiratory_rate), " /min"),
-        },
-        {
-          label: "Pain Score",
-          value: withUnit(vitalNumber(encounter?.pain_score), "/10"),
-        },
-      ],
-      chiefComplaint,
-      reasonOfVisit,
-      consultationNotes,
-      historyOfPresentIllness,
-      performanceStatus: clinical?.performanceStatus ?? "",
-      symptoms: clinical?.symptoms ?? [],
-      allergies: clinical?.allergies ?? [],
-      comorbidities: clinical?.comorbidities ?? [],
-      personalHistory: [
-        { label: "Immunization", value: selectedImmunizations.join(", ") },
-        {
-          label: "Drug Consumption",
-          value: selectedDrugConsumptions.join(", "),
-        },
-        { label: "Diet Type", value: dietType },
-      ],
-      generalExamination: [...generalExamFindings, ...generalExamOthers],
-      systemicExamination: [
-        { label: "CNS", value: systemicCns },
-        { label: "CVS", value: systemicCvs },
-        { label: "Respiratory", value: systemicRespiratory },
-        { label: "Per Abdomen", value: systemicPerAbdomen },
-      ],
-      clinicalFindings: systemicClinicalFindings,
-      pastHistory,
-      pastTreatments: selectedTreatmentTypes.map((name) => ({
-        type: name,
-        date: formatDateDMY(treatmentDetails[name]?.date),
-        note: treatmentDetails[name]?.note ?? "",
-        response: treatmentDetails[name]?.response ?? "",
-      })),
-      previousReports: selectedReports.map((key) => ({
-        test: reportTestName(key),
-        date: formatDateDMY(reportDetails[key]?.date),
-        result: reportDetails[key]?.result ?? "",
-        impression: reportDetails[key]?.impression ?? "",
-      })),
-      previousReportsText: reportsText,
-      molecularTests: selectedMolecularTests.map((name) => ({
-        test: name,
-        date: formatDateDMY(molecularTestDetails[name]?.date),
-        result: molecularTestDetails[name]?.result ?? "",
-        impression: molecularTestDetails[name]?.impression ?? "",
-      })),
-      investigations: selectedInvestigations.map((name) => {
-        const detail = investigationDetail(name);
-        return {
-          name,
-          method: isMolecularTest(name) ? detail.method : "",
-          notes: detail.notes,
-          priority: detail.priority,
-          targetDate: detail.targetDate,
-        };
-      }),
-      investigationInstructions: additionalInstructions,
-      medicines: (adviceSectionRef.current?.getDraftRows() ?? []).map(
-        (row) => ({
-          form: row.drugForm,
-          name: row.drugName,
-          dosage: row.dosage,
-          frequency: row.frequency,
-          duration: row.duration,
-          instruction: row.instruction,
-        })
-      ),
-      adviceDiscussion: adviceSectionRef.current?.getDraftDiscussion() ?? "",
-      adviceFollowUpDate: adviceSectionRef.current?.getDraftFollowUpDate() ?? "",
-    });
   };
 
   /* ============================================================
@@ -2451,45 +2313,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       ACTION BUTTONS
     ================================================= */}
 
-    <div className="flex w-full items-center justify-between">
-
-    {/* PRINT */}
-
-    <div className="h-9 w-[213px]">
-
-      <button
-        onClick={printSummary}
-        className="flex h-9 w-[213px] items-center justify-center gap-2 rounded-lg border-0 bg-blue-700 px-[25px] py-[9px] text-[10px] font-bold leading-5 text-white"
-      >
-
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="white"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="h-6 w-6"
-        >
-          <path d="M6 9V2h12v7" />
-
-          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-
-          <rect
-            x="6"
-            y="14"
-            width="12"
-            height="8"
-          />
-        </svg>
-
-        <span>
-          Print Summary
-        </span>
-
-      </button>
-
-    </div>
+    {/* The visit's printout lives on the Summary step ("Add To Print"). */}
+    <div className="flex w-full items-center justify-end">
 
     {/* RIGHT ACTIONS */}
 
