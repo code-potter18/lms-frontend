@@ -11,7 +11,7 @@ import API from "../../../api/axios";
 import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
 import VoiceToText from "@/components/ui/voicetotext";
 import DateInputField from "./DateInputField";
-import { dateOnlyDMY, dmyToIsoStrict, targetDateError } from "./helpers";
+import { dateOnlyDMY, dmyToIsoStrict, readConsultationDraft, targetDateError } from "./helpers";
 
 /* ============================================================
    ADVICE (OPD PRESCRIPTION)
@@ -1177,9 +1177,7 @@ const AdviceSection = forwardRef<
     let initial = saved;
     let initialFollowUp = savedFollowUp;
     try {
-      const draft = JSON.parse(
-        localStorage.getItem("hms_consultation_draft") ?? "{}"
-      );
+      const draft = readConsultationDraft(encounter.encounter_no, patientId);
       if (draft.patientId && draft.patientId === patientId) {
         if (!saved && typeof draft.adviceDiscussion === "string") {
           initial = draft.adviceDiscussion;
@@ -1225,9 +1223,7 @@ const AdviceSection = forwardRef<
         }
         setAdvicePrescription("", encounterNo);
         try {
-          const draft = JSON.parse(
-            localStorage.getItem("hms_consultation_draft") ?? "{}"
-          );
+          const draft = readConsultationDraft(encounterNo, patientId);
           if (
             draft.patientId &&
             draft.patientId === patientId &&

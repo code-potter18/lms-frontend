@@ -378,6 +378,73 @@ export const resolveEffectiveStartDate = (
    can be split back apart when the encounter is loaded again. */
 export const PAST_HISTORY_MARKER = "[Past History]";
 
+/* ---------------- Visit investigations ----------------
+   Investigations typed by the doctor that are not lab tests can't be lab
+   order items; they are kept on the visit's lab order description. */
+export const OTHER_INVESTIGATIONS_PREFIX = "Other investigations: ";
+
+export const otherInvestigationsOf = (labDescription?: string | null): string[] =>
+  labDescription?.startsWith(OTHER_INVESTIGATIONS_PREFIX)
+    ? labDescription
+        .slice(OTHER_INVESTIGATIONS_PREFIX.length)
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean)
+    : [];
+
+/* ---------------- Consultation draft ("Save as Draft") ----------------
+   One draft per visit (encounter), else per patient - never one shared
+   key, which let one patient's notes show up for another. A draft left in
+   the old shared key is taken over only by its own patient. */
+const LEGACY_CONSULTATION_DRAFT_KEY = "hms_consultation_draft";
+
+const consultationDraftKey = (encounterNo?: string | null, patientId?: string | null) =>
+  encounterNo
+    ? `hms_consultation_draft_${encounterNo}`
+    : patientId
+      ? `hms_consultation_draft_patient_${patientId}`
+      : "";
+
+export const readConsultationDraft = (
+  encounterNo?: string | null,
+  patientId?: string | null
+): Record<string, any> => {
+  const key = consultationDraftKey(encounterNo, patientId);
+  if (!key) return {};
+  try {
+    const own = localStorage.getItem(key);
+    if (own) return JSON.parse(own) ?? {};
+    const legacy = localStorage.getItem(LEGACY_CONSULTATION_DRAFT_KEY);
+    if (legacy) {
+      const parsed = JSON.parse(legacy) ?? {};
+      if (patientId && parsed.patientId === patientId) {
+        localStorage.setItem(key, legacy);
+        localStorage.removeItem(LEGACY_CONSULTATION_DRAFT_KEY);
+        return parsed;
+      }
+    }
+  } catch {
+    /* Malformed draft - ignore it. */
+  }
+  return {};
+};
+
+export const writeConsultationDraft = (
+  encounterNo: string | null | undefined,
+  patientId: string | null | undefined,
+  data: Record<string, unknown>
+) => {
+  const key = consultationDraftKey(encounterNo, patientId);
+  if (key) localStorage.setItem(key, JSON.stringify({ ...data, patientId }));
+};
+
+/* The visit's consultation was saved: its draft is no longer needed. */
+export const clearConsultationDraft = (encounterNo?: string | null, patientId?: string | null) => {
+  const key = consultationDraftKey(encounterNo, patientId);
+  if (key) localStorage.removeItem(key);
+  if (patientId) localStorage.removeItem(consultationDraftKey(null, patientId));
+};
+
 /* ============================================================
    ACTIVE ENCOUNTER LOOKUP
    The encounter exists in the DB but scoped queries can still come

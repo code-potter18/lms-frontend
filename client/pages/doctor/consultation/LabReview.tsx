@@ -10,7 +10,7 @@ import {
 } from "../../../api/labOrder.api";
 import { UserProfileDropdown } from "../../../components/ui/User_profile_dropdown";
 import VoiceToText from "@/components/ui/voicetotext";
-import { dmyToIsoStrict, findActiveEncounter } from "./helpers";
+import { dmyToIsoStrict, findActiveEncounter, OTHER_INVESTIGATIONS_PREFIX } from "./helpers";
 import { BackIcon, CheckIcon } from "./icons";
 import type { InvestigationOrderDetail } from "./types";
 
@@ -83,6 +83,9 @@ const LabReview: React.FC<{
   testDetails?: Record<string, InvestigationOrderDetail>;
   /* Consultation's Additional Instructions -> lab_order.clinical_notes. */
   instructions?: string;
+  /* Investigations typed by the doctor that are not lab tests - kept on
+     the visit's lab order (not orderable by the lab). */
+  otherInvestigations?: string[];
   onOrdered?: (testIds: string[]) => void;
   onNext?: () => void;
 }> = ({
@@ -94,6 +97,7 @@ const LabReview: React.FC<{
   pendingTests = [],
   testDetails = {},
   instructions = "",
+  otherInvestigations,
   onOrdered,
   onNext,
 }) => {
@@ -123,7 +127,7 @@ const LabReview: React.FC<{
     setItemsLoading(true);
     setItemsError("");
     labOrderItemApi
-      .getAll()
+      .getAll(patientId ? { patientId } : undefined)
       .then((response) => {
         if (cancelled) return;
         const allItems = response.data.data ?? [];
@@ -218,6 +222,12 @@ const LabReview: React.FC<{
             ? { clinical_notes: instructions.trim() }
             : {}),
           ...(branchId ? { branch_id: branchId } : {}),
+          /* The visit it belongs to - so a reopened visit (and its
+             Summary) finds its investigations again. */
+          ...(appointmentId ? { appointment_id: appointmentId } : {}),
+          ...((otherInvestigations ?? []).length > 0
+            ? { lab_description: `${OTHER_INVESTIGATIONS_PREFIX}${(otherInvestigations ?? []).join(", ")}` }
+            : {}),
         });
 
         const labOrderId = orderResponse.data.data?.lab_order_id;

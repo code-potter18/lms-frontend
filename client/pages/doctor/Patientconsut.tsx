@@ -41,7 +41,8 @@ import type {
   InvestigationOrderDetail,
   MeasurementValues,
 } from "./consultation/types";
-import { findActiveEncounter, formatDateDMY } from "./consultation/helpers";
+import { findActiveEncounter, formatDateDMY, otherInvestigationsOf } from "./consultation/helpers";
+import { labOrderItemApi } from "../../api/labOrder.api";
 
 type ToastMessage = string;
 
@@ -682,6 +683,66 @@ const Consultation: React.FC = () => {
     });
   }, []);
 
+  /* Investigations typed by the doctor (not lab tests) - kept on the
+     visit's lab order by Lab Review. */
+  const otherInvestigations = selectedInvestigations.filter(
+    (name) => !labTests.some((test) => test.test_name === name)
+  );
+
+  /* A reopened visit: the investigations saved on its lab orders come back
+     into the Consultation (and the Summary), already marked as ordered so
+     Lab Review never orders them twice. */
+  const visitAppointmentId = consultationState?.appointmentId;
+  useEffect(() => {
+    if (!visitAppointmentId) return;
+    let cancelled = false;
+    labOrderItemApi
+      .getAll({ appointmentId: visitAppointmentId })
+      .then((response) => {
+        if (cancelled) return;
+        const isCancelled = (value?: string | null) => String(value ?? "").toLowerCase() === "cancelled";
+        const items = (response.data.data ?? []).filter(
+          (item) => !isCancelled(item.item_status) && !isCancelled(item.lab_order?.order_status)
+        );
+        if (items.length === 0) return;
+        const orders = [...new Map(items.map((item) => [item.lab_order_id, item.lab_order])).values()];
+        const testNames = items
+          .map((item) => item.lab_test_master?.test_name)
+          .filter((name): name is string => Boolean(name));
+        const typedNames = orders.flatMap((order) => otherInvestigationsOf(order?.lab_description));
+        const savedInstructions =
+          orders.map((order) => order?.clinical_notes?.trim() ?? "").find(Boolean) ?? "";
+
+        setSelectedInvestigations((current) =>
+          current.length > 0 ? current : [...new Set([...testNames, ...typedNames])]
+        );
+        setInvestigationDetails((current) => {
+          const next = { ...current };
+          items.forEach((item) => {
+            const name = item.lab_test_master?.test_name;
+            if (!name || next[name]) return;
+            next[name] = {
+              notes: item.clinical_notes ?? "",
+              priority: item.priority === "Urgent" ? "Urgent" : "Normal",
+              targetDate: item.target_date ? formatDateDMY(item.target_date) : "",
+              method: (item.method ?? "") as InvestigationOrderDetail["method"],
+            };
+          });
+          return next;
+        });
+        setInvestigationInstructions((current) => current || savedInstructions);
+        setOrderedTestIds((current) => {
+          const next = new Set(current);
+          items.forEach((item) => next.add(item.lab_test_id));
+          return next;
+        });
+      })
+      .catch((error) => console.error("Failed to load the visit's investigations:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [visitAppointmentId]);
+
   /* ============================================================
      STEPS
   ============================================================ */
@@ -1093,6 +1154,7 @@ const Consultation: React.FC = () => {
                     pendingTests={pendingLabTests}
                     testDetails={investigationDetails}
                     instructions={investigationInstructions}
+                    otherInvestigations={otherInvestigations}
                     onOrdered={handleTestsOrdered}
                     onNext={() => { selectStep("DIAGNOSIS", markStepCompleted("LAB REPORT REVIEW")); }}
                   />

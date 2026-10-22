@@ -603,7 +603,7 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
         const items = results.filter(Boolean) as LabOrderItemRecord[];
         if (items.length > 0) return items;
       }
-      const response = await labOrderItemApi.getAll();
+      const response = await labOrderItemApi.getAll({ patientId: pid });
       return (response.data.data ?? []).filter((item) => item.lab_order?.patient_history?.patient_id === pid);
     };
 

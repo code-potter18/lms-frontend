@@ -37,6 +37,9 @@ import {
   parsePickedDate,
   PAST_HISTORY_MARKER,
   targetDateError,
+  readConsultationDraft,
+  writeConsultationDraft,
+  clearConsultationDraft,
 } from "./helpers";
 
 /* ============================================================
@@ -216,6 +219,19 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
     []
   );
 
+  /* Typed investigations restored with a reopened visit show as custom
+     options again. */
+  useEffect(() => {
+    if (labTestsLoading) return;
+    const labNames = new Set(labTests.map((test) => test.test_name));
+    const missing = selectedInvestigations.filter((name) => !labNames.has(name));
+    if (missing.length === 0) return;
+    setCustomInvestigations((current) => {
+      const added = missing.filter((name) => !current.includes(name));
+      return added.length > 0 ? [...current, ...added] : current;
+    });
+  }, [selectedInvestigations, labTests, labTestsLoading]);
+
   const investigationDetail = (name: string) =>
     investigationDetails[name] ?? EMPTY_INVESTIGATION_DETAIL;
 
@@ -325,17 +341,9 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
        clinical_notes column, separated by a [Past History] marker
        (see proceedNext). A saved draft takes precedence over the
        encounter so in-session work is never clobbered. */
-    let draftNotes = "";
-    let draftPast = "";
-    try {
-      const draft = JSON.parse(
-        localStorage.getItem("hms_consultation_draft") ?? "{}"
-      );
-      draftNotes = draft.consultationNotes ?? "";
-      draftPast = draft.pastHistory ?? "";
-    } catch {
-      /* Malformed draft - fall back to the encounter. */
-    }
+    const draft = readConsultationDraft(encounter?.encounter_no, patientDisplayId);
+    const draftNotes: string = draft.consultationNotes ?? "";
+    const draftPast: string = draft.pastHistory ?? "";
 
     if (draftNotes) {
       setConsultationNotes(draftNotes);
@@ -860,21 +868,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
      LOAD DRAFT
   ============================================================ */
 
-  useEffect(() => {
-    const saved = localStorage.getItem("hms_consultation_draft");
-
-    if (!saved) return;
-
-    try {
-      const data = JSON.parse(saved);
-
-      if (data.consultationNotes) {
-        setConsultationNotes(data.consultationNotes);
-      }
-    } catch (error) {
-      console.error("Draft loading failed", error);
-    }
-  }, []);
+  /* The visit's draft is restored with the encounter (above). */
 
   /* ============================================================
      INVESTIGATION
@@ -931,10 +925,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       investigations: selectedInvestigations,
     };
 
-    localStorage.setItem(
-      "hms_consultation_draft",
-      JSON.stringify(data)
-    );
+    writeConsultationDraft(encounter?.encounter_no, patientDisplayId, data);
 
     showToast("Consultation saved as draft");
   };
@@ -1247,6 +1238,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       }
 
       showToast("Consultation saved");
+      /* Saved to the visit: the draft would only shadow it on reopen. */
+      clearConsultationDraft(encounter.encounter_no, patientDisplayId);
 
       onProceed();
     } catch (error: any) {
