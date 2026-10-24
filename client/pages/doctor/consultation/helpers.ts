@@ -868,6 +868,7 @@ export type PlanOrderTarget = {
   cycle: number;
   day: number;
   hydration?: ChemoPlanOrderPayload["hydration"];
+  investigations?: ChemoPlanOrderPayload["investigations"];
   /* The order's Post Chemo Instructions / Additional Notes; left out keeps
      what the day's order already has. */
   chemoInstructions?: string;
@@ -959,7 +960,9 @@ export const createChemotherapyPlanForPatient = async (
     orders: ChemoPlanOrderHeader[] | null | undefined
   ): Promise<string | undefined> => {
     const target = options?.order;
-    if (!target || !planItems || planItems.length === 0) return undefined;
+    const hasItems = Boolean(planItems && planItems.length > 0);
+    const hasInvestigations = target?.investigations !== undefined;
+    if (!target || (!hasItems && !hasInvestigations)) return undefined;
     if (target.planId && target.planId !== planId) return undefined;
     const saved = (orders ?? []).find(
       (order) =>
@@ -970,8 +973,9 @@ export const createChemotherapyPlanForPatient = async (
     }
     try {
       await chemotherapyApi.savePlanOrder(planId, target.cycle, target.day, {
-        items: planItems,
+        items: planItems ?? [],
         ...(target.hydration ? { hydration: target.hydration } : {}),
+        ...(target.investigations !== undefined ? { investigations: target.investigations } : {}),
         dosing: orderDosingFromSnapshot(dosing),
         encounter_no: encounter.encounter_no ?? null,
         ...(target.chemoInstructions !== undefined

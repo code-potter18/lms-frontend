@@ -125,13 +125,12 @@ export function SystemIntegrityWidget({
       if (canReadLabs) {
         tasks.push(
           labOrderApi
-            .getAll({
-              priority: "URGENT",
-              branch_id: isAllBranches ? undefined : selectedBranchId,
-            })
+            .getAll()
             .then((res) => {
-              const orders = res.data?.data?.orders || [];
-              setUrgentLabOrdersCount(orders.length);
+              const data: any = res.data?.data;
+              const orders = Array.isArray(data) ? data : data?.orders || [];
+              const urgent = orders.filter((o: any) => (o?.priority || "").toUpperCase() === "URGENT" || (o?.priority || "").toUpperCase() === "STAT");
+              setUrgentLabOrdersCount(urgent.length);
             })
             .catch((err) => console.warn("[SystemIntegrity] Lab scan warning:", err))
         );

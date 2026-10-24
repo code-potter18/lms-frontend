@@ -5,11 +5,16 @@ import {
   chemotherapyApi,
   isChemoPlanClosed,
   type ChemoPlanHydration,
+  type ChemoPlanInvestigation,
+  type ChemoPlanInvestigationCategory,
+  type ChemoPlanInvestigationStatus,
+  type ChemoMedicineInvestigationSuggestion,
   type ChemoPlanItem,
   type ChemoPlanOrder,
   type ChemoPlanOrderHeader,
   type ChemoPlanScheduleRow,
 } from "../../../api/chemotherapy.api";
+import { labTestMasterApi } from "../../../api/labTestMaster.api";
 import { getUser } from "../../../utils/token";
 import { Calendar } from "../../../components/ui/calendar";
 import {
@@ -266,6 +271,168 @@ const CUSTOM_DRUG_VALUE = "__custom_drug__";
 
 type RowKind = "drug" | "premedication" | "supportive" | "dilution";
 
+/* Editable Investigations tab row. `id` is local only; a saved row keeps its
+   investigation_id so edits update the same record when the day is re-saved. */
+type InvestigationRow = {
+  id: number;
+  investigationId: string;
+  labTestId: string;
+  name: string;
+  category: ChemoPlanInvestigationCategory;
+  type: string;
+  sourceMedicineIds: string;
+  sourceDrugNames: string;
+  sourceTestText: string;
+  phase: string;
+  priority: string;
+  targetDate: string;
+  notes: string;
+  status: ChemoPlanInvestigationStatus;
+  labOrderId: string;
+  labOrderItemId: string;
+};
+
+const INVESTIGATION_CATEGORIES: {
+  value: ChemoPlanInvestigationCategory;
+  label: string;
+}[] = [
+  { value: "LAB", label: "Lab" },
+  { value: "NON_LAB", label: "Non-lab" },
+  { value: "TISSUE", label: "Tissue / Molecular" },
+];
+
+const INVESTIGATION_STATUSES: ChemoPlanInvestigationStatus[] = [
+  "PLANNED",
+  "ORDERED",
+  "CANCELLED",
+];
+
+const INVESTIGATION_PRIORITIES = ["Normal", "High", "Urgent"];
+
+const investigationCategoryLabel = (category: ChemoPlanInvestigationCategory) =>
+  INVESTIGATION_CATEGORIES.find((item) => item.value === category)?.label ??
+  category;
+
+const investigationStatusClass = (status: ChemoPlanInvestigationStatus) => {
+  if (status === "ORDERED") return "bg-blue-50 text-blue-700";
+  if (status === "CANCELLED") return "bg-red-50 text-red-600";
+  return "bg-gray-100 text-gray-600";
+};
+
+const normalizeInvestigationName = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const investigationRowKey = (row: InvestigationRow) =>
+  `${row.category}:${
+    row.category === "LAB" && row.labTestId
+      ? row.labTestId
+      : normalizeInvestigationName(row.name)
+  }`;
+
+const joinSources = (left: string, right: string) => {
+  const values = `${left},${right}`
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return [...new Set(values)].join(", ");
+};
+
+/* Suggestions, saved rows and manual rows can overlap. LAB rows are unique by
+   lab_test_id; non-lab / tissue rows by their normalized name. The first row
+   wins (a saved / edited row keeps its notes and status), while its source
+   drugs absorb anything the duplicate knew about. */
+const dedupeInvestigationRows = (rows: InvestigationRow[]) => {
+  const unique = new Map<string, InvestigationRow>();
+  for (const row of rows) {
+    const key = investigationRowKey(row);
+    const current = unique.get(key);
+    if (!current) {
+      unique.set(key, { ...row });
+      continue;
+    }
+    unique.set(key, {
+      ...current,
+      sourceMedicineIds: joinSources(
+        current.sourceMedicineIds,
+        row.sourceMedicineIds
+      ),
+      sourceDrugNames: joinSources(current.sourceDrugNames, row.sourceDrugNames),
+      sourceTestText: current.sourceTestText || row.sourceTestText,
+    });
+  }
+  return [...unique.values()];
+};
+
+const investigationRecordToRow = (
+  record: ChemoPlanInvestigation,
+  id: number
+): InvestigationRow => ({
+  id,
+  investigationId: record.investigation_id ?? "",
+  labTestId: record.lab_test_id ?? "",
+  name: record.investigation_name,
+  category: (record.investigation_category ??
+    "NON_LAB") as ChemoPlanInvestigationCategory,
+  type: record.investigation_type ?? "",
+  sourceMedicineIds: record.source_medicine_ids ?? "",
+  sourceDrugNames: record.source_drug_names ?? "",
+  sourceTestText: record.source_test_text ?? "",
+  phase: record.monitoring_phase ?? "BASELINE",
+  priority: record.priority ?? "Normal",
+  targetDate: record.target_date ? String(record.target_date).slice(0, 10) : "",
+  notes: record.clinical_notes ?? "",
+  status: (record.item_status ?? "PLANNED") as ChemoPlanInvestigationStatus,
+  labOrderId: record.lab_order_id ?? "",
+  labOrderItemId: record.lab_order_item_id ?? "",
+});
+
+const investigationSuggestionToRow = (
+  suggestion: ChemoMedicineInvestigationSuggestion,
+  id: number,
+  targetDate: string
+): InvestigationRow => ({
+  id,
+  investigationId: "",
+  labTestId: suggestion.lab_test_id ?? "",
+  name: suggestion.investigation_name,
+  category: (suggestion.investigation_category ??
+    "NON_LAB") as ChemoPlanInvestigationCategory,
+  type: suggestion.investigation_type ?? "",
+  sourceMedicineIds: suggestion.source_medicine_ids ?? "",
+  sourceDrugNames: suggestion.source_drug_names ?? "",
+  sourceTestText: suggestion.source_test_text ?? "",
+  phase: suggestion.monitoring_phase ?? "BASELINE",
+  priority: suggestion.priority ?? "Normal",
+  targetDate,
+  notes: suggestion.clinical_notes ?? "",
+  status: (suggestion.item_status ?? "PLANNED") as ChemoPlanInvestigationStatus,
+  labOrderId: "",
+  labOrderItemId: "",
+});
+
+const investigationPayload = (rows: InvestigationRow[]) =>
+  dedupeInvestigationRows(rows).map((row) => ({
+    investigation_id: row.investigationId || null,
+    lab_test_id: row.category === "LAB" ? row.labTestId || null : null,
+    investigation_name: row.name.trim(),
+    investigation_category: row.category,
+    investigation_type: row.type.trim() || null,
+    source_medicine_ids: row.sourceMedicineIds.trim() || null,
+    source_drug_names: row.sourceDrugNames.trim() || null,
+    source_test_text: row.sourceTestText.trim() || null,
+    monitoring_phase: row.phase.trim() || "BASELINE",
+    priority: row.priority.trim() || "Normal",
+    target_date: row.targetDate || null,
+    clinical_notes: row.notes.trim() || null,
+    item_status: row.status,
+    lab_order_id: row.labOrderId || null,
+    lab_order_item_id: row.labOrderItemId || null,
+  }));
+
 const ChemotherapyOrder: React.FC<{
   embedded?: boolean;
   patientId?: string;
@@ -337,6 +504,7 @@ const ChemotherapyOrder: React.FC<{
     supportive: false,
     dilution: false,
     hydration: false,
+    investigations: false,
   });
 
   const protocolRef = useRef<RegimenProtocolDetail | null>(null);
@@ -361,6 +529,38 @@ const ChemotherapyOrder: React.FC<{
   const [hydrationDraft, setHydrationDraft] = useState<HydrationRow | null>(
     null
   );
+
+  /* Investigations tab: the saved rows, or the drug-monitoring suggestions
+     derived from this order's medicines until the doctor changes them. */
+  const [investigationRows, setInvestigationRows] = useState<
+    InvestigationRow[]
+  >([]);
+  const [investigationDraft, setInvestigationDraft] =
+    useState<InvestigationRow | null>(null);
+  const [investigationLoading, setInvestigationLoading] = useState(false);
+  const [savingInvestigations, setSavingInvestigations] = useState(false);
+  const investigationContextRef = useRef("");
+  const investigationReadyKeyRef = useRef("");
+  const investigationRequestRef = useRef(0);
+  const investigationRowIdRef = useRef(1);
+  const nextInvestigationRowId = () => {
+    investigationRowIdRef.current += 1;
+    return investigationRowIdRef.current;
+  };
+  const [labTestOptions, setLabTestOptions] = useState<MultiSelectOption[]>(
+    []
+  );
+  const labTestsRequestedRef = useRef(false);
+  const labTestsByIdRef = useRef<
+    Map<
+      string,
+      {
+        test_name: string;
+        sample_type: string | null;
+        category_name: string | null;
+      }
+    >
+  >(new Map());
 
   /* The plan's saved cycle day orders: headers (by cycle / day) and the
      full orders loaded so far, keyed "cycle/day". The tables show the
@@ -823,6 +1023,95 @@ const ChemotherapyOrder: React.FC<{
       ({ dilution, item }, index) => protocolDilutionToDrug(dilution, index, item)
     );
 
+  /* Unique medicine_master ids across every drug tab of the displayed order.
+     Suggestions are based on all roles - a protocol can list a monoclonal
+     antibody as PREMEDICATION, but its monitoring tests still apply. */
+  const orderMedicineIds = () =>
+    [
+      ...new Set(
+        [...drugs, ...premedicationDrugs, ...supportiveDrugs, ...dilutionDrugs]
+          .map((drug) => drug.medicineId)
+          .filter((id): id is string => Boolean(id))
+      ),
+    ];
+
+  /* Load drug-monitoring suggestions for one cycle day. `replace` is used
+     when a day is opened; `merge` keeps rows the doctor already has and adds
+     anything newly mapped (the tab's "Refresh suggestions" action). */
+  const fetchSuggestedInvestigations = async (
+    medicineIds: string[],
+    contextKey: string,
+    mode: "replace" | "merge"
+  ) => {
+    const requestId = investigationRequestRef.current + 1;
+    investigationRequestRef.current = requestId;
+
+    if (medicineIds.length === 0) {
+      if (investigationContextRef.current === contextKey) {
+        if (mode === "replace") setInvestigationRows([]);
+        investigationReadyKeyRef.current = contextKey;
+        setInvestigationLoading(false);
+      }
+      return;
+    }
+
+    if (investigationContextRef.current === contextKey) {
+      setInvestigationLoading(true);
+    }
+
+    try {
+      const response = await chemotherapyApi.getMedicineInvestigations(
+        medicineIds
+      );
+      if (
+        requestId !== investigationRequestRef.current ||
+        investigationContextRef.current !== contextKey
+      ) {
+        return;
+      }
+      const targetDate = toIsoDate(startDate) || "";
+      const incoming = [
+        ...(response.data.data.lab ?? []),
+        ...(response.data.data.nonLab ?? []),
+      ].map((suggestion) =>
+        investigationSuggestionToRow(
+          suggestion,
+          nextInvestigationRowId(),
+          targetDate
+        )
+      );
+      setInvestigationRows((current) => {
+        if (mode === "merge") {
+          return dedupeInvestigationRows([...current, ...incoming]);
+        }
+        /* A row added while the request was in flight must not disappear. */
+        return dedupeInvestigationRows(
+          userTouched.current.investigations
+            ? [...current, ...incoming]
+            : incoming
+        );
+      });
+      investigationReadyKeyRef.current = contextKey;
+    } catch (error: any) {
+      console.error("Failed to load medicine investigations:", error);
+      if (investigationContextRef.current === contextKey) {
+        setEditError(
+          errorMessage(
+            error,
+            "Failed to load the suggested investigations for this order."
+          )
+        );
+      }
+    } finally {
+      if (
+        requestId === investigationRequestRef.current &&
+        investigationContextRef.current === contextKey
+      ) {
+        setInvestigationLoading(false);
+      }
+    }
+  };
+
   /* Keeps a saved cycle day order (from a load or a save) and its header. */
   const cacheOrder = (order: ChemoPlanOrder | null | undefined) => {
     if (!order) return;
@@ -883,11 +1172,15 @@ const ChemotherapyOrder: React.FC<{
     setEditingRow(null);
     setEditDraft(null);
     setHydrationDraft(null);
+    setInvestigationDraft(null);
 
     /* The saved order of this cycle day (every tab, including Hydration)
        wins over the protocol template. One saved but not loaded yet is
        fetched first. */
     const key = dayNumber != null ? orderKey(cycleNumber, dayNumber) : "";
+    investigationContextRef.current = key;
+    investigationReadyKeyRef.current = "";
+    setInvestigationLoading(false);
     const saved = key ? ordersRef.current.get(key) : undefined;
     const savedHeader = key
       ? planOrdersRef.current.find(
@@ -902,6 +1195,7 @@ const ChemotherapyOrder: React.FC<{
       setSupportiveDrugs([]);
       setDilutionDrugs([]);
       setHydrationRows([]);
+      setInvestigationRows([]);
       if (loadingOrderKeysRef.current.has(key)) return;
       loadingOrderKeysRef.current.add(key);
       setOrderLoading(true);
@@ -928,14 +1222,14 @@ const ChemotherapyOrder: React.FC<{
     }
 
     if (saved) {
-      const items = saved.chemotherapy_plan_items ?? [];
-      setDrugs(planItemsForRole(items, "PRIMARY"));
-      setPremedicationDrugs(planItemsForRole(items, "PREMEDICATION"));
-      setSupportiveDrugs(planItemsForRole(items, "SUPPORTIVE"));
+      const savedItems = saved.chemotherapy_plan_items ?? [];
+      setDrugs(planItemsForRole(savedItems, "PRIMARY"));
+      setPremedicationDrugs(planItemsForRole(savedItems, "PREMEDICATION"));
+      setSupportiveDrugs(planItemsForRole(savedItems, "SUPPORTIVE"));
       /* A saved day that has no dilution rows of its own still shows the
          protocol's rows for that day, the same way an unsaved day does. */
       {
-        const savedDilutions = savedDilutionRows(items);
+        const savedDilutions = savedDilutionRows(savedItems);
         const hasRealDilutions =
           savedDilutions.length > 0 &&
           savedDilutions.some((d) => (d.name ?? "").trim());
@@ -948,6 +1242,33 @@ const ChemotherapyOrder: React.FC<{
           ? (saved.chemotherapy_plan_hydration ?? []).map(planHydrationToRow)
           : templateHydration()
       );
+      /* Investigations: if the doctor already saved them for this day, use
+         them as-is. Otherwise derive from the medicines on the order. */
+      if (saved.investigations_saved) {
+        const rows = (saved.chemotherapy_plan_order_investigation ?? [])
+          .slice()
+          .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
+          .map((record, index) =>
+            investigationRecordToRow(record, index + 1)
+          );
+        setInvestigationRows(rows);
+        investigationReadyKeyRef.current = key;
+        setInvestigationLoading(false);
+      } else {
+        setInvestigationRows([]);
+        investigationReadyKeyRef.current = "";
+        void fetchSuggestedInvestigations(
+          [
+            ...new Set(
+              [...savedItems]
+                .map((item) => item.medicine_id)
+                .filter((id): id is string => Boolean(id))
+            ),
+          ],
+          key,
+          "replace"
+        );
+      }
       /* The day's saved instructions fill boxes nothing was typed into
          (e.g. the order is reopened on another device). */
       const savedInstructions = saved.chemo_instructions ?? "";
@@ -962,32 +1283,48 @@ const ChemotherapyOrder: React.FC<{
     }
 
     /* Else the protocol template for this day. */
-    {
-      // Show only the medicines mapped to the selected cycle's day.
-      // Protocols with items that have no explicit day treat all of them as
-      // Day 1. If a valid day is missing, show nothing (never dump the whole
-      // cycle across every day).
-      const items =
-        dayNumber != null ? resolveProtocolDayItems(days, dayNumber) : [];
+    // Show only the medicines mapped to the selected cycle's day.
+    // Protocols with items that have no explicit day treat all of them as
+    // Day 1. If a valid day is missing, show nothing (never dump the whole
+    // cycle across every day).
+    const items =
+      dayNumber != null ? resolveProtocolDayItems(days, dayNumber) : [];
 
-      setDrugs(
-        items
-          .filter((item) => item.drug_role === "PRIMARY")
-          .map(toDrugFromItem)
-      );
-      setPremedicationDrugs(
-        items
-          .filter((item) => item.drug_role?.toUpperCase() === "PREMEDICATION")
-          .map(toDrugFromItem)
-      );
-      setSupportiveDrugs(
-        items
-          .filter((item) => item.drug_role === "SUPPORTIVE")
-          .map(toDrugFromItem)
-      );
-    }
+    setDrugs(
+      items
+        .filter((item) => item.drug_role === "PRIMARY")
+        .map(toDrugFromItem)
+    );
+    setPremedicationDrugs(
+      items
+        .filter((item) => item.drug_role?.toUpperCase() === "PREMEDICATION")
+        .map(toDrugFromItem)
+    );
+    setSupportiveDrugs(
+      items
+        .filter((item) => item.drug_role === "SUPPORTIVE")
+        .map(toDrugFromItem)
+    );
+
     setDilutionDrugs(templateDilutions(dayNumber));
     setHydrationRows(templateHydration());
+    /* No saved order yet for this day: suggest investigations from the
+       template medicines about to be shown. */
+    if (planIdRef.current) {
+      const medicineIds = [
+        ...new Set(
+          items
+            .map((item) => item.medicine_id)
+            .filter((id): id is string => Boolean(id))
+        ),
+      ];
+      setInvestigationRows([]);
+      investigationReadyKeyRef.current = "";
+      void fetchSuggestedInvestigations(medicineIds, key, "replace");
+    } else {
+      setInvestigationRows([]);
+      investigationReadyKeyRef.current = key;
+    }
   };
 
   const orderDraftKey = `hms_chemo_order_${resolvedPatientId}`;
@@ -1129,6 +1466,7 @@ const ChemotherapyOrder: React.FC<{
     "Hydration",
     "Admin Instructions",
     "Dilution",
+    "Investigations",
   ];
 
   /* Number of days selectable for the current cycle, driven by the
@@ -1310,6 +1648,7 @@ const ChemotherapyOrder: React.FC<{
             cycle: getCycleNumber(cycleDayRef.current) ?? 1,
             day: displayedDayRef.current ?? 1,
             hydration: hydrationPayload(hydrationRows),
+            investigations: investigationPayload(investigationRows),
             chemoInstructions: postChemoInstructions,
             additionalNotes,
             /* Only a date the doctor changed moves the day's schedule. */
@@ -1535,6 +1874,31 @@ const ChemotherapyOrder: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cycleDay, resolvedPatientId]);
 
+  /* If the doctor edits the medicines of this day before saving them (or
+     before investigations are finalized), add any newly suggested tests. */
+  useEffect(() => {
+    if (!resolvedPatientId || !planIdRef.current) return;
+    const cycle = getCycleNumber(cycleDayRef.current) ?? 1;
+    const day = displayedDayRef.current ?? 1;
+    const key = orderKey(cycle, day);
+    if (investigationContextRef.current !== key) return;
+    if (investigationReadyKeyRef.current !== key) return;
+    const order = key ? ordersRef.current.get(key) : undefined;
+    if (order?.investigations_saved) return;
+    const ids = orderMedicineIds();
+    if (ids.length === 0) return;
+    void fetchSuggestedInvestigations(ids, key, "merge");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    drugs,
+    premedicationDrugs,
+    supportiveDrugs,
+    dilutionDrugs,
+    cycleDay,
+    displayedDay,
+    resolvedPatientId,
+  ]);
+
   /* Keep the Follow-Up "Next Cycle" label in sync with the cycle/day
      selected in this form and the protocol's days-per-cycle. When the
      current day is not the cycle's last day, the next entry is the next
@@ -1612,7 +1976,8 @@ const ChemotherapyOrder: React.FC<{
   const saveOrderToPlan = async (
     next: Record<RowKind, Drug[]>,
     hydration: HydrationRow[] = hydrationRows,
-    copiedFromOrderId?: string
+    copiedFromOrderId?: string,
+    investigations: InvestigationRow[] = investigationRows
   ) => {
     if (!planIdRef.current) return;
     const cycle = getCycleNumber(cycleDayRef.current) ?? 1;
@@ -1632,12 +1997,31 @@ const ChemotherapyOrder: React.FC<{
           next.dilution
         ),
         hydration: hydrationPayload(hydration),
+        investigations: investigationPayload(investigations),
         dosing: orderDosingFromSnapshot(buildDosingSnapshot(dosingInputs)),
         encounter_no: encounterNo || null,
         ...(copiedFromOrderId ? { copied_from_order_id: copiedFromOrderId } : {}),
       }
     );
-    cacheOrder(response.data.data);
+    const saved = response.data.data;
+    cacheOrder(saved);
+    if (saved) {
+      const key = orderKey(saved.cycle_number, saved.cycle_day);
+      investigationContextRef.current = key;
+      if (saved.investigations_saved) {
+        const rows = (saved.chemotherapy_plan_order_investigation ?? [])
+          .slice()
+          .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
+          .map((record, index) =>
+            investigationRecordToRow(record, index + 1)
+          );
+        setInvestigationRows(rows);
+        investigationReadyKeyRef.current = key;
+      } else {
+        investigationReadyKeyRef.current = "";
+      }
+      setInvestigationLoading(false);
+    }
   };
 
   /* Remove: saved to the plan straight away with the rest of the order. */
@@ -1854,6 +2238,186 @@ const ChemotherapyOrder: React.FC<{
     setHydrationRows(rows);
   };
 
+  const ensureLabTestOptions = () => {
+    if (labTestsRequestedRef.current) return;
+    labTestsRequestedRef.current = true;
+    labTestMasterApi
+      .getAll()
+      .then((response) => {
+        const tests = response.data.data ?? [];
+        labTestsByIdRef.current.clear();
+        for (const test of tests) {
+          labTestsByIdRef.current.set(test.lab_test_id, {
+            test_name: test.test_name,
+            sample_type: test.sample_type ?? null,
+            category_name: test.lab_test_category?.category_name ?? null,
+          });
+        }
+        setLabTestOptions(
+          tests
+            .filter((test) => test.test_status !== 0)
+            .map((test) => ({
+              label: test.test_name,
+              value: test.lab_test_id,
+              hint: test.lab_test_category?.category_name ?? test.sample_type ?? undefined,
+            }))
+        );
+      })
+      .catch((error) => {
+        labTestsRequestedRef.current = false;
+        console.error("Failed to load lab tests:", error);
+      });
+  };
+
+  const openInvestigationEdit = (row: InvestigationRow) => {
+    if (editingRow || savingEdit || savingInvestigations || orderLocked) return;
+    ensureLabTestOptions();
+    setEditError("");
+    setEditingRow(null);
+    setEditDraft(null);
+    setHydrationDraft(null);
+    setInvestigationDraft({ ...row });
+  };
+
+  const addInvestigationRow = () => {
+    if (
+      editingRow ||
+      savingEdit ||
+      savingInvestigations ||
+      copying ||
+      orderLocked ||
+      !planIdRef.current
+    ) {
+      return;
+    }
+    const targetDate = toIsoDate(startDate) || "";
+    const row: InvestigationRow = {
+      id: nextInvestigationRowId(),
+      investigationId: "",
+      labTestId: "",
+      name: "",
+      category: "LAB",
+      type: "",
+      sourceMedicineIds: "",
+      sourceDrugNames: "",
+      sourceTestText: "",
+      phase: "BASELINE",
+      priority: "Normal",
+      targetDate,
+      notes: "",
+      status: "PLANNED",
+      labOrderId: "",
+      labOrderItemId: "",
+    };
+    setInvestigationRows((rows) => [...rows, row]);
+    openInvestigationEdit(row);
+  };
+
+  const updateInvestigationDraft = (field: keyof InvestigationRow, value: string) => {
+    setInvestigationDraft((previous) => {
+      if (!previous) return previous;
+      if (field === "category" && value === "LAB") {
+        return {
+          ...previous,
+          category: value as ChemoPlanInvestigationCategory,
+          labTestId: previous.labTestId,
+          type: previous.type,
+        };
+      }
+      if (field === "category" && value !== "LAB") {
+        return {
+          ...previous,
+          category: value as ChemoPlanInvestigationCategory,
+          labTestId: "",
+        };
+      }
+      return { ...previous, [field]: value };
+    });
+  };
+
+  const saveInvestigationRow = async () => {
+    if (!investigationDraft || savingInvestigations) return;
+    if (!investigationDraft.name.trim()) {
+      setEditError("Enter the investigation name.");
+      return;
+    }
+    if (
+      investigationDraft.category === "LAB" &&
+      !investigationDraft.labTestId.trim()
+    ) {
+      setEditError("Select a lab test for a lab investigation.");
+      return;
+    }
+    if (investigationDraft.category !== "LAB") {
+      investigationDraft.labTestId = "";
+    }
+    const rows = investigationRows.map((row) =>
+      row.id === investigationDraft.id ? { ...investigationDraft } : row
+    );
+    try {
+      setSavingInvestigations(true);
+      setEditError("");
+      await saveOrderToPlan(withRows("drug", drugs), hydrationRows, undefined, rows);
+      userTouched.current.investigations = true;
+      setInvestigationRows(rows);
+      setInvestigationDraft(null);
+    } catch (error: any) {
+      console.error("Failed to save investigation:", error);
+      setEditError(
+        errorMessage(error, "Failed to save the investigation. Please try again.")
+      );
+    } finally {
+      setSavingInvestigations(false);
+    }
+  };
+
+  const cancelInvestigationEdit = () => {
+    if (savingInvestigations) return;
+    setInvestigationDraft(null);
+    setEditError("");
+  };
+
+  const removeInvestigationRow = async (row: InvestigationRow) => {
+    if (
+      editingRow ||
+      savingEdit ||
+      savingInvestigations ||
+      orderLocked ||
+      !planIdRef.current
+    ) {
+      return;
+    }
+    const rows = investigationRows.filter((item) => item.id !== row.id);
+    try {
+      setSavingInvestigations(true);
+      setEditError("");
+      await saveOrderToPlan(withRows("drug", drugs), hydrationRows, undefined, rows);
+      userTouched.current.investigations = true;
+      setInvestigationRows(rows);
+      if (investigationDraft?.id === row.id) {
+        setInvestigationDraft(null);
+      }
+    } catch (error: any) {
+      console.error("Failed to remove investigation:", error);
+      setEditError(
+        errorMessage(error, "Failed to remove the investigation. Please try again.")
+      );
+    } finally {
+      setSavingInvestigations(false);
+    }
+  };
+
+  const refreshInvestigationSuggestions = async () => {
+    if (savingInvestigations || orderLocked || !planIdRef.current) return;
+    const cycle = getCycleNumber(cycleDayRef.current) ?? 1;
+    const day = displayedDayRef.current ?? 1;
+    const key = orderKey(cycle, day);
+    investigationContextRef.current = key;
+    investigationReadyKeyRef.current = "";
+    userTouched.current.investigations = true;
+    await fetchSuggestedInvestigations(orderMedicineIds(), key, "merge");
+  };
+
   /* ---------------- "Copy as Cycle X / Day Y" ---------------- */
 
   /* The copy menu closes on an outside click or Escape. */
@@ -2054,6 +2618,20 @@ const ChemotherapyOrder: React.FC<{
       setSupportiveDrugs(next.supportive);
       setDilutionDrugs(next.dilution);
       setHydrationRows(hydration);
+      if (order.chemotherapy_plan_order_investigation?.length) {
+        const copied = order.chemotherapy_plan_order_investigation
+          .slice()
+          .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
+          .map((record, index) => ({
+            ...investigationRecordToRow(record, index + 1),
+            investigationId: "",
+            labOrderId: "",
+            labOrderItemId: "",
+            status: "PLANNED" as ChemoPlanInvestigationStatus,
+          }));
+        setInvestigationRows(dedupeInvestigationRows(copied));
+        userTouched.current.investigations = true;
+      }
     } catch (error: any) {
       console.error("Failed to copy the cycle day order:", error);
       setEditError(errorMessage(error, `Failed to copy the ${from} order.`));
@@ -4053,6 +4631,414 @@ const ChemotherapyOrder: React.FC<{
               </table>
             </div>
             {renderAddMedicineButton(() => addMedicineRow("dilution"))}
+          </div>
+        ) : activeTab === "Investigations" ? (
+          <div className="p-8">
+            {renderRowError()}
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-[10px] text-gray-500">
+                Baseline investigations suggested from this cycle day's
+                medicines. Lab tests are linked to Lab Master; add more or edit
+                before saving.
+              </p>
+              <button
+                type="button"
+                onClick={() => void refreshInvestigationSuggestions()}
+                disabled={
+                  savingInvestigations ||
+                  investigationLoading ||
+                  orderLocked ||
+                  !planIdRef.current
+                }
+                className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-[10px] font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshIcon />
+                {investigationLoading ? "Loading..." : "Refresh suggestions"}
+              </button>
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-gray-200">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {[
+                      "Investigation",
+                      "Category",
+                      "Type",
+                      "Source Drug(s)",
+                      "Phase",
+                      "Priority",
+                      "Target Date",
+                      "Notes",
+                      "Status",
+                    ].map((label, index) => (
+                      <th
+                        key={label}
+                        className={`${
+                          index === 0 ? "py-4 pl-6 pr-3" : "px-3 py-4"
+                        } text-left text-[10px] font-bold uppercase tracking-wider text-gray-900`}
+                      >
+                        {label}
+                      </th>
+                    ))}
+                    <th className="px-6 py-4 text-right text-[10px] font-bold uppercase tracking-wider text-gray-900">
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-gray-200 bg-white">
+                  {investigationLoading && (
+                    <tr>
+                      <td
+                        colSpan={10}
+                        className="px-6 py-8 text-center text-[10px] text-gray-500"
+                      >
+                        Loading suggested investigations
+                      </td>
+                    </tr>
+                  )}
+
+                  {!investigationLoading && investigationRows.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={10}
+                        className="px-6 py-8 text-center text-[10px] text-gray-500"
+                      >
+                        No investigations for this cycle day yet. Add one or
+                        refresh suggestions from the medicines above.
+                      </td>
+                    </tr>
+                  )}
+
+                  {investigationRows.map((row) => {
+                    const isEditingRow = investigationDraft?.id === row.id;
+                    if (isEditingRow && investigationDraft) {
+                      return (
+                        <tr
+                          key={row.id}
+                          className="align-top bg-blue-50/40 transition-colors"
+                        >
+                          <td className="px-3 py-3 pl-6 pr-3">
+                            <div className="flex min-w-[220px] flex-col gap-2">
+                              {investigationDraft.category === "LAB" ? (
+                                <SingleSelectDropdown
+                                  options={labTestOptions}
+                                  value={investigationDraft.labTestId}
+                                  valueLabel={investigationDraft.name}
+                                  onValueChange={(labTestId) => {
+                                    const option = labTestOptions.find(
+                                      (item) => item.value === labTestId
+                                    );
+                                    const meta = labTestsByIdRef.current.get(
+                                      labTestId
+                                    );
+                                    setInvestigationDraft((previous) =>
+                                      previous
+                                        ? {
+                                            ...previous,
+                                            labTestId,
+                                            name: option?.label ?? previous.name,
+                                            type:
+                                              previous.type ||
+                                              meta?.sample_type ||
+                                              meta?.category_name ||
+                                              "",
+                                          }
+                                        : previous
+                                    );
+                                  }}
+                                  onCreateOption={(typed) =>
+                                    setInvestigationDraft((previous) =>
+                                      previous
+                                        ? { ...previous, labTestId: "", name: typed.trim() }
+                                        : previous
+                                    )
+                                  }
+                                  createLabel="Use custom"
+                                  placeholder={
+                                    labTestOptions.length > 0
+                                      ? "Select lab test"
+                                      : "Loading lab tests..."
+                                  }
+                                  className="h-10 rounded-md border-gray-300 text-[10px] shadow-none"
+                                />
+                              ) : (
+                                <input
+                                  type="text"
+                                  value={investigationDraft.name}
+                                  onChange={(event) =>
+                                    updateInvestigationDraft(
+                                      "name",
+                                      event.target.value
+                                    )
+                                  }
+                                  placeholder="Investigation name"
+                                  className={`${EDIT_INPUT_CLASS} min-w-[200px]`}
+                                />
+                              )}
+                              {investigationDraft.category === "LAB" &&
+                                !investigationDraft.labTestId &&
+                                investigationDraft.name.trim() && (
+                                  <p className="text-[10px] text-gray-500">
+                                    Custom lab entry - saved without a master
+                                    lab_test_id
+                                  </p>
+                                )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-3">
+                            <select
+                              value={investigationDraft.category}
+                              onChange={(event) =>
+                                updateInvestigationDraft(
+                                  "category",
+                                  event.target.value
+                                )
+                              }
+                              className={`${EDIT_INPUT_CLASS} w-36 min-w-0`}
+                            >
+                              {INVESTIGATION_CATEGORIES.map((category) => (
+                                <option
+                                  key={category.value}
+                                  value={category.value}
+                                >
+                                  {category.label}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="px-3 py-3">
+                            <input
+                              type="text"
+                              value={investigationDraft.type}
+                              onChange={(event) =>
+                                updateInvestigationDraft("type", event.target.value)
+                              }
+                              placeholder="Type / method"
+                              className={`${EDIT_INPUT_CLASS} w-32 min-w-0`}
+                            />
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="flex min-w-[160px] flex-col gap-1.5 text-[10px] text-gray-600">
+                              <span className="font-medium text-gray-900">
+                                {investigationDraft.sourceDrugNames || "—"}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-3">
+                            <input
+                              type="text"
+                              value={investigationDraft.phase}
+                              onChange={(event) =>
+                                updateInvestigationDraft("phase", event.target.value)
+                              }
+                              className={`${EDIT_INPUT_CLASS} w-28 min-w-0`}
+                            />
+                          </td>
+                          <td className="px-3 py-3">
+                            <select
+                              value={investigationDraft.priority}
+                              onChange={(event) =>
+                                updateInvestigationDraft(
+                                  "priority",
+                                  event.target.value
+                                )
+                              }
+                              className={`${EDIT_INPUT_CLASS} w-28 min-w-0`}
+                            >
+                              {INVESTIGATION_PRIORITIES.map((priority) => (
+                                <option key={priority} value={priority}>
+                                  {priority}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="px-3 py-3">
+                            <input
+                              type="date"
+                              value={investigationDraft.targetDate}
+                              onChange={(event) =>
+                                updateInvestigationDraft(
+                                  "targetDate",
+                                  event.target.value
+                                )
+                              }
+                              className={`${EDIT_INPUT_CLASS} w-36 min-w-0`}
+                            />
+                          </td>
+                          <td className="px-3 py-3">
+                            <textarea
+                              value={investigationDraft.notes}
+                              onChange={(event) =>
+                                updateInvestigationDraft("notes", event.target.value)
+                              }
+                              placeholder="Clinical notes"
+                              rows={2}
+                              className={`${EDIT_INPUT_CLASS} min-w-[200px] resize-y text-[10px]`}
+                            />
+                          </td>
+                          <td className="px-3 py-3">
+                            <select
+                              value={investigationDraft.status}
+                              onChange={(event) =>
+                                updateInvestigationDraft(
+                                  "status",
+                                  event.target.value
+                                )
+                              }
+                              className={`${EDIT_INPUT_CLASS} w-28 min-w-0`}
+                            >
+                              {INVESTIGATION_STATUSES.map((status) => (
+                                <option key={status} value={status}>
+                                  {status}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="whitespace-nowrap px-6 py-3 text-right text-[10px] font-medium">
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void saveInvestigationRow()}
+                                disabled={savingInvestigations}
+                                className="rounded-md bg-blue-600 px-4 py-2 text-[10px] font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {savingInvestigations ? "Saving" : "Save"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelInvestigationEdit}
+                                disabled={savingInvestigations}
+                                className="rounded-md border border-gray-300 bg-white px-4 py-2 text-[10px] font-semibold text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return (
+                      <tr
+                        key={row.id}
+                        className="align-top transition-colors hover:bg-gray-50"
+                      >
+                        <td className="whitespace-nowrap py-5 pl-6 pr-3 text-[10px] font-medium text-gray-900">
+                          <div>
+                            {row.name || "—"}
+                            {row.labTestId && (
+                              <p className="mt-0.5 text-[9px] text-gray-400">
+                                {row.labTestId}
+                              </p>
+                            )}
+                          </div>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-5 text-[10px] text-gray-500">
+                          {investigationCategoryLabel(row.category)}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-5 text-[10px] text-gray-500">
+                          {row.type || "—"}
+                        </td>
+                        <td className="px-3 py-5 text-[10px] text-gray-500">
+                          <div className="max-w-[200px] whitespace-normal">
+                            {row.sourceDrugNames || "—"}
+                          </div>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-5 text-[10px] text-gray-500">
+                          {row.phase || "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-5 text-[10px] text-gray-500">
+                          {row.priority || "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-5 text-[10px] text-gray-500">
+                          {row.targetDate ? formatDateDMY(row.targetDate) || row.targetDate : "—"}
+                        </td>
+                        <td className="px-3 py-5 text-[10px] text-gray-500">
+                          <div className="max-w-[220px] whitespace-normal">
+                            {row.notes || "—"}
+                          </div>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-5 text-[10px]">
+                          <span
+                            className={`inline-flex rounded-full px-2 py-0.5 text-[9px] font-semibold ${investigationStatusClass(
+                              row.status
+                            )}`}
+                          >
+                            {row.status}
+                          </span>
+                        </td>
+                        <td className="whitespace-nowrap px-6 py-5 text-right text-[10px] font-medium">
+                          <div
+                            className={`flex items-center justify-end gap-3 text-gray-500${
+                              orderLocked ? " hidden" : ""
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              aria-label={`Edit ${row.name}`}
+                              onClick={() => openInvestigationEdit(row)}
+                              disabled={
+                                savingInvestigations ||
+                                Boolean(investigationDraft)
+                              }
+                              className="transition-colors hover:text-gray-900 focus:outline-none disabled:opacity-40"
+                            >
+                              <EditIcon />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Delete ${row.name}`}
+                              onClick={() => void removeInvestigationRow(row)}
+                              disabled={
+                                savingInvestigations ||
+                                Boolean(investigationDraft)
+                              }
+                              className="transition-colors hover:text-red-600 focus:outline-none disabled:opacity-40"
+                            >
+                              <DeleteIcon />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {!orderLocked && (
+              <div className="mt-4 flex justify-start">
+                <button
+                  type="button"
+                  onClick={addInvestigationRow}
+                  disabled={
+                    Boolean(editingRow) ||
+                    savingEdit ||
+                    savingInvestigations ||
+                    copying ||
+                    Boolean(investigationDraft) ||
+                    !planIdRef.current
+                  }
+                  className="inline-flex items-center gap-2 rounded-md border border-dashed border-blue-400 bg-white px-4 py-2 text-[10px] font-semibold text-blue-600 transition-colors hover:border-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <svg
+                    className="h-4 w-4"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  Add Investigation
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           /* Other Tabs */
