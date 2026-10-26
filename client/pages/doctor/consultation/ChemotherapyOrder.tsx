@@ -1309,20 +1309,21 @@ const ChemotherapyOrder: React.FC<{
     setDilutionDrugs(templateDilutions(dayNumber));
     setHydrationRows(templateHydration());
     /* No saved order yet for this day: suggest investigations from the
-       template medicines about to be shown. */
-    if (planIdRef.current) {
-      const medicineIds = [
-        ...new Set(
-          items
-            .map((item) => item.medicine_id)
-            .filter((id): id is string => Boolean(id))
-        ),
-      ];
-      setInvestigationRows([]);
-      investigationReadyKeyRef.current = "";
+       template medicines about to be shown. Suggestions work from the
+       protocol's medicine_master ids, independent of whether a plan has
+       been created for this patient yet. */
+    const medicineIds = [
+      ...new Set(
+        items
+          .map((item) => item.medicine_id)
+          .filter((id): id is string => Boolean(id))
+      ),
+    ];
+    setInvestigationRows([]);
+    investigationReadyKeyRef.current = "";
+    if (medicineIds.length > 0) {
       void fetchSuggestedInvestigations(medicineIds, key, "replace");
     } else {
-      setInvestigationRows([]);
       investigationReadyKeyRef.current = key;
     }
   };
@@ -1877,7 +1878,7 @@ const ChemotherapyOrder: React.FC<{
   /* If the doctor edits the medicines of this day before saving them (or
      before investigations are finalized), add any newly suggested tests. */
   useEffect(() => {
-    if (!resolvedPatientId || !planIdRef.current) return;
+    if (!resolvedPatientId) return;
     const cycle = getCycleNumber(cycleDayRef.current) ?? 1;
     const day = displayedDayRef.current ?? 1;
     const key = orderKey(cycle, day);
@@ -2408,7 +2409,7 @@ const ChemotherapyOrder: React.FC<{
   };
 
   const refreshInvestigationSuggestions = async () => {
-    if (savingInvestigations || orderLocked || !planIdRef.current) return;
+    if (savingInvestigations || orderLocked) return;
     const cycle = getCycleNumber(cycleDayRef.current) ?? 1;
     const day = displayedDayRef.current ?? 1;
     const key = orderKey(cycle, day);
@@ -4647,8 +4648,7 @@ const ChemotherapyOrder: React.FC<{
                 disabled={
                   savingInvestigations ||
                   investigationLoading ||
-                  orderLocked ||
-                  !planIdRef.current
+                  orderLocked
                 }
                 className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-[10px] font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
