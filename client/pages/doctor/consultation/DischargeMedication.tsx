@@ -7,10 +7,7 @@ import { useNavigate } from "react-router-dom";
     chemoPlanItemName,
     chemotherapyApi,
     type ChemoPlanItem,
-    type ChemoPlanInvestigation,
   } from "../../../api/chemotherapy.api";
-  import { labOrderApi, labOrderItemApi } from "../../../api/labOrder.api";
-  import { OTHER_INVESTIGATIONS_PREFIX } from "./helpers";
 import { SingleSelectDropdown } from "../../../components/ui/single-select-dropdown";
 import type { MultiSelectOption } from "../../../components/ui/multi-select-dropdown";
 import { UserProfileDropdown } from "../../../components/ui/User_profile_dropdown";
@@ -25,6 +22,8 @@ import {
   adviceBlockPattern,
   createChemotherapyPlanForPatient,
   findActiveEncounter,
+  orderPlanInvestigations,
+  resolvePlanCycleDay,
     toIsoDate,
 } from "./helpers";
 import {
@@ -969,11 +968,35 @@ const DischargeMedication: React.FC<{
         dosingInputs
       );
       /* The draft's rows are the order of the cycle day it was saved
-         for; hydration is left as the Chemotherapy Order step saved it. */
-      const orderTarget =
-        draft?.planId && draft?.orderCycle && draft?.orderDay
-          ? { planId: draft.planId, cycle: draft.orderCycle, day: draft.orderDay }
+         for; hydration is left as the Chemotherapy Order step saved it.
+         Older drafts only carry the plan id, so the day is taken from the
+         plan order saved in this encounter (else the latest one). */
+      const draftPlanId = draft?.planId ?? undefined;
+      const draftCycle =
+        typeof draft?.orderCycle === "number" ? draft.orderCycle : undefined;
+      const draftDay =
+        typeof draft?.orderDay === "number" ? draft.orderDay : undefined;
+      const savedTarget =
+        draftCycle && draftDay
+          ? { cycle: draftCycle, day: draftDay }
           : undefined;
+
+      /* The visit's encounter: the plan order, the investigations and the
+         advice all belong to it. Resolved before the plan save so the
+         medication rows land on the cycle day of this visit. */
+      const targetEncounterNo = await resolveEncounterNo();
+      if (!targetEncounterNo) {
+        setMedsError(
+          "No active encounter found. Cannot save discharge medications."
+        );
+        return;
+      }
+
+      const orderTarget = {
+        planId: draftPlanId,
+        ...(savedTarget ??
+          (await resolvePlanCycleDay(draftPlanId, targetEncounterNo))),
+      };
 
       const planStartDate =
         toIsoDate(draft?.startDate) ||
@@ -982,14 +1005,14 @@ const DischargeMedication: React.FC<{
         ) ||
         toIsoDate(new Date().toISOString());
 
-      const { planId, error } = await createChemotherapyPlanForPatient(
+      const { planId, error, courseClosed } = await createChemotherapyPlanForPatient(
         resolvedPatientId,
         planStartDate,
         planItems.length > 0 ? planItems : undefined,
         undefined,
         undefined,
         draft?.dosingInputs ? buildDosingSnapshot(draft.dosingInputs) : undefined,
-        { order: orderTarget, encounterNo: await resolveEncounterNo() }
+        { order: orderTarget, encounterNo: targetEncounterNo }
       );
       if (error) {
         setMedsError(error);
@@ -1002,177 +1025,38 @@ const DischargeMedication: React.FC<{
         );
       }
 
-      /* Auto-create lab orders from the plan's investigations (Discharge
-         Medication > Next). Order only LAB rows that are PLANNED, skip
-         tests already ordered on this encounter, and put non-lab/tissue names
-         into lab_description. */
-      try {
-        const activePlanId = planId || medsPlanId || draft?.planId || "";
-        if (activePlanId && orderTarget) {
-          const plan = (
-            await chemotherapyApi.getPlanOrder(
-              activePlanId,
-              orderTarget.cycle,
-              orderTarget.day
-            )
-          ).data.data;
-          const investigations = (plan?.chemotherapy_plan_order_investigation ??
-            []) as ChemoPlanInvestigation[];
+      /* Orders the plan's Investigations tab rows for this visit before the
+         step is left (the same shared helper the Chemotherapy Order tab's
+         "Order Investigations" button uses). LAB rows become lab order items
+         carrying the tab's clinical notes, priority and target date; the
+         NON_LAB / TISSUE names are kept on the visit's lab order description.
+         The helper reuses an open lab order of this visit and skips tests
+         already ordered, so a retry never duplicates anything. If any row
+         fails the step stays open - the doctor can fix it and press Next
+         again. */
+      const activePlanId = planId || medsPlanId || draftPlanId || "";
 
-          if (investigations.length > 0) {
-            const targetEncounterNo = await resolveEncounterNo();
-            if (targetEncounterNo) {
-              const encounterResponse = await encounterApi.getByNumber(
-                targetEncounterNo
-              );
-              const patientHistoryId =
-                (encounterResponse.data.data as any)?.patient_history_id ??
-                undefined;
-              const appointmentIdFromEncounter =
-                encounterResponse.data.data?.appointment_id ?? undefined;
+      if (activePlanId && !courseClosed) {
+        const cycleDay =
+          savedTarget ??
+          (await resolvePlanCycleDay(activePlanId, targetEncounterNo));
 
-              const existingItems = (
-                await labOrderItemApi.getAll({
-                  appointmentId: appointmentIdFromEncounter || undefined,
-                })
-              ).data.data;
-              const existingLabTestIds = new Set(
-                existingItems
-                  .map((item) => item.lab_test_id)
-                  .filter(Boolean)
-              );
+        const orderResult = await orderPlanInvestigations({
+          planId: activePlanId,
+          cycle: cycleDay.cycle,
+          day: cycleDay.day,
+          encounterNo: targetEncounterNo,
+          patientId: resolvedPatientId,
+          appointmentId,
+          branchId,
+        });
 
-              const labRows = investigations.filter(
-                (row) =>
-                  (row.item_status ?? "PLANNED") === "PLANNED" &&
-                  row.investigation_category === "LAB" &&
-                  row.lab_test_id &&
-                  !existingLabTestIds.has(row.lab_test_id)
-              );
-              const nonLabNames = investigations
-                .filter(
-                  (row) =>
-                    row.investigation_category !== "LAB" &&
-                    row.investigation_name?.trim()
-                )
-                .map((row) => row.investigation_name.trim());
-
-              let labOrderId: string | null = null;
-              if (labRows.length > 0 || nonLabNames.length > 0) {
-                const existingOrders = (
-                  await API.get<{ success: boolean; data: any[] }>(
-                    "/lab-order",
-                    {
-                      params: appointmentIdFromEncounter
-                        ? { appointmentId: appointmentIdFromEncounter }
-                        : {},
-                    }
-                  )
-                ).data.data;
-                const existing =
-                  existingOrders.find(
-                    (order) =>
-                      order.lab_order_id &&
-                      (order.order_status ?? "PENDING") !== "CANCELLED"
-                  ) || existingOrders[0];
-
-                if (existing?.lab_order_id) {
-                  labOrderId = existing.lab_order_id;
-                } else {
-                  const doctorId =
-                    getUser()?.employee_id ||
-                    getUser()?.user_id ||
-                    "";
-                  const created = (
-                    await labOrderApi.create({
-                      patient_id: resolvedPatientId,
-                      patient_history_id: patientHistoryId,
-                      doctor_employee_id: doctorId,
-                      branch_id: branchId || getActiveBranchId() || undefined,
-                      appointment_id: appointmentIdFromEncounter || undefined,
-                      priority: "Normal",
-                      lab_description: nonLabNames.length
-                        ? `${OTHER_INVESTIGATIONS_PREFIX}${nonLabNames.join(", ")}`
-                        : undefined,
-                    })
-                  ).data.data;
-                  labOrderId = created?.lab_order_id ?? null;
-                }
-
-                if (labOrderId) {
-                  if (nonLabNames.length > 0) {
-                    try {
-                      const current = (
-                        await labOrderApi.getById(labOrderId)
-                      ).data.data;
-                      const existingDesc = current?.lab_description ?? "";
-                      const appended = `${OTHER_INVESTIGATIONS_PREFIX}${nonLabNames.join(", ")}`;
-                      if (!existingDesc.includes(appended.slice(0, 20))) {
-                        const combined = existingDesc
-                          ? `${existingDesc}, ${nonLabNames.join(", ")}`
-                          : appended;
-                        await labOrderApi.update(labOrderId, {
-                          lab_description: combined.startsWith(
-                            OTHER_INVESTIGATIONS_PREFIX
-                          )
-                            ? combined
-                            : `${OTHER_INVESTIGATIONS_PREFIX}${nonLabNames.join(", ")}`,
-                        });
-                      }
-                    } catch (error) {
-                      console.warn("Failed to update lab order description:", error);
-                    }
-                  }
-
-                  for (const row of labRows) {
-                    try {
-                      const item = (
-                        await labOrderItemApi.create({
-                          lab_order_id: labOrderId,
-                          lab_test_id: row.lab_test_id!,
-                          remarks: row.clinical_notes || undefined,
-                          priority: row.priority === "Urgent" ? "Urgent" : row.priority === "Stat" ? "Stat" : "Normal",
-                          target_date: row.target_date || undefined,
-                        })
-                      ).data.data;
-                      if (item?.lab_order_item_id) {
-                        await chemotherapyApi.updatePlanInvestigationStatus(
-                          activePlanId,
-                          orderTarget.cycle,
-                          orderTarget.day,
-                          [
-                            {
-                              investigation_id: row.investigation_id,
-                              item_status: "ORDERED",
-                              lab_order_id: labOrderId,
-                              lab_order_item_id: item.lab_order_item_id,
-                            },
-                          ]
-                        );
-                      }
-                    } catch (error) {
-                      console.warn(
-                        "Failed to create lab order item for investigation:",
-                        error
-                      );
-                    }
-                  }
-                }
-              }
-            }
-          }
+        if (orderResult.errors.length > 0) {
+          setMedsError(
+            `The investigations could not be ordered: ${orderResult.errors.join(" ")}`
+          );
+          return;
         }
-      } catch (error) {
-        console.warn("Failed to auto-order investigations:", error);
-      }
-
-      const targetEncounterNo = await resolveEncounterNo();
-
-      if (!targetEncounterNo) {
-        setMedsError(
-          "No active encounter found. Cannot save discharge medications."
-        );
-        return;
       }
 
       const medicationLines = medications

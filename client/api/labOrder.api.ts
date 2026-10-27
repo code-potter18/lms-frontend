@@ -105,8 +105,17 @@ export const labOrderApi = {
     lab_description?: string;
   }) => API.post<{ success: boolean; data: LabOrderRecord }>("/lab-order", payload),
 
-  getAll: () =>
-    API.get<{ success: boolean; data: LabOrderRecord[] }>("/lab-order"),
+  /* The latest orders - all, or a patient's / one visit's (appointment or
+     encounter). The filtered calls never return another patient's order. */
+  getAll: (params?: {
+    patientId?: string;
+    appointmentId?: string;
+    patientHistoryId?: string;
+    limit?: number;
+  }) =>
+    API.get<{ success: boolean; data: LabOrderRecord[] }>("/lab-order", {
+      params: params ?? {},
+    }),
 
   getById: (id: string) =>
     API.get<{ success: boolean; data: LabOrderRecord }>(

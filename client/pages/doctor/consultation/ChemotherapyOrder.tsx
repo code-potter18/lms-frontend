@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import API from "../../../api/axios";
 import {
@@ -16,6 +16,7 @@ import {
 } from "../../../api/chemotherapy.api";
 import { labTestMasterApi } from "../../../api/labTestMaster.api";
 import { getUser } from "../../../utils/token";
+import { orderPlanInvestigations } from "./helpers";
 import { Calendar } from "../../../components/ui/calendar";
 import {
   Popover,
@@ -539,6 +540,7 @@ const ChemotherapyOrder: React.FC<{
     useState<InvestigationRow | null>(null);
   const [investigationLoading, setInvestigationLoading] = useState(false);
   const [savingInvestigations, setSavingInvestigations] = useState(false);
+  const [rowError, setRowError] = useState("");
   const investigationContextRef = useRef("");
   const investigationReadyKeyRef = useRef("");
   const investigationRequestRef = useRef(0);
@@ -1681,6 +1683,31 @@ const ChemotherapyOrder: React.FC<{
         return;
       }
 
+      /* Discharge Medication reads this draft to know which plan / cycle day
+         its rows and the plan's investigations belong to. planIdRef is a ref
+         (not a dependency of the draft effect), so on a first visit - where
+         Next creates the plan - the draft would otherwise keep planId: null.
+         Write it here, keeping every other draft field, before leaving. */
+      if (planIdRef.current) {
+        try {
+          const raw = localStorage.getItem(orderDraftKey);
+          const existingDraft = raw
+            ? (JSON.parse(raw) as Record<string, unknown>)
+            : {};
+          localStorage.setItem(
+            orderDraftKey,
+            JSON.stringify({
+              ...existingDraft,
+              planId: planIdRef.current,
+              orderCycle: getCycleNumber(cycleDayRef.current) ?? 1,
+              orderDay: displayedDayRef.current ?? 1,
+            })
+          );
+        } catch (draftError) {
+          console.error("Failed to save the plan id on the order draft:", draftError);
+        }
+      }
+
       clearTimeout(navigateTimer);
       navigateNext();
     } catch (err: any) {
@@ -2004,6 +2031,10 @@ const ChemotherapyOrder: React.FC<{
         ...(copiedFromOrderId ? { copied_from_order_id: copiedFromOrderId } : {}),
       }
     );
+
+    /* Investigations are no longer ordered as a side effect of a save:
+       ordering happens once, from Discharge Medication > Next or the
+       Investigations tab's own "Order Investigations" button. */
     const saved = response.data.data;
     cacheOrder(saved);
     if (saved) {
@@ -2022,6 +2053,74 @@ const ChemotherapyOrder: React.FC<{
         investigationReadyKeyRef.current = "";
       }
       setInvestigationLoading(false);
+    }
+  };
+
+  /* Orders the displayed cycle day's investigations - LAB rows become
+     lab_order_item rows, NON_LAB / TISSUE rows are recorded on the visit's
+     lab order description. The same shared helper runs from Discharge
+     Medication > Next, so both paths order identically and idempotently. */
+  const runPlanInvestigations = async (
+    rows: InvestigationRow[] = investigationRows
+  ) => {
+    const planId = planIdRef.current;
+    if (!planId || savingInvestigations || orderLocked) return;
+
+    const cycle = getCycleNumber(cycleDayRef.current) ?? 1;
+    const day = displayedDayRef.current ?? 1;
+
+    try {
+      setSavingInvestigations(true);
+      setRowError("");
+
+      const encounterNo = await resolveEncounterNo();
+      const result = await orderPlanInvestigations({
+        planId,
+        cycle,
+        day,
+        encounterNo,
+        patientId: resolvedPatientId,
+        investigations: investigationPayload(rows),
+      });
+
+      if (result.errors.length > 0) {
+        setRowError(result.errors[0]);
+      }
+
+      /* Re-read the saved rows so the status column shows ORDERED with the
+         lab order / item the server linked. */
+      if (result.created > 0 || result.skipped > 0 || result.updated > 0) {
+        const response = await chemotherapyApi.getPlanOrder(
+          planId,
+          cycle,
+          day
+        );
+        const records =
+          response.data.data?.chemotherapy_plan_order_investigation ?? [];
+        const byInvestigationId = new Map(
+          records.map((record) => [record.investigation_id, record])
+        );
+        setInvestigationRows((current) =>
+          current.map((row) => {
+            const record = row.investigationId
+              ? byInvestigationId.get(row.investigationId)
+              : undefined;
+            if (!record) return row;
+            return {
+              ...row,
+              status: (record.item_status ??
+                row.status) as ChemoPlanInvestigationStatus,
+              labOrderId: record.lab_order_id ?? "",
+              labOrderItemId: record.lab_order_item_id ?? "",
+            };
+          })
+        );
+      }
+    } catch (error: any) {
+      console.error("Failed to order investigations:", error);
+      setRowError(errorMessage(error, "Failed to order investigations."));
+    } finally {
+      setSavingInvestigations(false);
     }
   };
 
@@ -2286,8 +2385,7 @@ const ChemotherapyOrder: React.FC<{
       savingEdit ||
       savingInvestigations ||
       copying ||
-      orderLocked ||
-      !planIdRef.current
+      orderLocked
     ) {
       return;
     }
@@ -2358,6 +2456,52 @@ const ChemotherapyOrder: React.FC<{
     try {
       setSavingInvestigations(true);
       setEditError("");
+
+      /* Ensure a chemotherapy plan exists for this patient before saving
+         the cycle day order. Without a plan, saveOrderToPlan returns early
+         and lab orders are never created. */
+      if (!planIdRef.current) {
+        const planItems = buildPlanItemsFromOrder(
+          drugs,
+          premedicationDrugs,
+          supportiveDrugs,
+          dosingInputs,
+          null,
+          dilutionDrugs
+        );
+        const planResult = await createChemotherapyPlanForPatient(
+          resolvedPatientId,
+          toIsoDate(startDate) || toIsoDate(new Date().toISOString()),
+          planItems.length > 0 ? planItems : undefined,
+          undefined,
+          discussion,
+          buildDosingSnapshot(dosingInputs),
+          {
+            encounterNo,
+            order: {
+              cycle: getCycleNumber(cycleDayRef.current) ?? 1,
+              day: displayedDayRef.current ?? 1,
+              hydration: hydrationPayload(hydrationRows),
+              investigations: investigationPayload(rows),
+              chemoInstructions: postChemoInstructions,
+              additionalNotes,
+              plannedDate: editedDatesRef.current.has(
+                orderKey(getCycleNumber(cycleDayRef.current) ?? 1, displayedDayRef.current ?? 1)
+              )
+                ? toIsoDate(startDate)
+                : undefined,
+            },
+          }
+        );
+        if (planResult.error) {
+          setEditError(planResult.error);
+          return;
+        }
+        if (planResult.planId) {
+          planIdRef.current = planResult.planId;
+        }
+      }
+
       await saveOrderToPlan(withRows("drug", drugs), hydrationRows, undefined, rows);
       userTouched.current.investigations = true;
       setInvestigationRows(rows);
@@ -4657,6 +4801,12 @@ const ChemotherapyOrder: React.FC<{
               </button>
             </div>
 
+            {rowError && (
+              <div className="mb-3 p-3 rounded border border-red-200 bg-red-50 text-[10px] text-red-700">
+                {rowError}
+              </div>
+            )}
+
             <div className="overflow-x-auto rounded-lg border border-gray-200">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
@@ -5009,7 +5159,7 @@ const ChemotherapyOrder: React.FC<{
             </div>
 
             {!orderLocked && (
-              <div className="mt-4 flex justify-start">
+              <div className="mt-4 flex flex-wrap items-center justify-start gap-2">
                 <button
                   type="button"
                   onClick={addInvestigationRow}
@@ -5036,6 +5186,20 @@ const ChemotherapyOrder: React.FC<{
                     />
                   </svg>
                   Add Investigation
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runPlanInvestigations()}
+                  disabled={
+                    orderLocked ||
+                    savingInvestigations ||
+                    investigationLoading ||
+                    !planIdRef.current ||
+                    !investigationRows.some((row) => row.category === "LAB" ? row.status !== "ORDERED" && row.labTestId : row.name?.trim() && row.status !== "ORDERED")
+                  }
+                  className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-[10px] font-semibold text-gray-700 transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Order Investigations
                 </button>
               </div>
             )}
@@ -5217,6 +5381,7 @@ const ChemotherapyOrder: React.FC<{
       </main>
     </div>
   );
-};
+
+  };
 
 export default ChemotherapyOrder;
