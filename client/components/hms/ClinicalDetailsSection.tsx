@@ -12,6 +12,17 @@ import {
   MultiSelectDropdown,
   type MultiSelectOption,
 } from "@/components/ui/multi-select-dropdown";
+import { VoiceInput } from "@/components/ui/voicetotext";
+import DurationInput from "@/components/ui/duration-input";
+import {
+  DEFAULT_DURATION_UNIT,
+  durationFromDays,
+  durationToDays,
+  formatDuration,
+  normalizeDurationUnit,
+  toDurationPayload,
+  type DurationUnit,
+} from "@/utils/duration";
 
 /* ============================================================
    Severity choices mirror the backend enums
@@ -25,7 +36,8 @@ interface SymptomSelection {
   symptomId: string;
   symptomName: string;
   severity: string;
-  durationDays: string;
+  durationValue: string;
+  durationUnit: DurationUnit;
   clinicalNotes: string;
 }
 
@@ -34,18 +46,24 @@ interface AllergySelection {
   substanceName: string;
   severity: string;
   reaction: string;
+  durationValue: string;
+  durationUnit: DurationUnit;
+  commands: string;
 }
 
 interface ComorbiditySelection {
   /* comorbidity_master.id */
   comorbidityId: string;
   comorbidityName: string;
+  durationValue: string;
+  durationUnit: DurationUnit;
+  commands: string;
+  onsetDate: string;
 }
 
 interface ClinicalDetailsSectionProps {
   patientId?: string;
   encounterNo?: string | null;
-  consultationNotes?: string;
   onSaveStateChange?: (state: {
     saving: boolean;
     disabled: boolean;
@@ -71,9 +89,25 @@ export interface ClinicalDetailsSectionHandle {
 
 export interface ClinicalDetailsPrintSummary {
   performanceStatus: string;
-  symptoms: { name: string; severity: string; durationDays: string; notes: string }[];
-  allergies: { name: string; severity: string; reaction: string }[];
-  comorbidities: string[];
+  symptoms: {
+    name: string;
+    severity: string;
+    duration: string;
+    notes: string;
+  }[];
+  allergies: {
+    name: string;
+    severity: string;
+    reaction: string;
+    duration: string;
+    commands: string;
+  }[];
+  comorbidities: {
+    name: string;
+    onsetDate: string;
+    duration: string;
+    commands: string;
+  }[];
 }
 
 const ChevronDownIcon = () => (
@@ -115,7 +149,7 @@ export const ClinicalDetailsSection = forwardRef<
   ClinicalDetailsSectionHandle,
   ClinicalDetailsSectionProps
 >(function ClinicalDetailsSection(
-  { patientId, encounterNo,consultationNotes, onSaveStateChange },
+  { patientId, encounterNo, onSaveStateChange },
   ref,
 ) {
   const { toast } = useToast();
@@ -183,14 +217,20 @@ export const ClinicalDetailsSection = forwardRef<
           : "",
       );
       setSymptomSelections(
-        saved.symptoms.map((symptom) => ({
-          symptomId: String(symptom.symptomId),
-          symptomName: symptom.symptomName,
-          severity: symptom.severity ?? "",
-          durationDays:
-            symptom.durationDays != null ? String(symptom.durationDays) : "",
-          clinicalNotes: symptom.clinicalNotes ?? "",
-        })),
+        saved.symptoms.map((symptom) => {
+          const duration = durationFromDays(
+            symptom.durationDays,
+            symptom.durationUnit,
+          );
+          return {
+            symptomId: String(symptom.symptomId),
+            symptomName: symptom.symptomName,
+            severity: symptom.severity ?? "",
+            durationValue: duration.value,
+            durationUnit: duration.unit,
+            clinicalNotes: symptom.clinicalNotes ?? "",
+          };
+        }),
       );
       setAllergySelections(
         saved.allergies.map((allergy) => ({
@@ -198,12 +238,25 @@ export const ClinicalDetailsSection = forwardRef<
           substanceName: allergy.substanceName,
           severity: allergy.severity ?? "",
           reaction: allergy.reaction ?? "",
+          durationValue:
+            allergy.durationValue != null ? String(allergy.durationValue) : "",
+          durationUnit: normalizeDurationUnit(allergy.durationUnit),
+          commands: allergy.clinicalNotes ?? "",
         })),
       );
       setComorbiditySelections(
         saved.comorbidities.map((comorbidity) => ({
           comorbidityId: String(comorbidity.comorbidityId),
           comorbidityName: comorbidity.comorbidityName,
+          durationValue:
+            comorbidity.durationValue != null
+              ? String(comorbidity.durationValue)
+              : "",
+          durationUnit: normalizeDurationUnit(comorbidity.durationUnit),
+          commands: comorbidity.clinicalNotes ?? "",
+          onsetDate: comorbidity.onsetDate
+            ? String(comorbidity.onsetDate).slice(0, 10)
+            : "",
         })),
       );
     } else {
@@ -279,7 +332,8 @@ export const ClinicalDetailsSection = forwardRef<
           symptomId,
           symptomName: option?.name ?? symptomId,
           severity: "",
-          durationDays: "",
+          durationValue: "",
+          durationUnit: DEFAULT_DURATION_UNIT,
           clinicalNotes: "",
         },
       ];
@@ -292,10 +346,10 @@ export const ClinicalDetailsSection = forwardRef<
     );
   };
 
-  const updateSymptom = (
+  const updateSymptom = <K extends keyof Omit<SymptomSelection, "symptomId" | "symptomName">>(
     symptomId: string,
-    field: keyof Omit<SymptomSelection, "symptomId" | "symptomName">,
-    value: string,
+    field: K,
+    value: SymptomSelection[K],
   ) => {
     setSymptomSelections((previous) =>
       previous.map((selection) =>
@@ -320,6 +374,9 @@ export const ClinicalDetailsSection = forwardRef<
           substanceName: option?.substance_name ?? allergyId,
           severity: "",
           reaction: "",
+          durationValue: "",
+          durationUnit: DEFAULT_DURATION_UNIT,
+          commands: "",
         },
       ];
     });
@@ -331,14 +388,28 @@ export const ClinicalDetailsSection = forwardRef<
     );
   };
 
-  const updateAllergy = (
+  const updateAllergy = <K extends keyof Omit<AllergySelection, "allergyId" | "substanceName">>(
     allergyId: string,
-    field: keyof Omit<AllergySelection, "allergyId" | "substanceName">,
-    value: string,
+    field: K,
+    value: AllergySelection[K],
   ) => {
     setAllergySelections((previous) =>
       previous.map((selection) =>
         selection.allergyId === allergyId
+          ? { ...selection, [field]: value }
+          : selection,
+      ),
+    );
+  };
+
+  const updateComorbidity = <K extends keyof Omit<ComorbiditySelection, "comorbidityId" | "comorbidityName">>(
+    comorbidityId: string,
+    field: K,
+    value: ComorbiditySelection[K],
+  ) => {
+    setComorbiditySelections((previous) =>
+      previous.map((selection) =>
+        selection.comorbidityId === comorbidityId
           ? { ...selection, [field]: value }
           : selection,
       ),
@@ -359,6 +430,10 @@ export const ClinicalDetailsSection = forwardRef<
         return {
           comorbidityId,
           comorbidityName: option?.comorbidity_name ?? comorbidityId,
+          durationValue: "",
+          durationUnit: DEFAULT_DURATION_UNIT,
+          commands: "",
+          onsetDate: "",
         };
       }),
     );
@@ -387,7 +462,8 @@ export const ClinicalDetailsSection = forwardRef<
                   symptomId: String(created.id),
                   symptomName: created.name,
                   severity: "",
-                  durationDays: "",
+                  durationValue: "",
+                  durationUnit: DEFAULT_DURATION_UNIT,
                   clinicalNotes: "",
                 },
               ],
@@ -421,6 +497,9 @@ export const ClinicalDetailsSection = forwardRef<
                   substanceName: created.substance_name,
                   severity: "",
                   reaction: "",
+                  durationValue: "",
+                  durationUnit: DEFAULT_DURATION_UNIT,
+                  commands: "",
                 },
               ],
         );
@@ -455,6 +534,10 @@ export const ClinicalDetailsSection = forwardRef<
                 {
                   comorbidityId: createdId,
                   comorbidityName: created.comorbidity_name,
+                  durationValue: "",
+                  durationUnit: DEFAULT_DURATION_UNIT,
+                  commands: "",
+                  onsetDate: "",
                 },
               ],
         );
@@ -476,25 +559,52 @@ export const ClinicalDetailsSection = forwardRef<
   const handleSave = async (): Promise<boolean> => {
     // Still loading, or no patient/encounter: nothing editable to save.
     if (disabled) return true;
+
     return saveClinicalDetails({
       performanceStatusId: ecogId ? Number(ecogId) : null,
-      symptoms: symptomSelections.map((selection) => ({
-        symptomId: Number(selection.symptomId),
-        severity: selection.severity || undefined,
-        durationDays: selection.durationDays
-          ? Number(selection.durationDays)
-          : undefined,
-        clinicalNotes: selection.clinicalNotes || undefined,
-      })),
-      allergies: allergySelections.map((selection) => ({
-        allergyId: Number(selection.allergyId),
-        severity: selection.severity || undefined,
-        reaction: selection.reaction || undefined,
-      })),
-      comorbidities: comorbiditySelections.map((selection) => ({
-        comorbidityId: selection.comorbidityId,
-        clinicalNotes: consultationNotes || undefined,
-      })),
+      symptoms: symptomSelections.map((selection) => {
+        const duration = toDurationPayload(
+          selection.durationValue,
+          selection.durationUnit,
+        );
+        return {
+          symptomId: Number(selection.symptomId),
+          severity: selection.severity || undefined,
+          durationDays: durationToDays(
+            selection.durationValue,
+            selection.durationUnit,
+          ),
+          durationUnit: duration.unit,
+          clinicalNotes: selection.clinicalNotes || null,
+        };
+      }),
+      allergies: allergySelections.map((selection) => {
+        const duration = toDurationPayload(
+          selection.durationValue,
+          selection.durationUnit,
+        );
+        return {
+          allergyId: Number(selection.allergyId),
+          severity: selection.severity || undefined,
+          reaction: selection.reaction || null,
+          durationValue: duration.value,
+          durationUnit: duration.unit,
+          clinicalNotes: selection.commands || null,
+        };
+      }),
+      comorbidities: comorbiditySelections.map((selection) => {
+        const duration = toDurationPayload(
+          selection.durationValue,
+          selection.durationUnit,
+        );
+        return {
+          comorbidityId: selection.comorbidityId,
+          onsetDate: selection.onsetDate || null,
+          durationValue: duration.value,
+          durationUnit: duration.unit,
+          clinicalNotes: selection.commands || null,
+        };
+      }),
     });
   };
 
@@ -544,17 +654,22 @@ export const ClinicalDetailsSection = forwardRef<
         symptoms: symptomSelections.map((item) => ({
           name: item.symptomName,
           severity: item.severity,
-          durationDays: item.durationDays,
+          duration: formatDuration(item.durationValue, item.durationUnit),
           notes: item.clinicalNotes,
         })),
         allergies: allergySelections.map((item) => ({
           name: item.substanceName,
           severity: item.severity,
           reaction: item.reaction,
+          duration: formatDuration(item.durationValue, item.durationUnit),
+          commands: item.commands,
         })),
-        comorbidities: comorbiditySelections.map(
-          (item) => item.comorbidityName,
-        ),
+        comorbidities: comorbiditySelections.map((item) => ({
+          name: item.comorbidityName,
+          onsetDate: item.onsetDate,
+          duration: formatDuration(item.durationValue, item.durationUnit),
+          commands: item.commands,
+        })),
       };
     },
   }));
@@ -709,63 +824,57 @@ export const ClinicalDetailsSection = forwardRef<
             {symptomSelections.map((selection) => (
               <div
                 key={selection.symptomId}
-                className="flex w-full items-center gap-2"
+                className="flex w-full flex-col gap-1.5 rounded-md border border-slate-100 bg-slate-50/60 p-2"
               >
-                <span className="w-28 shrink-0 truncate text-xs font-medium leading-4 text-slate-600">
-                  {selection.symptomName}
-                </span>
+                <div className="flex w-full items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium leading-4 text-slate-600">
+                    {selection.symptomName}
+                  </span>
 
-                <select
-                  value={selection.severity}
-                  onChange={(event) =>
-                    updateSymptom(
-                      selection.symptomId,
-                      "severity",
-                      event.target.value,
-                    )
-                  }
-                  disabled={disabled}
-                  className="h-7 w-24 shrink-0 appearance-none rounded-md border border-slate-200 bg-white px-2 text-xs leading-4 text-slate-600 outline-none disabled:bg-slate-50"
-                >
-                  <option value="">Severity</option>
-                  {SYMPTOM_SEVERITIES.map((severity) => (
-                    <option key={severity} value={severity}>
-                      {severity}
-                    </option>
-                  ))}
-                </select>
+                  <select
+                    value={selection.severity}
+                    onChange={(event) =>
+                      updateSymptom(
+                        selection.symptomId,
+                        "severity",
+                        event.target.value,
+                      )
+                    }
+                    disabled={disabled}
+                    className="h-7 w-24 shrink-0 appearance-none rounded-md border border-slate-200 bg-white px-2 text-xs leading-4 text-slate-600 outline-none disabled:bg-slate-50"
+                  >
+                    <option value="">Severity</option>
+                    {SYMPTOM_SEVERITIES.map((severity) => (
+                      <option key={severity} value={severity}>
+                        {severity}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-                <input
-                  type="number"
-                  min={0}
-                  max={9999}
-                  value={selection.durationDays}
-                  onChange={(event) =>
-                    updateSymptom(
-                      selection.symptomId,
-                      "durationDays",
-                      event.target.value,
-                    )
-                  }
-                  disabled={disabled}
-                  placeholder="Days"
-                  className="h-7 w-16 shrink-0 rounded-md border border-slate-200 bg-white px-2 text-xs leading-4 text-slate-600 outline-none disabled:bg-slate-50"
-                />
+                <div className="flex w-full items-center gap-2">
+                  <DurationInput
+                    value={selection.durationValue}
+                    unit={selection.durationUnit}
+                    onValueChange={(value) =>
+                      updateSymptom(selection.symptomId, "durationValue", value)
+                    }
+                    onUnitChange={(unit) =>
+                      updateSymptom(selection.symptomId, "durationUnit", unit)
+                    }
+                    disabled={disabled}
+                  />
 
-                <input
-                  type="text"
-                  value={selection.clinicalNotes}
-                  onChange={(event) =>
-                    updateSymptom(
-                      selection.symptomId,
-                      "clinicalNotes",
-                      event.target.value,
-                    )
-                  }
-                  disabled={disabled}
-                  placeholder="Clinical notes"
-                  className="h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-xs leading-4 text-slate-600 outline-none disabled:bg-slate-50"
-                />
+                  <VoiceInput
+                    value={selection.clinicalNotes}
+                    onChange={(value) =>
+                      updateSymptom(selection.symptomId, "clinicalNotes", value)
+                    }
+                    disabled={disabled}
+                    placeholder="Clinical notes"
+                    className="min-w-0 flex-1"
+                  />
+                </div>
               </div>
             ))}
           </div>
@@ -789,26 +898,6 @@ export const ClinicalDetailsSection = forwardRef<
               className="flex h-[26px] items-center gap-1 rounded border border-blue-100 bg-blue-50 px-[9px] py-[3px] text-xs leading-4 text-blue-700"
             >
               <span>{selection.substanceName}</span>
-
-              <select
-                value={selection.severity}
-                onChange={(event) =>
-                  updateAllergy(
-                    selection.allergyId,
-                    "severity",
-                    event.target.value,
-                  )
-                }
-                disabled={disabled}
-                className="h-5 w-fit appearance-none bg-transparent px-1 text-[10px] font-semibold leading-4 text-blue-700 outline-none disabled:cursor-not-allowed"
-              >
-                <option value="">Sev</option>
-                {ALLERGY_SEVERITIES.map((severity) => (
-                  <option key={severity} value={severity}>
-                    {severity}
-                  </option>
-                ))}
-              </select>
 
               <button
                 type="button"
@@ -874,6 +963,82 @@ export const ClinicalDetailsSection = forwardRef<
             >
               Cancel
             </button>
+          </div>
+        )}
+
+        {/* Allergy-specific fields (severity / duration / reaction / commands) */}
+        {allergySelections.length > 0 && (
+          <div className="flex w-full flex-col gap-1.5 pt-1">
+            {allergySelections.map((selection) => (
+              <div
+                key={selection.allergyId}
+                className="flex w-full flex-col gap-1.5 rounded-md border border-slate-100 bg-slate-50/60 p-2"
+              >
+                <div className="flex w-full items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium leading-4 text-slate-600">
+                    {selection.substanceName}
+                  </span>
+
+                  <select
+                    value={selection.severity}
+                    onChange={(event) =>
+                      updateAllergy(
+                        selection.allergyId,
+                        "severity",
+                        event.target.value,
+                      )
+                    }
+                    disabled={disabled}
+                    className="h-7 w-24 shrink-0 appearance-none rounded-md border border-slate-200 bg-white px-2 text-xs leading-4 text-slate-600 outline-none disabled:bg-slate-50"
+                  >
+                    <option value="">Severity</option>
+                    {ALLERGY_SEVERITIES.map((severity) => (
+                      <option key={severity} value={severity}>
+                        {severity}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex w-full items-center gap-2">
+                  <DurationInput
+                    value={selection.durationValue}
+                    unit={selection.durationUnit}
+                    onValueChange={(value) =>
+                      updateAllergy(selection.allergyId, "durationValue", value)
+                    }
+                    onUnitChange={(unit) =>
+                      updateAllergy(selection.allergyId, "durationUnit", unit)
+                    }
+                    disabled={disabled}
+                  />
+
+                  <input
+                    type="text"
+                    value={selection.reaction}
+                    onChange={(event) =>
+                      updateAllergy(
+                        selection.allergyId,
+                        "reaction",
+                        event.target.value,
+                      )
+                    }
+                    disabled={disabled}
+                    placeholder="Reaction"
+                    className="h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-xs leading-4 text-slate-600 outline-none disabled:bg-slate-50"
+                  />
+                </div>
+
+                <VoiceInput
+                  value={selection.commands}
+                  onChange={(value) =>
+                    updateAllergy(selection.allergyId, "commands", value)
+                  }
+                  disabled={disabled}
+                  placeholder="Command(s)"
+                />
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -952,6 +1117,74 @@ export const ClinicalDetailsSection = forwardRef<
                 Cancel
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Comorbidity-specific fields (duration / onset date / commands) */}
+        {comorbiditySelections.length > 0 && (
+          <div className="flex w-full flex-col gap-1.5 pt-1">
+            {comorbiditySelections.map((selection) => (
+              <div
+                key={selection.comorbidityId}
+                className="flex w-full flex-col gap-1.5 rounded-md border border-slate-100 bg-slate-50/60 p-2"
+              >
+                <span className="min-w-0 truncate text-xs font-medium leading-4 text-slate-600">
+                  {selection.comorbidityName}
+                </span>
+
+                <div className="flex w-full items-center gap-2">
+                  <DurationInput
+                    value={selection.durationValue}
+                    unit={selection.durationUnit}
+                    onValueChange={(value) =>
+                      updateComorbidity(
+                        selection.comorbidityId,
+                        "durationValue",
+                        value,
+                      )
+                    }
+                    onUnitChange={(unit) =>
+                      updateComorbidity(
+                        selection.comorbidityId,
+                        "durationUnit",
+                        unit,
+                      )
+                    }
+                    disabled={disabled}
+                  />
+
+                  <label className="flex min-w-0 flex-1 items-center gap-2 text-[10px] uppercase leading-4 tracking-[0.5px] text-slate-500">
+                    <span className="shrink-0">Onset</span>
+                    <input
+                      type="date"
+                      value={selection.onsetDate}
+                      onChange={(event) =>
+                        updateComorbidity(
+                          selection.comorbidityId,
+                          "onsetDate",
+                          event.target.value,
+                        )
+                      }
+                      disabled={disabled}
+                      className="h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-xs leading-4 text-slate-600 outline-none disabled:bg-slate-50"
+                    />
+                  </label>
+                </div>
+
+                <VoiceInput
+                  value={selection.commands}
+                  onChange={(value) =>
+                    updateComorbidity(
+                      selection.comorbidityId,
+                      "commands",
+                      value,
+                    )
+                  }
+                  disabled={disabled}
+                  placeholder="Command(s)"
+                />
+              </div>
+            ))}
           </div>
         )}
       </div>

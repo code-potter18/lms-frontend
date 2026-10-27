@@ -38,6 +38,11 @@ export interface PersonalHistoryItem {
   code: string;
   name: string;
   others?: string;
+  /* Drug Consumption only: duration (value + day/week/month/year unit)
+     and Command(s), stored inside the drug_consumption JSON. */
+  duration_value?: number | null;
+  duration_unit?: "day" | "week" | "month" | "year" | null;
+  commands?: string | null;
 }
 
 export interface PersonalHistoryPayload {

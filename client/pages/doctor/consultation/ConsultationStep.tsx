@@ -21,7 +21,14 @@ import {
   PopoverTrigger,
 } from "../../../components/ui/popover";
 import { MultiSelectDropdown } from "../../../components/ui/multi-select-dropdown";
-import VoiceToText from "@/components/ui/voicetotext";
+import VoiceToText, { VoiceInput } from "@/components/ui/voicetotext";
+import DurationInput from "@/components/ui/duration-input";
+import {
+  DEFAULT_DURATION_UNIT,
+  normalizeDurationUnit,
+  toDurationPayload,
+  type DurationUnit,
+} from "@/utils/duration";
 import AdviceSection, {
   type AdviceSaveResult,
   type AdviceSectionHandle,
@@ -79,6 +86,11 @@ const hasGeneralExamFinding = (selected: string[], label: string) =>
 /* Per-selection detail fields of the multi-select history inputs. */
 type PastTreatmentDetail = { date: string; note: string; response: string };
 type TestResultDetail = { date: string; result: string; impression: string };
+type DrugConsumptionDetail = {
+  durationValue: string;
+  durationUnit: DurationUnit;
+  commands: string;
+};
 
 const EMPTY_PAST_TREATMENT: PastTreatmentDetail = {
   date: "",
@@ -89,6 +101,11 @@ const EMPTY_TEST_RESULT: TestResultDetail = {
   date: "",
   result: "",
   impression: "",
+};
+const EMPTY_DRUG_CONSUMPTION_DETAIL: DrugConsumptionDetail = {
+  durationValue: "",
+  durationUnit: DEFAULT_DURATION_UNIT,
+  commands: "",
 };
 
 /* Keeps a details map in step with a multi-select's full selection:
@@ -298,6 +315,11 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
   const [selectedDrugConsumptions, setSelectedDrugConsumptions] = useState<
     string[]
   >([]);
+  /* Per-drug Duration + Command(s), keyed by the selected value (master
+     name or typed "Others" text). Persisted in the drug_consumption JSON. */
+  const [drugConsumptionDetails, setDrugConsumptionDetails] = useState<
+    Record<string, DrugConsumptionDetail>
+  >({});
   const [dietType, setDietType] = useState("");
 
   const [proceeding, setProceeding] = useState(false);
@@ -433,7 +455,13 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       .then((response) => {
         if (cancelled) return;
         const record = response.data.data;
-        if (!record) return;
+        if (!record) {
+          setSelectedImmunizations([]);
+          setSelectedDrugConsumptions([]);
+          setDrugConsumptionDetails({});
+          setDietType("");
+          return;
+        }
 
         /* Master values by name; older free-text "Others" entries by
            their typed text, shown as selected values of their own. */
@@ -443,6 +471,19 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
             .filter(Boolean);
         setSelectedImmunizations(toNames(record.immunization ?? []));
         setSelectedDrugConsumptions(toNames(record.drug_consumption ?? []));
+
+        const drugDetails: Record<string, DrugConsumptionDetail> = {};
+        (record.drug_consumption ?? []).forEach((item) => {
+          const key = item.others ? item.others : item.name;
+          if (!key) return;
+          drugDetails[key] = {
+            durationValue:
+              item.duration_value != null ? String(item.duration_value) : "",
+            durationUnit: normalizeDurationUnit(item.duration_unit),
+            commands: item.commands ?? "",
+          };
+        });
+        setDrugConsumptionDetails(drugDetails);
 
         setDietType(record.diet_type ?? "");
       })
@@ -579,15 +620,31 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
   const buildPersonalHistoryItems = (
     selectedNames: string[],
-    options: ImmunizationRecord[] | DrugConsumptionRecord[]
+    options: ImmunizationRecord[] | DrugConsumptionRecord[],
+    details?: Record<string, DrugConsumptionDetail>
   ): PersonalHistoryItem[] =>
     selectedNames.map((name) => {
       const match = options.find(
         (option) => option.name.toLowerCase() === name.toLowerCase()
       );
-      return match
+      const base: PersonalHistoryItem = match
         ? { code: match.code, name: match.name }
         : { code: "OTHERS", name: "Others", others: name };
+
+      const detail = details?.[name];
+      if (!detail) return base;
+
+      const duration = toDurationPayload(
+        detail.durationValue,
+        detail.durationUnit
+      );
+
+      return {
+        ...base,
+        duration_value: duration.value,
+        duration_unit: duration.unit,
+        commands: detail.commands.trim() || null,
+      };
     });
 
   const savePersonalHistory = async (encounterNo: string) => {
@@ -598,11 +655,44 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       ),
       drug_consumption: buildPersonalHistoryItems(
         selectedDrugConsumptions,
-        drugConsumptionOptions
+        drugConsumptionOptions,
+        drugConsumptionDetails
       ),
       diet_type: dietType || null,
     });
   };
+
+  /* The drug-consumption multi-select reports the full selected list. Keep
+     each value's Duration / Command(s) in step: seed blanks for new
+     selections and drop deselected ones. */
+  const handleDrugConsumptionsChange = (names: string[]) => {
+    setSelectedDrugConsumptions(names);
+    setDrugConsumptionDetails((previous) =>
+      syncDetails(previous, names, EMPTY_DRUG_CONSUMPTION_DETAIL)
+    );
+  };
+
+  /* "+ Add" on the drug search: select the value and seed its row. */
+  const selectDrugConsumption = (name: string) => {
+    addToSelection(setSelectedDrugConsumptions)(name);
+    setDrugConsumptionDetails((previous) =>
+      previous[name]
+        ? previous
+        : { ...previous, [name]: EMPTY_DRUG_CONSUMPTION_DETAIL }
+    );
+  };
+
+  const updateDrugConsumptionDetail = (
+    name: string,
+    patch: Partial<DrugConsumptionDetail>
+  ) =>
+    setDrugConsumptionDetails((previous) => ({
+      ...previous,
+      [name]: {
+        ...(previous[name] ?? EMPTY_DRUG_CONSUMPTION_DETAIL),
+        ...patch,
+      },
+    }));
 
   /* The immunization multi-select reports the full selected list. Keep the
      Date/Response entries in step: seed blanks for new selections and drop
@@ -1626,17 +1716,59 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
             selectedDrugConsumptions
           )}
           value={selectedDrugConsumptions}
-          onValueChange={setSelectedDrugConsumptions}
+          onValueChange={handleDrugConsumptionsChange}
           onCreateOption={(typed) =>
             addMasterOption(
               () => consultationApi.createCustomDrugConsumption({ name: typed }),
               setDrugConsumptionOptions,
-              addToSelection(setSelectedDrugConsumptions),
+              selectDrugConsumption,
               "drug consumption"
             )
           }
           placeholder="Select drug consumption(s)"
         />
+
+        {/* Per-drug Duration + Command(s) */}
+        {selectedDrugConsumptions.length > 0 && (
+          <div className="flex w-full flex-col gap-1.5">
+            {selectedDrugConsumptions.map((name) => {
+              const detail =
+                drugConsumptionDetails[name] ?? EMPTY_DRUG_CONSUMPTION_DETAIL;
+
+              return (
+                <div
+                  key={name}
+                  className="flex w-full flex-col gap-2 rounded-md border border-slate-200 bg-slate-50 p-3"
+                >
+                  <div className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                    {name}
+                  </div>
+
+                  <DurationInput
+                    value={detail.durationValue}
+                    unit={detail.durationUnit}
+                    onValueChange={(value) =>
+                      updateDrugConsumptionDetail(name, {
+                        durationValue: value,
+                      })
+                    }
+                    onUnitChange={(unit) =>
+                      updateDrugConsumptionDetail(name, { durationUnit: unit })
+                    }
+                  />
+
+                  <VoiceInput
+                    value={detail.commands}
+                    onChange={(text) =>
+                      updateDrugConsumptionDetail(name, { commands: text })
+                    }
+                    placeholder="Command(s)"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
 
       </div>
 

@@ -14,6 +14,10 @@ import { branchApi } from "../../../api/branch.api";
 import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
 import { MultiSelectDropdown } from "../../../components/ui/multi-select-dropdown";
 import {
+  formatDaysDuration,
+  formatDuration,
+} from "../../../utils/duration";
+import {
   chemotherapyApi,
   isChemoPlanClosed,
   type ChemoPlanHydration,
@@ -1512,24 +1516,32 @@ const Summary: React.FC<{
         rows: (summaryClinical?.symptoms ?? []).map((symptom) => [
           symptom.symptomName,
           symptom.severity ?? "",
-          symptom.durationDays != null ? `${symptom.durationDays} days` : "",
+          formatDaysDuration(symptom.durationDays, symptom.durationUnit),
           symptom.clinicalNotes ?? "",
         ]),
       },
       {
         kind: "table",
         label: "Allergies",
-        head: ["Allergen", "Severity", "Reaction"],
+        head: ["Allergen", "Severity", "Reaction", "Duration", "Command(s)"],
         rows: (summaryClinical?.allergies ?? []).map((allergy) => [
           allergy.substanceName,
           allergy.severity ?? "",
           allergy.reaction ?? "",
+          formatDuration(allergy.durationValue, allergy.durationUnit),
+          allergy.clinicalNotes ?? "",
         ]),
       },
       {
-        kind: "list",
+        kind: "table",
         label: "Comorbidities",
-        items: (summaryClinical?.comorbidities ?? []).map((item) => item.comorbidityName),
+        head: ["Comorbidity", "Onset Date", "Duration", "Command(s)"],
+        rows: (summaryClinical?.comorbidities ?? []).map((item) => [
+          item.comorbidityName,
+          item.onsetDate ? formatDateDMY(item.onsetDate) : "",
+          formatDuration(item.durationValue, item.durationUnit),
+          item.clinicalNotes ?? "",
+        ]),
       },
     ]),
     visitSection("personal", "Personal History", [
@@ -1537,9 +1549,18 @@ const Summary: React.FC<{
         kind: "fields",
         items: [
           { label: "Immunization", value: summaryImmunization.map((item) => item.others || item.name).join(", ") },
-          { label: "Drug Consumption", value: summaryDrugConsumption.map((item) => item.others || item.name).join(", ") },
           { label: "Diet Type", value: summaryDietType },
         ],
+      },
+      {
+        kind: "table",
+        label: "Drug Consumption",
+        head: ["Drug", "Duration", "Command(s)"],
+        rows: summaryDrugConsumption.map((item) => [
+          item.others || item.name,
+          formatDuration(item.duration_value, item.duration_unit),
+          item.commands ?? "",
+        ]),
       },
     ]),
     visitSection("examination", "Examination", [
