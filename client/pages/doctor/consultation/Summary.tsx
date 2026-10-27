@@ -27,6 +27,7 @@ import {
 import {
   consultationApi,
   type PersonalHistoryItem,
+  type FamilyHistoryRecord,
   type EncounterReportRecord,
   type EncounterPastTreatmentRecord,
   type EncounterMolecularTestRecord,
@@ -545,6 +546,8 @@ const Summary: React.FC<{
     PersonalHistoryItem[]
   >([]);
   const [summaryDietType, setSummaryDietType] = useState("");
+  const [summaryFamilyHistory, setSummaryFamilyHistory] =
+    useState<FamilyHistoryRecord | null>(null);
   const [summaryReports, setSummaryReports] = useState<EncounterReportRecord[]>(
     []
   );
@@ -728,6 +731,7 @@ const Summary: React.FC<{
         setSummaryImmunization(record?.immunization ?? []);
         setSummaryDrugConsumption(record?.drug_consumption ?? []);
         setSummaryDietType(record?.diet_type ?? "");
+        setSummaryFamilyHistory(record?.family_history ?? null);
       })
       .catch((error) =>
         console.error("Failed to load summary personal history:", error)
@@ -1550,6 +1554,14 @@ const Summary: React.FC<{
         items: [
           { label: "Immunization", value: summaryImmunization.map((item) => item.others || item.name).join(", ") },
           { label: "Diet Type", value: summaryDietType },
+          {
+            label: "Family History",
+            value: summaryFamilyHistory
+              ? summaryFamilyHistory.status === "PRESENT"
+                ? "Present"
+                : "Not Present"
+              : "",
+          },
         ],
       },
       {
@@ -1561,6 +1573,21 @@ const Summary: React.FC<{
           formatDuration(item.duration_value, item.duration_unit),
           item.commands ?? "",
         ]),
+      },
+      {
+        kind: "table",
+        label: "Family History - Relatives",
+        head: ["Relative", "Degree", "Condition", "Age at Diagnosis", "Remarks"],
+        rows:
+          summaryFamilyHistory?.status === "PRESENT"
+            ? summaryFamilyHistory.entries.map((entry) => [
+                entry.relative_type ?? "",
+                entry.degree ? `${entry.degree} Degree` : "",
+                entry.condition ?? "",
+                entry.age_at_diagnosis ?? "",
+                entry.remarks ?? "",
+              ])
+            : [],
       },
     ]),
     visitSection("examination", "Examination", [

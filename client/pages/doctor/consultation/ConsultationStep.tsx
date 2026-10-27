@@ -7,7 +7,11 @@ import {
   type ConsultationOptionRecord,
   type ImmunizationRecord,
   type DrugConsumptionRecord,
+  type FamilyDegree,
+  type FamilyHistoryEntry,
+  type FamilyHistoryStatus,
   type PersonalHistoryItem,
+  type RelativeTypeOption,
 } from "../../../api/consultation.api";
 import type { LabTestMasterRecord } from "../../../api/labTestMaster.api";
 import { Calendar } from "../../../components/ui/calendar";
@@ -21,6 +25,7 @@ import {
   PopoverTrigger,
 } from "../../../components/ui/popover";
 import { MultiSelectDropdown } from "../../../components/ui/multi-select-dropdown";
+import { SingleSelectDropdown } from "../../../components/ui/single-select-dropdown";
 import VoiceToText, { VoiceInput } from "@/components/ui/voicetotext";
 import DurationInput from "@/components/ui/duration-input";
 import {
@@ -91,6 +96,32 @@ type DrugConsumptionDetail = {
   durationUnit: DurationUnit;
   commands: string;
 };
+/* One Family History relative being edited. `id` is local only (list keys +
+   updates) and is stripped before saving. */
+type FamilyHistoryDraft = {
+  id: string;
+  degree: FamilyDegree | "";
+  relativeType: string;
+  condition: string;
+  ageAtDiagnosis: string;
+  remarks: string;
+};
+
+const FAMILY_DEGREES: { value: FamilyDegree; label: string }[] = [
+  { value: "1st", label: "1st Degree" },
+  { value: "2nd", label: "2nd Degree" },
+  { value: "3rd", label: "3rd Degree" },
+];
+
+let familyEntrySeq = 0;
+const newFamilyHistoryDraft = (): FamilyHistoryDraft => ({
+  id: `family-${Date.now()}-${familyEntrySeq++}`,
+  degree: "",
+  relativeType: "",
+  condition: "",
+  ageAtDiagnosis: "",
+  remarks: "",
+});
 
 const EMPTY_PAST_TREATMENT: PastTreatmentDetail = {
   date: "",
@@ -322,6 +353,22 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
   >({});
   const [dietType, setDietType] = useState("");
 
+  /* Family History: neither status is preselected so an unanswered form is
+     never saved as a false NOT PRESENT. Rows only exist for PRESENT. */
+  const [familyHistoryStatus, setFamilyHistoryStatus] = useState<
+    FamilyHistoryStatus | ""
+  >("");
+  const [familyHistoryEntries, setFamilyHistoryEntries] = useState<
+    FamilyHistoryDraft[]
+  >([]);
+  const [relativeTypeOptions, setRelativeTypeOptions] = useState<
+    RelativeTypeOption[]
+  >([]);
+  /* The family-history column must not be overwritten when its load failed
+     (or hasn't finished): ready flips on a successful GET, or when the doctor
+     starts answering. */
+  const familyHistoryReadyRef = useRef(false);
+
   const [proceeding, setProceeding] = useState(false);
 
   const clinicalDetailsRef = useRef<ClinicalDetailsSectionHandle>(null);
@@ -441,6 +488,14 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         if (!cancelled) setDietTypeOptions(response.data.data ?? []);
       })
       .catch((error) => console.error("Failed to load diet types:", error));
+    consultationApi
+      .getRelativeTypes()
+      .then((response) => {
+        if (!cancelled) setRelativeTypeOptions(response.data.data ?? []);
+      })
+      .catch((error) =>
+        console.error("Failed to load relative types:", error)
+      );
     return () => {
       cancelled = true;
     };
@@ -450,6 +505,29 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
     const encounterNo = encounter?.encounter_no;
     if (!encounterNo) return;
     let cancelled = false;
+
+    /* Start unanswered until this encounter's saved family history is known;
+       ready only after a successful GET (or a doctor edit). */
+    familyHistoryReadyRef.current = false;
+    setFamilyHistoryStatus("");
+    setFamilyHistoryEntries([]);
+
+    const toFamilyDrafts = (familyRows: FamilyHistoryEntry[] | null | undefined) =>
+      (familyRows ?? []).map((entry) => {
+        const degree: FamilyDegree | "" =
+          entry.degree === "1st" || entry.degree === "2nd" || entry.degree === "3rd"
+            ? entry.degree
+            : "";
+        return {
+          id: `family-${Date.now()}-${familyEntrySeq++}`,
+          degree,
+          relativeType: entry.relative_type ?? "",
+          condition: entry.condition ?? "",
+          ageAtDiagnosis: entry.age_at_diagnosis ?? "",
+          remarks: entry.remarks ?? "",
+        };
+      });
+
     consultationApi
       .getPersonalHistory(encounterNo)
       .then((response) => {
@@ -460,6 +538,9 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
           setSelectedDrugConsumptions([]);
           setDrugConsumptionDetails({});
           setDietType("");
+          setFamilyHistoryStatus("");
+          setFamilyHistoryEntries([]);
+          familyHistoryReadyRef.current = true;
           return;
         }
 
@@ -486,6 +567,19 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         setDrugConsumptionDetails(drugDetails);
 
         setDietType(record.diet_type ?? "");
+
+        const family = record.family_history;
+        if (family && (family.status === "PRESENT" || family.status === "NOT_PRESENT")) {
+          setFamilyHistoryStatus(family.status);
+          setFamilyHistoryEntries(
+            family.status === "PRESENT" ? toFamilyDrafts(family.entries) : []
+          );
+        } else {
+          /* null = not answered yet; keep neither option selected. */
+          setFamilyHistoryStatus("");
+          setFamilyHistoryEntries([]);
+        }
+        familyHistoryReadyRef.current = true;
       })
       .catch((error) =>
         console.error("Failed to load personal history:", error)
@@ -647,6 +741,27 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       };
     });
 
+  /* Family History -> API payload. Rows without a Relative Type are dropped
+     so a stray empty row never reaches the chart. */
+  const buildFamilyHistoryPayload = () => {
+    if (!familyHistoryStatus) return null;
+    if (familyHistoryStatus === "NOT_PRESENT") {
+      return { status: familyHistoryStatus, entries: [] as FamilyHistoryEntry[] };
+    }
+
+    const entries: FamilyHistoryEntry[] = familyHistoryEntries
+      .filter((entry) => entry.relativeType.trim())
+      .map((entry) => ({
+        degree: (entry.degree || "") as FamilyDegree,
+        relative_type: entry.relativeType.trim(),
+        condition: entry.condition.trim() || null,
+        age_at_diagnosis: entry.ageAtDiagnosis.trim() || null,
+        remarks: entry.remarks.trim() || null,
+      }));
+
+    return { status: familyHistoryStatus, entries };
+  };
+
   const savePersonalHistory = async (encounterNo: string) => {
     await consultationApi.savePersonalHistory(encounterNo, {
       immunization: buildPersonalHistoryItems(
@@ -659,7 +774,57 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         drugConsumptionDetails
       ),
       diet_type: dietType || null,
+      /* Omitted when the family-history load failed, so a failed GET can
+         never wipe what the doctor saved earlier. */
+      ...(familyHistoryReadyRef.current
+        ? { family_history: buildFamilyHistoryPayload() }
+        : {}),
     });
+  };
+
+  /* PRESENT / NOT PRESENT toggle. Clicking the active status clears it back
+     to unanswered; switching to PRESENT seeds the first relative row. */
+  const handleFamilyHistoryStatusChange = (status: FamilyHistoryStatus) => {
+    familyHistoryReadyRef.current = true;
+    setFamilyHistoryStatus((previous) => (previous === status ? "" : status));
+    if (status === "PRESENT" && familyHistoryStatus !== "PRESENT") {
+      setFamilyHistoryEntries((previous) =>
+        previous.length > 0 ? previous : [newFamilyHistoryDraft()]
+      );
+    }
+  };
+
+  const updateFamilyHistoryEntry = (
+    id: string,
+    patch: Partial<FamilyHistoryDraft>
+  ) => {
+    familyHistoryReadyRef.current = true;
+    setFamilyHistoryEntries((previous) =>
+      previous.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry))
+    );
+  };
+
+  /* Picking a relative type auto-fills its usual degree (still editable). */
+  const handleRelativeTypeChange = (id: string, relativeType: string) => {
+    const suggested = relativeTypeOptions.find(
+      (option) => option.name.toLowerCase() === relativeType.toLowerCase()
+    );
+    updateFamilyHistoryEntry(id, {
+      relativeType,
+      ...(suggested?.degree ? { degree: suggested.degree } : {}),
+    });
+  };
+
+  const addFamilyHistoryEntry = () => {
+    familyHistoryReadyRef.current = true;
+    setFamilyHistoryEntries((previous) => [...previous, newFamilyHistoryDraft()]);
+  };
+
+  const removeFamilyHistoryEntry = (id: string) => {
+    familyHistoryReadyRef.current = true;
+    setFamilyHistoryEntries((previous) =>
+      previous.filter((entry) => entry.id !== id)
+    );
   };
 
   /* The drug-consumption multi-select reports the full selected list. Keep
@@ -1816,6 +1981,246 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       {/* PATIENT HISTORY (REASON OF VISIT) */}
 
+
+    </div>
+
+    {/* FAMILY HISTORY */}
+
+    <div className="flex w-full flex-col gap-3 border-t border-slate-200 pt-4">
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
+          Family History
+        </label>
+
+        <div className="flex items-center gap-0.5 rounded-md border border-slate-200 bg-slate-50 p-0.5">
+
+          {([
+            { value: "PRESENT", label: "Present" },
+            { value: "NOT_PRESENT", label: "Not Present" },
+          ] as const).map((option) => {
+            const active = familyHistoryStatus === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => handleFamilyHistoryStatusChange(option.value)}
+                className={`rounded px-3 py-1.5 text-[10px] font-semibold uppercase leading-4 transition-colors ${
+                  active
+                    ? "bg-[#004785] text-white shadow-sm"
+                    : "text-slate-600 hover:bg-white hover:text-slate-800"
+                }`}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+
+        </div>
+
+      </div>
+
+      {familyHistoryStatus === "" && (
+        <p className="text-[10px] leading-4 text-slate-500">
+          Select Present or Not Present. Leave both unselected if not asked.
+        </p>
+      )}
+
+      {familyHistoryStatus === "NOT_PRESENT" && (
+        <p className="text-[10px] leading-4 text-slate-500">
+          No family history recorded for this patient.
+        </p>
+      )}
+
+      {familyHistoryStatus === "PRESENT" && (
+        <div className="flex w-full flex-col gap-3">
+
+          {familyHistoryEntries.length === 0 && (
+            <p className="text-[10px] leading-4 text-slate-500">
+              Add each relative with a family history of disease.
+            </p>
+          )}
+
+          {familyHistoryEntries.map((entry, index) => (
+            <div
+              key={entry.id}
+              className="flex w-full flex-col gap-3 rounded-md border border-slate-200 bg-slate-50 p-3"
+            >
+
+              <div className="flex items-center justify-between gap-2">
+
+                <div className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  Relative {index + 1}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => removeFamilyHistoryEntry(entry.id)}
+                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold leading-4 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600"
+                >
+                  × Remove
+                </button>
+
+              </div>
+
+              <div className="grid w-full grid-cols-2 gap-3">
+
+                <div className="flex flex-col gap-1.5">
+
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                    Degree of Relatives
+                  </label>
+
+                  <div className="relative h-[38px]">
+
+                    <select
+                      value={entry.degree}
+                      onChange={(event) =>
+                        updateFamilyHistoryEntry(entry.id, {
+                          degree: event.target.value as FamilyDegree | "",
+                        })
+                      }
+                      className="h-[38px] w-full appearance-none rounded-md border border-slate-200 bg-white px-[13px] pr-10 text-[10px] leading-5 text-slate-700 outline-none focus:border-slate-400"
+                    >
+                      <option value="">Select</option>
+                      {FAMILY_DEGREES.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="#94a3b8"
+                      strokeWidth="1.8"
+                      className="pointer-events-none absolute right-3 top-2.5 h-4 w-4"
+                    >
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+
+                  </div>
+
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                    Relative Type
+                  </label>
+
+                  <SingleSelectDropdown
+                    options={relativeTypeOptions.map((option) => ({
+                      label: option.name,
+                      value: option.name,
+                      hint: option.degree ? `${option.degree} degree` : undefined,
+                    }))}
+                    value={entry.relativeType}
+                    valueLabel={entry.relativeType}
+                    onValueChange={(value) =>
+                      handleRelativeTypeChange(entry.id, value)
+                    }
+                    onCreateOption={(typed) =>
+                      handleRelativeTypeChange(entry.id, typed)
+                    }
+                    createLabel="+ Add relative"
+                    placeholder="Select relative type"
+                    className="h-[38px] rounded-md px-[13px] text-[10px]"
+                  />
+
+                </div>
+
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+
+                <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  Condition
+                </label>
+
+                <VoiceInput
+                  value={entry.condition}
+                  onChange={(text) =>
+                    updateFamilyHistoryEntry(entry.id, {
+                      condition: text.slice(0, 200),
+                    })
+                  }
+                  placeholder="e.g. Breast Cancer, Diabetes, Hypertension"
+                />
+
+              </div>
+
+              <div className="grid w-full grid-cols-3 gap-3">
+
+                <div className="flex flex-col gap-1.5">
+
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                    Age at Diagnosis
+                  </label>
+
+                  <input
+                    type="number"
+                    min={0}
+                    max={150}
+                    inputMode="numeric"
+                    value={entry.ageAtDiagnosis}
+                    onChange={(event) =>
+                      updateFamilyHistoryEntry(entry.id, {
+                        ageAtDiagnosis: event.target.value,
+                      })
+                    }
+                    placeholder="Years"
+                    className="h-[38px] w-full rounded-md border border-slate-200 bg-white px-[13px] text-[10px] leading-5 text-slate-700 outline-none focus:border-slate-400"
+                  />
+
+                </div>
+
+                <div className="col-span-2 flex flex-col gap-1.5">
+
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                    Remarks
+                  </label>
+
+                  <VoiceInput
+                    value={entry.remarks}
+                    onChange={(text) =>
+                      updateFamilyHistoryEntry(entry.id, {
+                        remarks: text.slice(0, 500),
+                      })
+                    }
+                    placeholder="Optional notes"
+                  />
+
+                </div>
+
+              </div>
+
+            </div>
+          ))}
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+
+            <button
+              type="button"
+              onClick={addFamilyHistoryEntry}
+              className="rounded-md border border-[#004785] bg-white px-3 py-1.5 text-[10px] font-semibold uppercase leading-4 text-[#004785] transition-colors hover:bg-[#004785] hover:text-white"
+            >
+              + Add Relative
+            </button>
+
+            <span className="text-[10px] leading-4 text-slate-500">
+              {familyHistoryEntries.filter((entry) => entry.relativeType.trim())
+                .length}{" "}
+              relative(s) recorded
+            </span>
+
+          </div>
+
+        </div>
+      )}
 
     </div>
 
