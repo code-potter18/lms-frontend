@@ -1,16 +1,18 @@
 ﻿import React, { useEffect, useRef, useState, useCallback } from "react";
-import API, { getActiveBranchId } from "../../../api/axios";
 import { getUser } from "../../../utils/token";
 import { encounterApi } from "../../../api/encounter.api";
 import type { LabTestMasterRecord } from "../../../api/labTestMaster.api";
 import {
-  labOrderApi,
   labOrderItemApi,
   type LabOrderItemRecord,
 } from "../../../api/labOrder.api";
 import { UserProfileDropdown } from "../../../components/ui/User_profile_dropdown";
 import VoiceToText from "@/components/ui/voicetotext";
-import { dmyToIsoStrict, findActiveEncounter, OTHER_INVESTIGATIONS_PREFIX } from "./helpers";
+import {
+  dmyToIsoStrict,
+  findActiveEncounter,
+  orderVisitInvestigations,
+} from "./helpers";
 import { BackIcon, CheckIcon } from "./icons";
 import type { InvestigationOrderDetail } from "./types";
 
@@ -189,90 +191,54 @@ const LabReview: React.FC<{
 
     (async () => {
       try {
-        let employeeId = getUser()?.employee_id ?? null;
-
-        if (!employeeId) {
-          const me = await API.get<{
-            success: boolean;
-            user?: { employee_id?: string | null };
-          }>("/auth/me");
-          employeeId = me.data?.user?.employee_id ?? null;
-        }
-
-        if (!employeeId) {
-          throw new Error(
-            "Could not resolve the logged-in doctor. Please log in again."
-          );
-        }
-
-        const branchId =
-          getActiveBranchId() ?? getUser()?.branch_id ?? undefined;
-
-        /* The order is Urgent when any of its tests is, so the lab's
-           order-level badges and alerts flag it. */
-        const orderUrgent = pendingTests.some(
-          (test) => testDetails[test.test_name]?.priority === "Urgent"
-        );
-
-        const orderResponse = await labOrderApi.create({
-          patient_id: patientId,
-          doctor_employee_id: employeeId,
-          priority: orderUrgent ? "Urgent" : "Normal",
-          ...(instructions.trim()
-            ? { clinical_notes: instructions.trim() }
-            : {}),
-          ...(branchId ? { branch_id: branchId } : {}),
-          /* The visit it belongs to - so a reopened visit (and its
-             Summary) finds its investigations again. */
-          ...(appointmentId ? { appointment_id: appointmentId } : {}),
-          ...((otherInvestigations ?? []).length > 0
-            ? { lab_description: `${OTHER_INVESTIGATIONS_PREFIX}${(otherInvestigations ?? []).join(", ")}` }
-            : {}),
+        /* Shared with the Chemotherapy Order tab: reuses this visit's open
+           lab order and skips tests already ordered there - even when the
+           same test is stored under a different lab_test_id. */
+        const result = await orderVisitInvestigations({
+          patientId,
+          appointmentId,
+          encounterNo,
+          branchId,
+          tests: pendingTests.map((test) => {
+            const detail = testDetails[test.test_name];
+            const method = detail?.method ?? "";
+            return {
+              lab_test_id: test.lab_test_id,
+              test_name: test.test_name,
+              clinical_notes: detail?.notes.trim() || undefined,
+              priority: detail?.priority ?? "Normal",
+              /* An invalid typed date is dropped (Consultation's Proceed
+                 blocks it, but this step can be opened from the stepper). */
+              target_date: dmyToIsoStrict(detail?.targetDate ?? ""),
+              ...(method.trim() ? { method: method.trim() } : {}),
+            };
+          }),
+          otherInvestigations,
+          clinicalNotes: instructions,
         });
 
-        const labOrderId = orderResponse.data.data?.lab_order_id;
-
-        if (!labOrderId) {
-          throw new Error("Failed to create the lab order.");
+        if (result.errors.length > 0) {
+          setOrderError(result.errors[0]);
         }
-
-        const createdItems = await Promise.all(
-          pendingTests.map((test) => {
-            const detail = testDetails[test.test_name];
-            const notes = detail?.notes.trim() ?? "";
-            /* An invalid typed date is dropped (Consultation's Proceed
-               blocks it, but this step can be opened from the stepper). */
-            const targetDate = dmyToIsoStrict(detail?.targetDate ?? "");
-            /* Only Molecular-category tests expose a Method, but a saved
-               value is always forwarded when present. */
-            const method = detail?.method ?? "";
-
-            return labOrderItemApi.create({
-              lab_order_id: labOrderId,
-              lab_test_id: test.lab_test_id,
-              priority: detail?.priority ?? "Normal",
-              ...(notes ? { clinical_notes: notes } : {}),
-              ...(targetDate ? { target_date: targetDate } : {}),
-              ...(method.trim() ? { method: method.trim() } : {}),
-              ...(branchId ? { branch_id: branchId } : {}),
-            });
-          })
-        );
-
-        try {
-          const itemIds = createdItems
-            .map((r) => r.data.data?.lab_order_item_id)
-            .filter(Boolean);
-          if (itemIds.length > 0) {
+        if (result.resolvedTestIds.length > 0) {
+          onOrdered?.(result.resolvedTestIds);
+        }
+        if (result.orderedItemIds.length > 0) {
+          try {
             const existing: string[] = JSON.parse(
               localStorage.getItem(`hms_lab_item_ids_${patientId}`) || "[]"
             );
-            const merged = [...new Set([...existing, ...itemIds])];
-            localStorage.setItem(`hms_lab_item_ids_${patientId}`, JSON.stringify(merged));
+            const merged = [
+              ...new Set([...existing, ...result.orderedItemIds]),
+            ];
+            localStorage.setItem(
+              `hms_lab_item_ids_${patientId}`,
+              JSON.stringify(merged)
+            );
+          } catch {
+            /* ignore */
           }
-        } catch { /* ignore */ }
-
-        onOrdered?.(pendingTests.map((test) => test.lab_test_id));
+        }
       } catch (error: any) {
         console.error("Failed to place lab order:", error);
         setOrderError(
