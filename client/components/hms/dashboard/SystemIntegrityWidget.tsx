@@ -3,76 +3,28 @@ import { useNavigate } from "react-router-dom";
 import {
   ShieldCheck,
   ShieldAlert,
-  AlertTriangle,
   HeartPulse,
   CalendarX,
   CalendarPlus,
-  Clock,
-  RefreshCw,
+  UsersRound,
   ArrowRight,
   CheckCircle2,
   Lock,
-  Stethoscope,
-  FlaskConical,
-  BedDouble,
-  UsersRound,
   ExternalLink,
   ChevronDown,
   ChevronUp,
   Zap,
   Loader2,
 } from "lucide-react";
-import { auditApi, type AuditLogRecord } from "@/api/audit.api";
 import { labOrderApi } from "@/api/labOrder.api";
 import { followUpAlertApi, type FollowUpAlert } from "@/api/followUpAlert.api";
 import { appointmentApi } from "@/api/appointment.api";
 import { useBranchFilter } from "@/context/BranchFilterContext";
 import { usePermission } from "@/context/PermissionContext";
 import { useToast } from "@/hooks/use-toast";
+import { RefreshButton } from "@/components/hms/RefreshButton";
 
 export type IntegrityCategory = "all" | "clinical" | "staffing" | "audit";
-
-function parseAuditSummary(log: AuditLogRecord) {
-  let details = log.change_summary || "System governance update";
-  try {
-    const parsed = JSON.parse(log.change_summary);
-    if (parsed.reason) {
-      details = parsed.reason;
-    } else if (parsed.to && parsed.from) {
-      details = `Status transitioned from ${parsed.from} to ${parsed.to}`;
-    } else if (parsed.to) {
-      details = `Status updated to ${parsed.to}`;
-    }
-  } catch {
-    // plain string already
-  }
-
-  const entityLower = (log.entity_type || "").toLowerCase();
-  const isClinical =
-    entityLower.includes("chemo") ||
-    entityLower.includes("patient") ||
-    entityLower.includes("prescription") ||
-    entityLower.includes("encounter");
-
-  if (isClinical) {
-    const cleanType = entityLower.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-    return {
-      title: `Clinical Update: ${cleanType}`,
-      description: `${details} (by ${log.performed_by || "Clinical Staff"})`,
-      severity: "optimal" as const,
-      actionLabel: "View Orders",
-      actionRoute: "/orders",
-    };
-  }
-
-  return {
-    title: `Security Event: ${log.entity_type} ${log.action}`,
-    description: `${details} (by ${log.performed_by || "Admin"})`,
-    severity: "warning" as const,
-    actionLabel: "Audit Trail",
-    actionRoute: "/admin/permissions",
-  };
-}
 
 export interface IntegrityCheckItem {
   id: string;
@@ -106,18 +58,16 @@ export function SystemIntegrityWidget({
   const { can } = usePermission();
   const { toast } = useToast();
 
-  const canReadAudit = can("audit.read") || can("permission.manage");
   const canReadLabs = can("chemo.plan.read");
 
   const [activeTab, setActiveTab] = useState<IntegrityCategory>("all");
   const [isScanning, setIsScanning] = useState(false);
-  const [recentAudits, setRecentAudits] = useState<AuditLogRecord[]>([]);
   const [urgentLabOrdersCount, setUrgentLabOrdersCount] = useState<number>(0);
   const [pendingFollowUps, setPendingFollowUps] = useState<FollowUpAlert[]>([]);
   const [bookingAlertId, setBookingAlertId] = useState<string | null>(null);
   const [isPendingListOpen, setIsPendingListOpen] = useState(false);
 
-  // Scan auxiliary integrity data (recent audit security events & urgent labs & follow-ups)
+  // Scan auxiliary integrity data (urgent labs & follow-ups).
   const runIntegrityScan = async () => {
     setIsScanning(true);
     try {
@@ -133,17 +83,6 @@ export function SystemIntegrityWidget({
           .catch((err) => console.warn("[SystemIntegrity] Follow-up alerts scan warning:", err))
       );
 
-      if (canReadAudit) {
-        tasks.push(
-          auditApi
-            .getLogs({ limit: 5 })
-            .then((res) => {
-              if (res.data?.data) setRecentAudits(res.data.data);
-            })
-            .catch((err) => console.warn("[SystemIntegrity] Audit scan warning:", err))
-        );
-      }
-
       if (canReadLabs) {
         tasks.push(
           labOrderApi
@@ -152,7 +91,7 @@ export function SystemIntegrityWidget({
               branch_id: isAllBranches ? undefined : selectedBranchId,
             })
             .then((res) => {
-              const orders = res.data?.data?.orders || [];
+              const orders = res.data?.data || [];
               setUrgentLabOrdersCount(orders.length);
             })
             .catch((err) => console.warn("[SystemIntegrity] Lab scan warning:", err))
@@ -243,7 +182,7 @@ export function SystemIntegrityWidget({
 
   useEffect(() => {
     runIntegrityScan();
-  }, [selectedBranchId, isAllBranches, canReadAudit, canReadLabs]);
+  }, [selectedBranchId, isAllBranches, canReadLabs]);
 
   // Aggregate integrity check items
   const checkItems = useMemo<IntegrityCheckItem[]>(() => {
@@ -348,29 +287,21 @@ export function SystemIntegrityWidget({
     }
 
     // --- 3. AUDIT & GOVERNANCE INTEGRITY ---
-    if (canReadAudit && recentAudits.length > 0) {
-      const latest = recentAudits[0];
-      const parsed = parseAuditSummary(latest);
-      items.push({
-        id: "audit-latest",
-        category: "audit",
-        title: parsed.title,
-        description: parsed.description,
-        severity: parsed.severity,
-        actionLabel: parsed.actionLabel,
-        actionRoute: parsed.actionRoute,
-      });
-    } else {
-      items.push({
-        id: "audit-healthy",
-        category: "audit",
-        title: "Role & Permission Security: Verified",
-        description: "Role-based access controls active and synchronized with zero unauthorized privilege escalations.",
-        severity: "optimal",
-        actionLabel: "Matrix",
-        actionRoute: "/admin/permissions",
-      });
-    }
+    // Recent audit-log rows are raw activity, not integrity signals -- they
+    // previously surfaced here as an "audit-latest" check whose severity was
+    // hardcoded to "optimal" for clinical entities, which mislabeled every
+    // chemo/prescription log line as a green health check. Removed; audit
+    // health is now reported as a single steady-state item so the widget
+    // only ever flags things that actually need attention.
+    items.push({
+      id: "audit-healthy",
+      category: "audit",
+      title: "Role & Permission Security: Verified",
+      description: "Role-based access controls active and synchronized with zero unauthorized privilege escalations.",
+      severity: "optimal",
+      actionLabel: "Matrix",
+      actionRoute: "/admin/permissions",
+    });
 
     return items;
   }, [
@@ -379,8 +310,6 @@ export function SystemIntegrityWidget({
     urgentLabOrdersCount,
     pendingFollowUps,
     doctorsOnLeave,
-    recentAudits,
-    canReadAudit,
     navigate,
     onFilterCritical,
   ]);
@@ -426,10 +355,10 @@ export function SystemIntegrityWidget({
   }, [checkItems, activeTab]);
 
   return (
-    <div className={`bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 transition-all duration-300 hover:shadow-md flex flex-col justify-between ${className}`}>
+    <div className={`bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3 transition-all duration-300 hover:shadow-md flex flex-col justify-between ${className}`}>
       <div>
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-100 flex-wrap gap-2">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100 flex-wrap gap-2">
           <div className="flex items-center gap-3">
             <div
               className={`w-10 h-10 rounded-xl flex items-center justify-center ${
@@ -451,16 +380,11 @@ export function SystemIntegrityWidget({
 
           {/* Controls: Re-scan button & Quick matrix link */}
           <div className="flex items-center gap-2">
-            <button
-              type="button"
+            <RefreshButton
               onClick={runIntegrityScan}
-              disabled={isScanning}
+              isLoading={isScanning}
               title="Run live integrity scan"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold transition-all disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? "animate-spin text-[#00488D]" : ""}`} />
-              <span className="hidden sm:inline">{isScanning ? "Scanning..." : "Rescan"}</span>
-            </button>
+            />
             <button
               type="button"
               onClick={() => navigate("/admin")}
@@ -473,7 +397,7 @@ export function SystemIntegrityWidget({
         </div>
 
         {/* Category Filter Tabs */}
-        <div className="flex items-center gap-1.5 pt-3 pb-2 border-b border-slate-50 overflow-x-auto text-[11px] font-bold">
+        <div className="flex items-center gap-1.5 pt-2 pb-1.5 border-b border-slate-50 overflow-x-auto text-[11px] font-bold">
           <button
             type="button"
             onClick={() => setActiveTab("all")}
@@ -520,8 +444,9 @@ export function SystemIntegrityWidget({
           </button>
         </div>
 
-        {/* Checks List */}
-        <div className="space-y-2.5 mt-3">
+{/* Checks List -- trimmed to ~3 visible rows; the rest scroll inside the
+            widget so the page height stays bounded. */}
+        <div className="max-h-[215px] overflow-y-auto hide-scrollbar mt-3 space-y-2.5">
           {filteredItems.map((item) => {
             const isCritical = item.severity === "critical";
             const isWarning = item.severity === "warning";

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData, useQueryClient } from "@tanstack/react-query";
 import { Stethoscope, UserRound, Users, Calendar as CalendarIcon, FileText, Receipt, Loader2, Activity, AlertCircle, FlaskConical, CheckCircle2, XCircle, ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, Bed, BedDouble } from "lucide-react";
 import { useNavigate } from 'react-router-dom';
 import HmsTable from "@/components/hms/HmsTable";
@@ -393,6 +393,7 @@ export default function Dashboard() {
   // different name.
   const { selectedBranchId, isAllBranches, branches: branchDirectory } = useBranchFilter();
   const { can, canAny, permissions, loading: permissionsLoading } = usePermission();
+  const queryClient = useQueryClient();
 
   // Track if KPI preferences have been loaded from backend. Kept as state (not
   // only a ref) so the auto-save effect can re-run once hydration finishes.
@@ -511,29 +512,41 @@ export default function Dashboard() {
   }, []);
 
  
-  const [realDoctors, setRealDoctors] = useState<Record<string, unknown>[] | null>(null);
-  const [realStaff, setRealStaff] = useState<Record<string, unknown>[] | null>(null);
-  const [isEmployeesLoading, setIsEmployeesLoading] = useState(true);
 
-  const [patientCount, setPatientCount] = useState<number>(0);
-  const [patientLoading, setPatientLoading] = useState(false);
+  const [realDoctors, setRealDoctors] = useState<Record<string, unknown>[] | null>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-employees", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return cached?.doctors ?? null;
+  });
+  const [realStaff, setRealStaff] = useState<Record<string, unknown>[] | null>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-employees", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return cached?.staff ?? null;
+  });
 
-  // Real appointments fetched from the backend. No dummy fallback  an
-  // empty/failed fetch just leaves this null and the tab shows no rows.
-  const [realAppointments, setRealAppointments] = useState<Record<string, unknown>[] | null>(null);
-  const [isAppointmentsLoading, setIsAppointmentsLoading] = useState(true);
-  const [appointmentCount, setAppointmentCount] = useState<number>(0);
+  const [patientCount, setPatientCount] = useState<number>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-patients", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return typeof cached === "number" ? cached : 0;
+  });
 
-  const [prescriptionCount, setPrescriptionCount] = useState<number>(0);
-  const [isPrescriptionsLoading, setIsPrescriptionsLoading] = useState(false);
+  // Real appointments fetched from the backend. Cached per branch + date.
+  const [realAppointments, setRealAppointments] = useState<Record<string, unknown>[] | null>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-appointments", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return cached?.rows ?? null;
+  });
+  const [appointmentCount, setAppointmentCount] = useState<number>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-appointments", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return cached?.total ?? 0;
+  });
+
+  const [prescriptionCount, setPrescriptionCount] = useState<number>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-prescriptions", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return typeof cached === "number" ? cached : 0;
+  });
 
   // IPD snapshot -- currently admitted inpatients + bed occupancy (branch-scoped).
-  const [ipdOverview, setIpdOverview] = useState<{ totalPatients: number; bedsOccupied: number; totalBeds: number }>({
-    totalPatients: 0,
-    bedsOccupied: 0,
-    totalBeds: 0,
+  const [ipdOverview, setIpdOverview] = useState<{ totalPatients: number; bedsOccupied: number; totalBeds: number }>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-ipd-overview", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return cached ?? { totalPatients: 0, bedsOccupied: 0, totalBeds: 0 };
   });
-  const [isIpdStatsLoading, setIsIpdStatsLoading] = useState(false);
 
   // Track previous counts to compute "newly added" deltas
   const prevDoctorsRef = useRef<number>(0);
@@ -613,8 +626,10 @@ export default function Dashboard() {
       return { doctors: doctors.map(mapEmployeeRecord), staff: staff.map(mapEmployeeRecord) };
     },
     enabled: canReadEmployees,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   // Keep the local doctors/staff arrays in sync with the query result.
@@ -645,8 +660,10 @@ export default function Dashboard() {
       return { rows: rows.map(mapAppointmentRecord), total: res.data?.data?.total ?? rows.length };
     },
     enabled: canReadAppointments,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   useEffect(() => {
@@ -656,9 +673,7 @@ export default function Dashboard() {
     setAppointmentCount(appointmentsQuery.data.total);
   }, [appointmentsQuery.data]);
 
-  useEffect(() => {
-    setIsAppointmentsLoading(appointmentsQuery.isLoading || appointmentsQuery.isFetching);
-  }, [appointmentsQuery.isLoading, appointmentsQuery.isFetching]);
+
 
   const appointmentPatientIds = useMemo(() => {
     if (!realAppointments) return [];
@@ -681,8 +696,10 @@ export default function Dashboard() {
       return (res.data?.data?.patients || []) as PatientRecord[];
     },
     enabled: canReadPatients,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   const patientAgeData = useMemo(() => {
@@ -819,8 +836,10 @@ export default function Dashboard() {
       return res.data?.data?.total ?? 0;
     },
     enabled: canReadPatients,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   useEffect(() => {
@@ -828,10 +847,6 @@ export default function Dashboard() {
     prevPatientsRef.current = patientCount;
     setPatientCount(patientsQuery.data);
   }, [patientsQuery.data]);
-
-  useEffect(() => {
-    setPatientLoading(patientsQuery.isLoading || patientsQuery.isFetching);
-  }, [patientsQuery.isLoading, patientsQuery.isFetching]);
 
   const prescriptionsQuery = useQuery({
     queryKey: ["dashboard-prescriptions", isAllBranches ? "all" : selectedBranchId, dateStr],
@@ -854,8 +869,10 @@ export default function Dashboard() {
       });
       return res.data?.data?.total ?? 0;
     },
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   useEffect(() => {
@@ -863,10 +880,6 @@ export default function Dashboard() {
     prevPrescriptionsRef.current = prescriptionCount;
     setPrescriptionCount(prescriptionsQuery.data);
   }, [prescriptionsQuery.data]);
-
-  useEffect(() => {
-    setIsPrescriptionsLoading(prescriptionsQuery.isLoading || prescriptionsQuery.isFetching);
-  }, [prescriptionsQuery.isLoading, prescriptionsQuery.isFetching]);
 
   const canReadAdmissions = permissions.includes("admission.read");
 
@@ -880,8 +893,10 @@ export default function Dashboard() {
       );
     },
     enabled: canReadAdmissions,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   useEffect(() => {
@@ -893,15 +908,29 @@ export default function Dashboard() {
     }));
   }, [ipdOverviewQuery.data]);
 
-  useEffect(() => {
-    setIsIpdStatsLoading(ipdOverviewQuery.isLoading || ipdOverviewQuery.isFetching);
-  }, [ipdOverviewQuery.isLoading, ipdOverviewQuery.isFetching]);
+  // Decoupled loading states: Skeletons show ONLY on first cold load when no data exists yet.
+  // When switching dates/filters, previous data is retained and updating indicators are shown.
+  const isEmployeesLoading = employeesQuery.isPending && !employeesQuery.data;
+  const isUpdatingEmployees = employeesQuery.isFetching && !!employeesQuery.data;
 
-  // Reflect React Query's pending state into the UI loading flags so the
-  // table spinner and stat-card skeletons stay in sync with real requests.
-  useEffect(() => {
-    setIsEmployeesLoading(employeesQuery.isLoading || employeesQuery.isFetching);
-  }, [employeesQuery.isLoading, employeesQuery.isFetching]);
+  const isAppointmentsLoading = appointmentsQuery.isPending && !appointmentsQuery.data;
+  const isUpdatingAppointments = appointmentsQuery.isFetching && !!appointmentsQuery.data;
+
+  const patientLoading = patientsQuery.isPending && patientsQuery.data === undefined;
+  const isUpdatingPatients = patientsQuery.isFetching && patientsQuery.data !== undefined;
+
+  const isPrescriptionsLoading = prescriptionsQuery.isPending && prescriptionsQuery.data === undefined;
+  const isUpdatingPrescriptions = prescriptionsQuery.isFetching && prescriptionsQuery.data !== undefined;
+
+  const isIpdStatsLoading = ipdOverviewQuery.isPending && !ipdOverviewQuery.data;
+  const isUpdatingIpd = ipdOverviewQuery.isFetching && !!ipdOverviewQuery.data;
+
+  const isUpdatingKpi =
+    isUpdatingAppointments ||
+    isUpdatingEmployees ||
+    isUpdatingPatients ||
+    isUpdatingPrescriptions ||
+    isUpdatingIpd;
 
   useEffect(() => {
     if (!employeesQuery.error) return;
@@ -1692,6 +1721,12 @@ export default function Dashboard() {
                 <p className="text-xs text-[#70747c]">Real-time operational & clinical metrics across departments</p>
               </div>
               <div className="flex items-center gap-2">
+                {isUpdatingKpi && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-[#00488D] font-medium bg-blue-50 px-2.5 py-1 rounded-full animate-fade-in">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00488D]" />
+                    <span>Updating KPIs...</span>
+                  </span>
+                )}
                 <div className="flex items-center bg-white border border-[#E5E7EB] rounded-lg shadow-sm">
                   <button
                     onClick={() => setSelectedDate((prev) => subDays(prev, 1))}
@@ -2135,10 +2170,20 @@ export default function Dashboard() {
                <h2 className="hms-heading">Admin Overview</h2>
                <p className="hms-subheading">Real-time clinical, inpatient, and staff performance across all branches.</p>
              </div>
-             <AdminQuickActionToolbar
-               showWardOccupancy={showWardOccupancy}
-               onToggleWardOccupancy={() => setShowWardOccupancy((prev) => !prev)}
-             />
+             <div className="flex items-center gap-2">
+               <button
+                 type="button"
+                 onClick={() => navigate("/component-showcase")}
+                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100 shadow-2xs cursor-pointer"
+                 title="Preview all inputs and dropdowns"
+               >
+                 🎨 Component Showcase
+               </button>
+               <AdminQuickActionToolbar
+                 showWardOccupancy={showWardOccupancy}
+                 onToggleWardOccupancy={() => setShowWardOccupancy((prev) => !prev)}
+               />
+             </div>
            </div>
 
            {/* Full-Width Ward & Bed Occupancy Drawer (Default: Closed) */}
@@ -2246,6 +2291,12 @@ export default function Dashboard() {
                   open={isFilterOpen}
                   onOpenChange={setIsFilterOpen}
                 />
+                {(activeTab === "appointments" ? isUpdatingAppointments : isUpdatingEmployees) && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-[#00488D] font-medium bg-blue-50 px-2.5 py-1 rounded-full animate-fade-in">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00488D]" />
+                    <span>Updating {activeTab}...</span>
+                  </span>
+                )}
                 <RefreshButton
                   onClick={() => {
                     if (activeTab === "appointments") fetchAppointments();
@@ -2258,7 +2309,7 @@ export default function Dashboard() {
                     prescriptionsQuery.refetch();
                     ipdOverviewQuery.refetch();
                   }}
-                  isLoading={activeTab === "appointments" ? isAppointmentsLoading : isEmployeesLoading}
+                  isLoading={activeTab === "appointments" ? (isAppointmentsLoading || isUpdatingAppointments) : (isEmployeesLoading || isUpdatingEmployees)}
                 />
               </div>
             </div>
@@ -2271,6 +2322,7 @@ export default function Dashboard() {
                 Loading {activeTab}...
               </div>
             ) : (
+              <div className={`transition-opacity duration-200 ${(activeTab === "appointments" ? isUpdatingAppointments : isUpdatingEmployees) ? "opacity-75" : "opacity-100"}`}>
               <HmsTable
                 scrollable={false}
                 columns={activeTab === "appointments" ? [
@@ -2400,6 +2452,7 @@ export default function Dashboard() {
                    return "";
                 }}
               />
+              </div>
             )}
             </div>
           </div>

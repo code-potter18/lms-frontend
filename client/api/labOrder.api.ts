@@ -99,8 +99,14 @@ export const labOrderApi = {
     clinical_notes?: string;
   }) => API.post<{ success: boolean; data: LabOrderRecord }>("/lab-order", payload),
 
-  getAll: () =>
-    API.get<{ success: boolean; data: LabOrderRecord[] }>("/lab-order"),
+  getAll: (params?: {
+    priority?: string;
+    branch_id?: string;
+    limit?: number;
+  }) =>
+    API.get<{ success: boolean; data: LabOrderRecord[] }>("/lab-order", {
+      params,
+    }),
 
   getById: (id: string) =>
     API.get<{ success: boolean; data: LabOrderRecord }>(

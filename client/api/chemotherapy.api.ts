@@ -4,6 +4,7 @@ export interface MedicineOption {
   medicine_id: string;
   medicine_name: string;
   generic_name?: string;
+  generic_id?: string;
   strength?: string;
   dosage_form?: string;
   unit?: string;
@@ -26,6 +27,8 @@ export interface RegimenProtocolDilution {
 export interface RegimenProtocolDilutionInput {
   protocol_dilution_id?: string;
   medicine_id?: string | null;
+  medicine_name?: string | null;
+  generic_name?: string | null;
   drug_brand_name?: string | null;
   form?: string | null;
   dose?: string | number | null;
@@ -74,6 +77,8 @@ export interface DischargeInstructionInput {
 
 export interface RegimenProtocolItem {
   protocol_item_id: string;
+  medicine_name?: string | null;
+  generic_name?: string | null;
   medicine_id: string;
   drug_brand_name?: string | null;
   drug_role: string;
@@ -977,6 +982,19 @@ export const chemotherapyApi = {
       { params: { cancer_type_ids: cancerParam, subtype_ids: subtypeParam || undefined, drug_role: drugRole } }
     );
   },
+  getGenericFormsAndBrands: () =>
+    API.get<{
+      success: boolean;
+      message: string;
+      data: Record<
+        string,
+        {
+          generic_name: string;
+          forms: string[];
+          brandsByForm: Record<string, string[]>;
+        }
+      >;
+    }>("/chemotherapy/forms-and-brands"),
   addDischargeInstruction: (
     protocolId: string,
     payload: DischargeInstructionInput

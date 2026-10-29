@@ -64,6 +64,8 @@ export interface PharmacySlipItem {
 export interface PharmacyMasterItem {
   pharmacy_item_id: string;
   medicine_id: string | null;
+  generic_name?: string | null;
+  generic_id?: string | null;
   item_name: string;
   brand_name: string | null;
   manufacturer_name: string | null;
@@ -92,6 +94,10 @@ export interface PharmacySlipRecord {
   cancelled_at: string | null;
   cancelled_by: string | null;
   cancellation_reason: string | null;
+  amend_count: number;
+  last_amended_at: string | null;
+  last_amended_by: string | null;
+  last_amend_reason: string | null;
   created_by: string | null;
   created_at: string | null;
   updated_by: string | null;
@@ -169,8 +175,19 @@ export const pharmacyApi = {
       data
     ),
 
-  // Printing finalises a DRAFT: it moves to ISSUED and freezes the lines. A
-  // reprint only restamps printed_at.
+  issue: (pharmacySlipId: string, data: { note?: string | null } = {}) =>
+    API.post<{ success: boolean; message: string; data: PharmacySlipRecord }>(
+      `/pharmacy/slips/${pharmacySlipId}/issue`,
+      data
+    ),
+
+  amend: (pharmacySlipId: string, data: UpdateSlipItemsPayload & { reason: string }) =>
+    API.post<{ success: boolean; message: string; data: PharmacySlipRecord }>(
+      `/pharmacy/slips/${pharmacySlipId}/amend`,
+      data
+    ),
+
+  // Printing is a pure document action: it restamps printed_at without altering status.
   markPrinted: (pharmacySlipId: string, data: { printed_by?: string | null } = {}) =>
     API.post<{ success: boolean; message: string; data: PharmacySlipRecord }>(
       `/pharmacy/slips/${pharmacySlipId}/print`,

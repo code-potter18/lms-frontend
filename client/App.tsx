@@ -80,6 +80,7 @@ import TransferDoctor from "./pages/TransferDoctor";
 import RescheduleQueue from "./pages/RescheduleQueue";
 import PendingBookings from "./pages/PendingBookings";
 import WeekView from "./pages/Week view";
+import ComponentShowcase from "./pages/ComponentShowcase";
 
 // ============================================================
 // ADMIN
@@ -182,6 +183,14 @@ const doctorRoutes = [
 // ============================================================
 
 const protectedRoutes = [
+  // ----------------------------------------------------------
+  // Temporary Component Showcase
+  // ----------------------------------------------------------
+  {
+    path: "/component-showcase",
+    element: <ComponentShowcase />,
+  },
+
   // ----------------------------------------------------------
   // Profile & Security
   // ----------------------------------------------------------

@@ -622,6 +622,17 @@ export default function PatientRegistrationForm({
     }
   };
 
+  const relationNameLabel = useMemo(() => {
+    const g = formData.patient_gender?.toLowerCase();
+    const m = formData.patient_marital_status?.toLowerCase();
+    if (g === "male") return "Father's Name";
+    if (g === "female") {
+      if (m === "married") return "Husband's Name";
+      return "Father's Name";
+    }
+    return "Father's Name";
+  }, [formData.patient_gender, formData.patient_marital_status]);
+
   const handleDobChange = (e: ChangeEvent<HTMLInputElement>) => {
     const newDob = e.target.value;
     setField("patient_dob", newDob);
@@ -1569,25 +1580,13 @@ export default function PatientRegistrationForm({
                 />
               </div>
               <div>
-                <label className={labelCls}>Middle name</label>
+                <label className={labelCls}>Last name</label>
                 <input
                   type="text"
                   className={inputCls}
                   value={formData.patient_middle_name}
                   onChange={(e) => handleInputChange(e, "patient_middle_name")}
                   disabled={submitting}
-                />
-              </div>
-              <div>
-                <label className={labelCls}>Last name <Req /></label>
-                <input
-                  type="text"
-                  placeholder="e.g. Rahman"
-                  className={inputCls}
-                  value={formData.patient_last_name}
-                  onChange={(e) => handleInputChange(e, "patient_last_name")}
-                  disabled={submitting}
-                  required
                 />
               </div>
 
@@ -1662,6 +1661,18 @@ export default function PatientRegistrationForm({
                   onValueChange={(val) => setField("patient_marital_status", val)}
                   placeholder="Select"
                   disabled={submitting}
+                />
+              </div>
+              <div>
+                <label className={labelCls}>{relationNameLabel} <Req /></label>
+                <input
+                  type="text"
+                  placeholder="Enter name"
+                  className={inputCls}
+                  value={formData.patient_last_name}
+                  onChange={(e) => handleInputChange(e, "patient_last_name")}
+                  disabled={submitting}
+                  required
                 />
               </div>
               <div>
