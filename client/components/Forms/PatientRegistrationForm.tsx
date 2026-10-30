@@ -1251,8 +1251,10 @@ export default function PatientRegistrationForm({
       const savedPatientName = `${formData.patient_first_name} ${formData.patient_last_name}`.trim();
       const savedBranchName =
         branches.find((b) => String(b.branch_id) === String(formData.branch_id))?.branch_name || "";
-      setNotifyEmail(formData.patient_email || "");
-      setNotifyPhone(formData.patient_primary_mobile || "");
+      // Recipients come from the REFERRAL details (Referral mail / Referral
+      // contact) — the patient's own contact e-mail and mobile are not used.
+      setNotifyEmail((formData.referral_mail || "").trim());
+      setNotifyPhone((formData.referral_contact || "").trim());
       setNotifySubject(`Patient registration confirmation - ${savedPatientName}`);
       setNotifyMessage(
         `Dear ${savedPatientName},\n\n` +
@@ -1476,6 +1478,12 @@ export default function PatientRegistrationForm({
 
     // At least one message went out → the patient may now be registered
     if (openedAny) createPatientAfterNotify();
+  };
+
+  // ✕ button — closes the popup silently (no "Patient not created" toast)
+  const dismissNotifyPopup = () => {
+    if (submitting) return;
+    setShowNotifyPopup(false);
   };
 
   const closeNotifyPopup = () => {
@@ -2551,7 +2559,7 @@ export default function PatientRegistrationForm({
                 </div>
                 <button
                   type="button"
-                  onClick={closeNotifyPopup}
+                  onClick={dismissNotifyPopup}
                   aria-label="Close"
                   className="absolute right-4 top-4 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
                 >
@@ -2652,7 +2660,7 @@ export default function PatientRegistrationForm({
                   disabled={submitting}
                   className="h-[40px] rounded-xl border border-gray-300 bg-white px-5 text-[13px] font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
                 >
-                  Skip
+                  Cancel
                 </button>
                 <button
                   type="button"
@@ -2686,7 +2694,7 @@ export default function PatientRegistrationForm({
                   ) : (
                     <>
                       <Send className="h-4 w-4" />
-                      Send mail & WhatsApp
+                      Confirm and send
                     </>
                   )}
                 </button>
