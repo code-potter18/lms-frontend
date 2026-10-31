@@ -158,6 +158,12 @@ type PrescriptionMedicinePayload = {
   route?: string;
   frequency?: string;
   instruction?: string;
+  /* The planned cycle day / order this row belongs to. */
+  chemotherapy_plan_id?: string;
+  plan_order_id?: string;
+  plan_item_id?: string;
+  cycle_number?: number;
+  cycle_day?: number;
 };
 
 type StagingDetailRecord = {
@@ -2394,7 +2400,10 @@ const Summary: React.FC<{
       const medicineId =
         item.medicine_id ?? item.medicine_master?.medicine_id ?? "";
       const drugName = medicineId ? "" : (item.drug_name ?? "").trim();
-      const drugKey = medicineId || `name:${drugName.toLowerCase()}`;
+      const role = (item.drug_role ?? "").toUpperCase();
+      /* The same drug may be planned under two roles on one day (e.g. as a
+         pre-medication and as supportive care), so dedupe on drug + role. */
+      const drugKey = `${medicineId || `name:${drugName.toLowerCase()}`}|${role}`;
       if ((!medicineId && !drugName) || seenDrugs.has(drugKey)) continue;
       seenDrugs.add(drugKey);
 
@@ -2423,6 +2432,17 @@ const Summary: React.FC<{
         ...(medicineId ? { medicine_id: medicineId } : { drug_name: drugName }),
         ...(item.drug_role ? { drug_role: item.drug_role } : {}),
         ...(item.drug_type ? { drug_type: item.drug_type } : {}),
+        ...(order
+          ? {
+              chemotherapy_plan_id: order.chemotherapy_plan_id,
+              plan_order_id: order.plan_order_id,
+              cycle_number: order.cycle_number,
+              cycle_day: order.cycle_day,
+            }
+          : {}),
+        ...(item.chemotherapy_plan_item_id
+          ? { plan_item_id: item.chemotherapy_plan_item_id }
+          : {}),
         ...(hasPatientDose
           ? { dosage: String(Number(item.calculated_dose)) }
           : item.protocol_dose != null
@@ -2647,6 +2667,24 @@ const Summary: React.FC<{
          inpatient's admission encounter stays open (discharge closes it). */
       if (!plan) {
         const isInpatient = String(visitEncounter?.encounter_type ?? "").toUpperCase() === "IPD";
+
+        /* The Advice step saved the visit's prescription as DRAFT; submitting
+           the summary locks it (best-effort - the visit still completes). */
+        try {
+          const advice = await findAdvicePrescription(
+            targetEncounterNo,
+            appointmentId || visitEncounter?.appointment_id
+          );
+          if (advice?.prescription_id && advice.prescription_status === "DRAFT") {
+            await API.put(
+              `/prescriptions/${encodeURIComponent(advice.prescription_id)}`,
+              { status: "FINALIZED" }
+            );
+          }
+        } catch (finalizeError) {
+          console.error("Failed to finalize the Advice prescription:", finalizeError);
+        }
+
         if (!isInpatient && String(visitEncounter?.status ?? "").toUpperCase() !== "CLOSED") {
           await encounterApi.close(targetEncounterNo, "DOCTOR");
         }
@@ -2674,6 +2712,13 @@ const Summary: React.FC<{
       await API.post("/prescriptions", {
         encounter_no: targetEncounterNo,
         ...(plan?.diagnosis_id ? { diagnosis_id: plan.diagnosis_id } : {}),
+        /* A separate prescription from the Advice one: the same visit can
+           carry both. finalize_encounter also locks the Advice prescription,
+           so one Submit leaves every prescription of the visit finalized and
+           re-submitting is a safe no-op. */
+        prescription_type: "CHEMOTHERAPY",
+        finalize: true,
+        finalize_encounter: true,
         medicines,
       });
 

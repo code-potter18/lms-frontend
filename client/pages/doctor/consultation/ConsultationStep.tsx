@@ -1,4 +1,6 @@
 ﻿import React, { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { appointmentApi } from "../../../api/appointment.api";
 import type { PatientRecord } from "../../../api/patient.api";
 import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
@@ -370,6 +372,52 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
   const familyHistoryReadyRef = useRef(false);
 
   const [proceeding, setProceeding] = useState(false);
+
+  const [expandedSections, setExpandedSections] = useState<{
+    summary: boolean;
+    personalHistory: boolean;
+    generalExamination: boolean;
+    systemicExamination: boolean;
+    patientDetails: boolean;
+    investigations: boolean;
+    advice: boolean;
+  }>({
+    summary: true,
+    personalHistory: false,
+    generalExamination: false,
+    systemicExamination: false,
+    patientDetails: false,
+    investigations: false,
+    advice: false,
+  });
+
+  const toggleSection = (key: keyof typeof expandedSections) => {
+    setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const expandAll = () => {
+    setExpandedSections({
+      summary: true,
+      personalHistory: true,
+      generalExamination: true,
+      systemicExamination: true,
+      patientDetails: true,
+      investigations: true,
+      advice: true,
+    });
+  };
+
+  const collapseAll = () => {
+    setExpandedSections({
+      summary: false,
+      personalHistory: false,
+      generalExamination: false,
+      systemicExamination: false,
+      patientDetails: false,
+      investigations: false,
+      advice: false,
+    });
+  };
 
   const clinicalDetailsRef = useRef<ClinicalDetailsSectionHandle>(null);
 
@@ -1529,7 +1577,27 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5">
 
-    {/* SUMMARY GRID */}
+    <button
+      type="button"
+      onClick={() => toggleSection("summary")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          Consultation Summary
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform duration-200",
+            expandedSections.summary && "rotate-180",
+          )}
+        />
+      </div>
+    </button>
+    {expandedSections.summary && (
+      <div className="pt-4">
+
+      {/* SUMMARY GRID */}
 
     <div className="grid w-full grid-cols-4 gap-x-4">
 
@@ -1768,8 +1836,31 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       </div>
 
     </div>
-
+    </div>
+    )}
     </section>
+
+    {/* =================================================
+      EXPAND ALL / COLLAPSE ALL CONTROLS
+    ================================================= */}
+    <div className="flex w-full items-center justify-between gap-2 px-2 py-2 border-b border-slate-100">
+      <button
+        type="button"
+        onClick={expandAll}
+        className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold leading-4 text-slate-700 transition hover:bg-slate-50"
+      >
+        <ChevronsDownUp className="h-3.5 w-3.5 shrink-0" />
+        <span>Expand All</span>
+      </button>
+      <button
+        type="button"
+        onClick={collapseAll}
+        className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold leading-4 text-slate-700 transition hover:bg-slate-50"
+      >
+        <ChevronsUpDown className="h-3.5 w-3.5 shrink-0" />
+        <span>Collapse All</span>
+      </button>
+    </div>
 
     {/* =================================================
       PERSONAL HISTORY
@@ -1777,11 +1868,27 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="text-[14px] font-bold uppercase leading-7 text-slate-800">
-      Personal History
-    </div>
+    <button
+      type="button"
+      onClick={() => toggleSection("personalHistory")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          Personal History
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform duration-200",
+            expandedSections.personalHistory && "rotate-180",
+          )}
+        />
+      </div>
+    </button>
+    {expandedSections.personalHistory && (
+      <div className="pt-4">
 
-    {/* PERSONAL HISTORY GRID */}
+      {/* PERSONAL HISTORY GRID */}
 
     <div className="grid w-full grid-cols-2 gap-x-6 gap-y-4 pt-2">
 
@@ -2223,7 +2330,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       )}
 
     </div>
-
+    </div>
+    )}
     </section>
 
     {/* =================================================
@@ -2232,9 +2340,25 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="text-[14px] font-bold uppercase leading-7 text-slate-800">
-      General Examination
-    </div>
+    <button
+      type="button"
+      onClick={() => toggleSection("generalExamination")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          General Examination
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform duration-200",
+            expandedSections.generalExamination && "rotate-180",
+          )}
+        />
+      </div>
+    </button>
+    {expandedSections.generalExamination && (
+      <div className="pt-4">
 
     <div className="flex flex-col gap-2 pt-2">
       <label className="text-[10px] uppercase leading-4 text-slate-800">
@@ -2275,7 +2399,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         placeholder="Search or add other findings"
       />
     </div>
-
+    </div>
+    )}
     </section>
 
     {/* =================================================
@@ -2284,9 +2409,25 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="text-[14px] font-bold uppercase leading-7 text-slate-800">
-      Systemic Examination
-    </div>
+    <button
+      type="button"
+      onClick={() => toggleSection("systemicExamination")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          Systemic Examination
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform duration-200",
+            expandedSections.systemicExamination && "rotate-180",
+          )}
+        />
+      </div>
+    </button>
+    {expandedSections.systemicExamination && (
+      <div className="pt-4">
 
     <div className="grid w-full grid-cols-1 gap-x-5 gap-y-6 pt-2 sm:grid-cols-2 lg:grid-cols-4">
 
@@ -2351,7 +2492,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         Apply Normal To All
       </button>
     </div>
-
+    </div>
+    )}
     </section>
 
     {/* =================================================
@@ -2360,9 +2502,25 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="text-[14px] font-bold uppercase leading-7 text-slate-800">
-      Patient Details
-    </div>
+    <button
+      type="button"
+      onClick={() => toggleSection("patientDetails")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          Patient Details
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform duration-200",
+            expandedSections.patientDetails && "rotate-180",
+          )}
+        />
+      </div>
+    </button>
+    {expandedSections.patientDetails && (
+      <div className="pt-4">
 
     {/* PATIENT DETAILS GRID */}
 
@@ -2671,7 +2829,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       </div>
 
     </div>
-
+    </div>
+    )}
     </section>
 
     {/* =================================================
@@ -2680,16 +2839,30 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-4 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="flex items-center justify-between gap-2">
-      <div className="text-[14px] font-bold uppercase leading-7 text-slate-800">
-        Investigations / Scans
+    <button
+      type="button"
+      onClick={() => toggleSection("investigations")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          Investigations / Scans
+        </div>
+        {selectedInvestigations.length > 0 && (
+          <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-semibold leading-4 text-blue-700">
+            {selectedInvestigations.length} selected
+          </span>
+        )}
       </div>
-      {selectedInvestigations.length > 0 && (
-        <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-semibold leading-4 text-blue-700">
-          {selectedInvestigations.length} selected
-        </span>
-      )}
-    </div>
+      <ChevronDown
+        className={cn(
+          "h-4 w-4 shrink-0 transition-transform duration-200",
+          expandedSections.investigations && "rotate-180",
+        )}
+      />
+    </button>
+    {expandedSections.investigations && (
+      <div className="pt-4">
 
     {labTestsLoading && (
       <div className="flex items-center gap-2 text-[10px] leading-5 text-slate-500">
@@ -2825,7 +2998,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       />
 
     </div>
-
+    </div>
+    )}
     </section>
 
     {/* =================================================
@@ -2837,6 +3011,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       encounter={encounter}
       patientId={consultationState?.patientId}
       onToast={showToast}
+      expanded={expandedSections.advice}
+      onToggle={() => toggleSection("advice")}
     />
 
     {/* =================================================
