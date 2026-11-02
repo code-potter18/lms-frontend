@@ -6,14 +6,19 @@ export type PharmacySlipStatus = "DRAFT" | "ISSUED" | "CANCELLED";
 /*
  * One medicine line as the backend resolves it from a chemotherapy plan.
  *
- * `dose` is the clinical dose the doctor ordered; `quantity` is the whole-pack
- * count the pharmacy fills in. They are different quantities of the same drug,
- * so a chemo order leaves `quantity` empty for the pharmacist.
+ * `patient_dose` is the clinical dose the doctor ordered ("150 mg").
+ * `dose` / `dose_unit` are the brand strength the doctor selected, and
+ * `quantity` is how many units of that strength are handed over - so 120 mg
+ * twice is quantity 2, not one pack.
  */
 export interface ResolvedMedicationLine {
   medicine_id?: string | null;
   drug_name?: string | null;
   brand_name?: string | null;
+<<<<<<< HEAD
+  dosage_form?: string | null;
+=======
+>>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
   patient_dose?: string | null;
   dose?: string | null;
   dose_unit?: string | null;
@@ -23,6 +28,7 @@ export interface ResolvedMedicationLine {
   frequency?: string | null;
   duration?: string | null;
   instructions?: string | null;
+  pharmacy_item_id?: string | null;
 }
 
 export interface SlipPreview {
@@ -49,6 +55,10 @@ export interface PharmacySlipItem {
   medicine_id: string | null;
   drug_name: string | null;
   brand_name: string | null;
+<<<<<<< HEAD
+  dosage_form?: string | null;
+=======
+>>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
   patient_dose?: string | null;
   dose: string | null;
   dose_unit: string | null;
@@ -61,6 +71,10 @@ export interface PharmacySlipItem {
   pharmacy_item_id?: string | null;
 }
 
+<<<<<<< HEAD
+/* One row of GET /pharmacy/master-items: a brand's pack with its strength. */
+=======
+>>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
 export interface PharmacyMasterItem {
   pharmacy_item_id: string;
   medicine_id: string | null;
@@ -73,6 +87,36 @@ export interface PharmacyMasterItem {
   strength_text: string | null;
   strength_value: string | number | null;
   strength_unit: string | null;
+<<<<<<< HEAD
+}
+
+/* One line the Discharge Medication popup saves for its cycle day. */
+export interface PharmacySlipOrderItemPayload {
+  medicine_id?: string | null;
+  drug_name?: string | null;
+  dosage_form?: string | null;
+  patient_dose?: string | null;
+  brand_name?: string | null;
+  dose?: string | null;
+  dose_unit?: string | null;
+  quantity?: number | null;
+  drug_role?: string | null;
+  route?: string | null;
+  frequency?: string | null;
+  duration?: string | null;
+  instructions?: string | null;
+  pharmacy_item_id?: string | null;
+}
+
+export interface SaveSlipFromOrderPayload {
+  plan_id: string;
+  cycle_number: number;
+  cycle_day: number;
+  encounter_no?: string | null;
+  appointment_id?: string | null;
+  items: PharmacySlipOrderItemPayload[];
+=======
+>>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
 }
 
 export interface PharmacySlipRecord {
@@ -139,6 +183,48 @@ export interface GetSlipsParams {
 }
 
 export const pharmacyApi = {
+  /* Brands + strengths for the ordered medicines, grouped client-side by
+     generic_id + dosage_form. `generic_ids` is what actually surfaces the
+     other brands of the same generic. */
+  masterItems: (medicineIds: string[], genericIds: string[] = [], config?: AxiosRequestConfig) =>
+    API.get<{ success: boolean; message: string; data: PharmacyMasterItem[] }>(
+      "/pharmacy/master-items",
+      {
+        params: {
+          ...(medicineIds.length ? { medicine_ids: medicineIds.join(",") } : {}),
+          ...(genericIds.length ? { generic_ids: genericIds.join(",") } : {}),
+        },
+        ...config,
+      }
+    ),
+
+  /* The live slip of one explicit cycle day (null when none was saved yet). */
+  getByOrder: (
+    planId: string,
+    cycleNumber: number,
+    cycleDay: number,
+    config?: AxiosRequestConfig
+  ) =>
+    API.get<{ success: boolean; message: string; data: PharmacySlipRecord | null }>(
+      "/pharmacy/slips/by-order",
+      {
+        params: {
+          plan_id: planId,
+          cycle_number: cycleNumber,
+          cycle_day: cycleDay,
+        },
+        ...config,
+      }
+    ),
+
+  /* Creates the DRAFT slip for this cycle day, or replaces a DRAFT's lines.
+     An ISSUED slip is read-only and the backend rejects the write. */
+  saveFromOrder: (data: SaveSlipFromOrderPayload) =>
+    API.post<{ success: boolean; message: string; data: PharmacySlipRecord }>(
+      "/pharmacy/slips/from-order",
+      data
+    ),
+
   previewFromPlan: (planId: string, config?: AxiosRequestConfig) =>
     API.get<{ success: boolean; message: string; data: SlipPreview }>(`/pharmacy/slips/preview/plan/${planId}`, config),
 

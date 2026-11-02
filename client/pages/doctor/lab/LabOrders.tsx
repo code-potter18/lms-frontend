@@ -644,7 +644,7 @@ export default function LabOrders() {
         </div>
       )}
 
-      <ConfirmationDialog isOpen={logoutOpen} title="Confirm Logout" message="Are you sure you want to log out?" confirmText="Log Out" cancelText="Cancel" onConfirm={handleLogout} onCancel={() => setLogoutOpen(false)} variant="danger" />
+      <ConfirmationDialog open={logoutOpen} title="Confirm Logout" description="Are you sure you want to log out?" confirmText="Log Out" cancelText="Cancel" onConfirm={handleLogout} onCancel={() => setLogoutOpen(false)} type="danger" />
     </div>
   );
 }
