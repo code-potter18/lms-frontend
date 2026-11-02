@@ -245,6 +245,8 @@ export interface ChemoPlanItem {
     medicine_name?: string | null;
     brand_name?: string | null;
     generic_name?: string | null;
+    /* The generic a brand's pharmacy_master rows are matched on. */
+    generic_id?: string | null;
     dosage_form?: string | null;
     unit?: string | null;
   } | null;
@@ -328,6 +330,8 @@ export interface PharmacySlipItemRecord {
   medicine_id: string | null;
   drug_name: string | null;
   brand_name: string | null;
+  dosage_form?: string | null;
+  patient_dose?: string | null;
   dose: string | null;
   dose_unit: string | null;
   quantity: number | null;
@@ -336,6 +340,7 @@ export interface PharmacySlipItemRecord {
     medicine_name: string | null;
     generic_name: string | null;
     brand_name: string | null;
+    dosage_form?: string | null;
   } | null;
 }
 

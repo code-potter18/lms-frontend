@@ -101,6 +101,7 @@ export type DischargeMedicineRecord = {
   medicine_master?: {
     medicine_name: string | null;
     generic_name?: string | null;
+    generic_id?: string | null;
     dosage_form?: string | null;
     unit?: string | null;
   } | null;

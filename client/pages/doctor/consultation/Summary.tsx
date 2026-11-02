@@ -279,6 +279,8 @@ type DilutionRow = {
 /* A row of the printed Pharmacy Slip. */
 type PharmacySlipRow = {
   drug: string;
+  form: string;
+  patientDose: string;
   brand: string;
   dosage: string;
   quantity: string;
@@ -1394,6 +1396,11 @@ const Summary: React.FC<{
             item.medicine_master?.medicine_name ||
             item.medicine_master?.generic_name ||
             "",
+          form:
+            item.dosage_form ||
+            item.medicine_master?.dosage_form ||
+            "",
+          patientDose: item.patient_dose || "",
           brand: item.brand_name || item.medicine_master?.brand_name || "",
           dosage: [item.dose, item.dose_unit].filter(Boolean).join(" "),
           quantity: item.quantity != null ? String(item.quantity) : "",
@@ -1401,6 +1408,10 @@ const Summary: React.FC<{
         }))
       : sortedPlanItems.map((item) => ({
           drug: planItemName(item),
+          form: item.medicine_master?.dosage_form || item.formulation || "",
+          patientDose: [item.calculated_dose ?? item.protocol_dose, item.calculated_dose_unit ?? item.protocol_dose_unit]
+            .filter(Boolean)
+            .join(" "),
           brand: "",
           dosage: "",
           quantity: "",
@@ -2182,17 +2193,28 @@ const Summary: React.FC<{
     y = drawTable(
       slipTitle,
       y,
-      ["Sr.", "Drug Name", "Brand Name", "Dosage", "Quantity", "Type"],
+      [
+        "Sr.",
+        "Drug Name",
+        "Drug Form",
+        "Patient Dosage",
+        "Brand Name",
+        "Dosage",
+        "Quantity",
+        "Type",
+      ],
       pharmacySlipRows.length > 0
         ? pharmacySlipRows.map((row, index) => [
             String(index + 1),
             row.drug,
+            row.form,
+            row.patientDose,
             row.brand,
             row.dosage,
             row.quantity,
             row.type,
           ])
-        : [["", "No medicines ordered for this visit", "", "", "", ""]],
+        : [["", "No medicines ordered for this visit", "", "", "", "", "", ""]],
       { 0: { cellWidth: 32 } },
       /* No slip yet: only the order's names and types, other cells blank. */
       slipItems.length > 0 ? "-" : ""

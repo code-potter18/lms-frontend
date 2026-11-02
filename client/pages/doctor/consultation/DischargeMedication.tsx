@@ -1,5 +1,6 @@
-﻿import React, { useEffect, useRef, useState } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ClipboardList, Loader2 } from "lucide-react";
   import API, { getActiveBranchId } from "../../../api/axios";
   import { getUser } from "../../../utils/token";
   import { encounterApi } from "../../../api/encounter.api";
@@ -7,6 +8,7 @@ import { useNavigate } from "react-router-dom";
     chemoPlanItemName,
     chemotherapyApi,
     type ChemoPlanItem,
+    type ChemoPlanOrder,
   } from "../../../api/chemotherapy.api";
 import { SingleSelectDropdown } from "../../../components/ui/single-select-dropdown";
 import type { MultiSelectOption } from "../../../components/ui/multi-select-dropdown";
@@ -39,6 +41,11 @@ import {
 const OTHERS_OPTION = "__OTHERS__";
 import { EncounterDocuments } from "../../../components/hms/EncounterDocuments";
 import { ArrowLeftIcon, BellIcon, DoubleArrowIcon, PhoneIcon } from "./icons";
+import { PharmacySlipModal } from "./PharmacySlipModal";
+import {
+  buildSlipSourceRows,
+  type SlipDischargeRow,
+} from "./pharmacySlip";
 
 /* ============================================================
    DISCHARGE MEDICATION COMPONENT
@@ -65,6 +72,10 @@ type DischargeMedicationItem = {
      stays where it is instead of moving to the end of the table. */
   drugSequence: number;
   drugName: string;
+  /* The ordered medicine's form (Tab / Inj / Cap ...) for the pharmacy slip. */
+  drugForm: string;
+  /* medicine_master.generic_id, so the slip can list the generic's brands. */
+  genericId: string;
   dosage: string;
   dosageUnit: string;
   frequency: string;
@@ -114,6 +125,8 @@ const toTableRow = (
   planItemId: item.chemotherapy_plan_item_id,
   drugSequence: item.drug_sequence ?? 0,
   drugName: chemoPlanItemName(item),
+  drugForm: item.medicine_master?.dosage_form ?? item.formulation ?? "",
+  genericId: item.medicine_master?.generic_id ?? "",
   dosage: joinDosage(item.protocol_dose, item.protocol_dose_unit),
   dosageUnit: item.protocol_dose_unit ?? "",
   frequency: item.frequency || "",
@@ -211,6 +224,17 @@ const DischargeMedication: React.FC<{
   const [savingMeds, setSavingMeds] = useState(false);
   const [medsError, setMedsError] = useState("");
   const [medsLoading, setMedsLoading] = useState(false);
+
+  /* Pharmacy Slip popup: the current cycle day's order + its saved slip. */
+  const [slipOpen, setSlipOpen] = useState(false);
+  const [slipLoading, setSlipLoading] = useState(false);
+  const [slipError, setSlipError] = useState("");
+  const [slipOrder, setSlipOrder] = useState<ChemoPlanOrder | null>(null);
+  const [slipContext, setSlipContext] = useState({
+    planId: "",
+    cycle: 1,
+    day: 1,
+  });
 
   /* ----------------------------------------------------------------
    * Inpatient Discharge details -- shown only when this consultation's
@@ -431,6 +455,8 @@ const DischargeMedication: React.FC<{
         item.medicine_master?.generic_name ||
         item.drug_name ||
         "",
+      drugForm: item.medicine_master?.dosage_form || "",
+      genericId: item.medicine_master?.generic_id || "",
       dosage:
         item.patient_dose != null && item.patient_dose !== ""
           ? `${item.patient_dose} ${
@@ -639,6 +665,131 @@ const DischargeMedication: React.FC<{
   };
 
   /* ============================================================
+     PHARMACY SLIP POPUP
+     Resolves the cycle day the Chemotherapy Order step saved (the draft
+     records it), loads that day's order, then lets the modal fill in the
+     brand / dosage / quantity.
+     ============================================================ */
+
+  const openPharmacySlip = async () => {
+    if (editingRowId !== null || savingEdit) {
+      setMedsError("Save or cancel the medicine you are editing first.");
+      return;
+    }
+
+    setSlipOpen(true);
+    setSlipLoading(true);
+    setSlipError("");
+    setSlipOrder(null);
+
+    try {
+      const draft = (() => {
+        try {
+          return JSON.parse(
+            localStorage.getItem(`hms_chemo_order_${resolvedPatientId}`) ?? "null"
+          ) as {
+            planId?: string | null;
+            orderCycle?: number | null;
+            orderDay?: number | null;
+          } | null;
+        } catch {
+          return null;
+        }
+      })();
+
+      let planId = medsPlanId || draft?.planId || "";
+
+      if (!planId) {
+        try {
+          const latest = await API.get<{
+            success: boolean;
+            data: { chemotherapy_plan_id?: string } | null;
+          }>("/chemotherapy/plans/latest-for-patient", {
+            params: { patient_id: resolvedPatientId },
+          });
+          planId = latest.data.data?.chemotherapy_plan_id ?? "";
+        } catch (error: any) {
+          console.warn(
+            "Latest plan lookup failed for the pharmacy slip:",
+            error?.response?.data?.message ?? error?.message
+          );
+        }
+      }
+
+      let cycle = Number(draft?.orderCycle) > 0 ? Number(draft?.orderCycle) : 0;
+      let day = Number(draft?.orderDay) > 0 ? Number(draft?.orderDay) : 0;
+
+      if (!cycle || !day) {
+        const resolved = await resolvePlanCycleDay(planId || undefined, encounterNo);
+        cycle = resolved.cycle;
+        day = resolved.day;
+      }
+
+      setSlipContext({ planId, cycle: cycle || 1, day: day || 1 });
+
+      if (!planId) {
+        setSlipError(
+          "This patient has no chemotherapy plan yet. Save the Treatment Plan and Chemotherapy Order first."
+        );
+        return;
+      }
+
+      const response = await chemotherapyApi.getPlanOrder(
+        planId,
+        cycle || 1,
+        day || 1
+      );
+      const order = response.data.data ?? null;
+      setSlipOrder(order);
+
+      if (!order) {
+        setSlipError(
+          `No saved Chemotherapy Order for Cycle ${cycle || 1} / Day ${
+            day || 1
+          }. Save that step first, then open the pharmacy slip again.`
+        );
+      }
+    } catch (error: any) {
+      console.error("Failed to load the pharmacy slip order:", error);
+      setSlipError(
+        error?.response?.data?.message ||
+          error?.message ||
+          "Failed to load the chemotherapy order."
+      );
+    } finally {
+      setSlipLoading(false);
+    }
+  };
+
+  /* The popup's discharge rows follow the table, so a medicine the doctor
+     added or edited here appears on the slip without a reload. */
+  const slipDischargeRows = useMemo<SlipDischargeRow[]>(
+    () =>
+      medications.map((medication) => ({
+        id: medication.id,
+        medicineId: medication.medicineId,
+        drugName: medication.drugName,
+        drugForm: medication.drugForm,
+        genericId: medication.genericId,
+        dosage: medication.dosage,
+        dosageUnit: medication.dosageUnit,
+        frequency: medication.frequency,
+        instruction: medication.instruction,
+        duration: medication.duration,
+      })),
+    [medications]
+  );
+
+  const slipSourceRows = useMemo(
+    () =>
+      buildSlipSourceRows({
+        order: slipOrder,
+        dischargeRows: slipDischargeRows,
+      }),
+    [slipOrder, slipDischargeRows]
+  );
+
+  /* ============================================================
      ADD / EDIT / REMOVE A DISCHARGE MEDICINE
      Rows added here are saved on THIS patient's chemotherapy plan
      (plan items with drug_role DISCHARGE): a drug picked from the list is
@@ -770,6 +921,8 @@ const DischargeMedication: React.FC<{
       drugSequence:
         Math.max(0, ...medications.map((item) => item.drugSequence || 0)) + 1,
       drugName: "",
+      drugForm: "",
+      genericId: "",
       dosage: "",
       dosageUnit: "",
       frequency: "",
@@ -1766,6 +1919,28 @@ if (embedded) {
         {/* CONTENT */}
         <div className="relative z-10 flex-1 overflow-y-auto p-8 pt-0">
           <div className="mx-auto max-w-[1200px]">
+            {/* PHARMACY SLIP ACTION */}
+            <div className="mb-3 flex justify-end">
+              <button
+                type="button"
+                onClick={openPharmacySlip}
+                disabled={medsLoading || savingEdit || editingRowId !== null || slipLoading}
+                title={
+                  editingRowId !== null
+                    ? "Save or cancel the medicine you are editing first"
+                    : "Open the pharmacy slip for this cycle day"
+                }
+                className="inline-flex items-center gap-2 rounded-md border border-[#004785] bg-white px-4 py-2 text-[10px] font-bold text-[#004785] shadow-sm transition-all duration-150 hover:bg-[#004785] hover:text-white active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-[#00488D]/40 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {slipLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ClipboardList className="h-3.5 w-3.5" />
+                )}
+                Pharmacy Slip
+              </button>
+            </div>
+
             {/* MEDICATION CARD */}
             <div className="mx-auto mb-6 max-w-[1200px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
               {/* Table */}
@@ -1801,6 +1976,22 @@ if (embedded) {
           </div>
         </div>
       </main>
+
+      <PharmacySlipModal
+        open={slipOpen}
+        onOpenChange={(next) => {
+          setSlipOpen(next);
+          if (!next) setSlipError("");
+        }}
+        planId={slipContext.planId}
+        cycleNumber={slipContext.cycle}
+        cycleDay={slipContext.day}
+        encounterNo={encounterNo ?? null}
+        appointmentId={appointmentId ?? null}
+        sourceRows={slipSourceRows}
+        loading={slipLoading}
+        error={slipError}
+      />
     </div>
   );
 };
