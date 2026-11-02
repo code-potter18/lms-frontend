@@ -1567,6 +1567,28 @@ if (embedded) {
 
   return (
     <div className="w-full">
+            <div className="absolute left-0 right-0 top-20 z-0 h-40 border-b border-gray-200 bg-white" />
+
+            <div className="mb-2 mt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={openPharmacySlip}
+                disabled={medsLoading || savingEdit || editingRowId !== null || slipLoading}
+                title={
+                  editingRowId !== null
+                    ? "Save or cancel the medicine you are editing first"
+                    : "Open the pharmacy slip for this cycle day"
+                }
+                className="inline-flex items-center gap-2 rounded-md border border-[#004785] bg-white px-4 py-2 text-[10px] font-bold text-[#004785] shadow-sm transition-all duration-150 hover:bg-[#004785] hover:text-white active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-[#00488D]/40 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {slipLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ClipboardList className="h-3.5 w-3.5" />
+                )}
+                Pharmacy Slip
+              </button>
+            </div>
       {/* MEDICATION CARD */}
       <div className="mb-6 w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         {/* Table */}
@@ -1580,6 +1602,21 @@ if (embedded) {
 
         {!medsLoading && !medsError && renderAddMedicineButton()}
       </div>
+      <PharmacySlipModal
+        open={slipOpen}
+        onOpenChange={(next) => {
+          setSlipOpen(next);
+          if (!next) setSlipError("");
+        }}
+        planId={slipContext.planId}
+        cycleNumber={slipContext.cycle}
+        cycleDay={slipContext.day}
+        encounterNo={encounterNo ?? null}
+        appointmentId={appointmentId ?? null}
+        sourceRows={slipSourceRows}
+        loading={slipLoading}
+        error={slipError}
+      />
 
       {/* INPATIENT DISCHARGE -- only when this patient currently has an
           ADMITTED admission. A plain OPD/day-care consultation never sees
@@ -1977,21 +2014,7 @@ if (embedded) {
         </div>
       </main>
 
-      <PharmacySlipModal
-        open={slipOpen}
-        onOpenChange={(next) => {
-          setSlipOpen(next);
-          if (!next) setSlipError("");
-        }}
-        planId={slipContext.planId}
-        cycleNumber={slipContext.cycle}
-        cycleDay={slipContext.day}
-        encounterNo={encounterNo ?? null}
-        appointmentId={appointmentId ?? null}
-        sourceRows={slipSourceRows}
-        loading={slipLoading}
-        error={slipError}
-      />
+      
     </div>
   );
 };
