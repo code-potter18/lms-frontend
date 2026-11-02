@@ -7,6 +7,7 @@ export interface MultiSelectOption {
   label: string;
   value: string;
   badge?: string;
+  group?: string;
 }
 
 export interface FormProtocolMultiSelectProps {
@@ -265,38 +266,67 @@ export const FormProtocolMultiSelect: React.FC<FormProtocolMultiSelectProps> = (
                     {emptyMessage}
                   </p>
                 ) : (
-                  filteredOptions.map((opt) => {
-                    const isSelected = values.includes(opt.value);
-                    return (
-                      <div
-                        key={opt.value}
-                        onClick={() => toggleOption(opt.value)}
-                        className={cn(
-                          "flex items-center gap-2.5 px-3 py-2 text-[12.5px] cursor-pointer transition-colors select-none",
-                          isSelected
-                            ? "bg-[#edf4fb] text-[#12335c] font-medium"
-                            : "text-[#17212e] hover:bg-[#f8fafc]"
-                        )}
-                      >
+                  (() => {
+                    const hasGroups = filteredOptions.some((o) => !!o.group);
+                    const renderItem = (opt: MultiSelectOption) => {
+                      const isSelected = values.includes(opt.value);
+                      return (
                         <div
+                          key={opt.value}
+                          onClick={() => toggleOption(opt.value)}
                           className={cn(
-                            "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors",
+                            "flex items-center gap-2.5 px-3 py-2 text-[12.5px] cursor-pointer transition-colors select-none",
                             isSelected
-                              ? "bg-[#12335c] border-[#12335c] text-white"
-                              : "border-[#cbd5e1] bg-white"
+                              ? "bg-[#edf4fb] text-[#12335c] font-medium"
+                              : "text-[#17212e] hover:bg-[#f8fafc]"
                           )}
                         >
-                          {isSelected && <Check className="h-3 w-3 stroke-[3]" />}
+                          <div
+                            className={cn(
+                              "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors",
+                              isSelected
+                                ? "bg-[#12335c] border-[#12335c] text-white"
+                                : "border-[#cbd5e1] bg-white"
+                            )}
+                          >
+                            {isSelected && <Check className="h-3 w-3 stroke-[3]" />}
+                          </div>
+                          <span className="flex-1 truncate">{opt.label}</span>
+                          {opt.badge && (
+                            <span className="text-[10px] bg-[#f1f5f9] text-[#64748b] px-1.5 py-0.5 rounded font-normal shrink-0">
+                              {opt.badge}
+                            </span>
+                          )}
                         </div>
-                        <span className="flex-1 truncate">{opt.label}</span>
-                        {opt.badge && (
-                          <span className="text-[10px] bg-[#f1f5f9] text-[#64748b] px-1.5 py-0.5 rounded font-normal shrink-0">
-                            {opt.badge}
-                          </span>
-                        )}
+                      );
+                    };
+
+                    if (!hasGroups) {
+                      return filteredOptions.map(renderItem);
+                    }
+
+                    // Group while preserving sequence
+                    const groups: { name: string; items: MultiSelectOption[] }[] = [];
+                    const groupMap = new Map<string, MultiSelectOption[]>();
+                    for (const opt of filteredOptions) {
+                      const gName = opt.group || "Other";
+                      if (!groupMap.has(gName)) {
+                        const items: MultiSelectOption[] = [];
+                        groupMap.set(gName, items);
+                        groups.push({ name: gName, items });
+                      }
+                      groupMap.get(gName)!.push(opt);
+                    }
+
+                    return groups.map((g) => (
+                      <div key={g.name}>
+                        <div className="px-3 py-1.5 text-[10px] font-bold text-[#8a97a6] bg-[#f8fafc] uppercase tracking-wider sticky top-0 border-y border-[#edf1f5] select-none">
+                          {g.name}
+                        </div>
+                        {g.items.map(renderItem)}
                       </div>
-                    );
-                  })
+                    ));
+                  })()
                 )}
               </div>
             </div>,

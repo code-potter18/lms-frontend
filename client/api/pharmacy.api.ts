@@ -15,7 +15,10 @@ export interface ResolvedMedicationLine {
   medicine_id?: string | null;
   drug_name?: string | null;
   brand_name?: string | null;
+<<<<<<< HEAD
   dosage_form?: string | null;
+=======
+>>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
   patient_dose?: string | null;
   dose?: string | null;
   dose_unit?: string | null;
@@ -52,7 +55,10 @@ export interface PharmacySlipItem {
   medicine_id: string | null;
   drug_name: string | null;
   brand_name: string | null;
+<<<<<<< HEAD
   dosage_form?: string | null;
+=======
+>>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
   patient_dose?: string | null;
   dose: string | null;
   dose_unit: string | null;
@@ -65,7 +71,10 @@ export interface PharmacySlipItem {
   pharmacy_item_id?: string | null;
 }
 
+<<<<<<< HEAD
 /* One row of GET /pharmacy/master-items: a brand's pack with its strength. */
+=======
+>>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
 export interface PharmacyMasterItem {
   pharmacy_item_id: string;
   medicine_id: string | null;
@@ -78,6 +87,7 @@ export interface PharmacyMasterItem {
   strength_text: string | null;
   strength_value: string | number | null;
   strength_unit: string | null;
+<<<<<<< HEAD
 }
 
 /* One line the Discharge Medication popup saves for its cycle day. */
@@ -105,6 +115,8 @@ export interface SaveSlipFromOrderPayload {
   encounter_no?: string | null;
   appointment_id?: string | null;
   items: PharmacySlipOrderItemPayload[];
+=======
+>>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
 }
 
 export interface PharmacySlipRecord {
@@ -126,6 +138,10 @@ export interface PharmacySlipRecord {
   cancelled_at: string | null;
   cancelled_by: string | null;
   cancellation_reason: string | null;
+  amend_count: number;
+  last_amended_at: string | null;
+  last_amended_by: string | null;
+  last_amend_reason: string | null;
   created_by: string | null;
   created_at: string | null;
   updated_by: string | null;
@@ -140,8 +156,15 @@ export interface PharmacySlipRecord {
 
 export interface UpdateSlipItemsPayload {
   items: {
-    pharmacy_slip_item_id: string;
+    pharmacy_slip_item_id?: string;
+    medicine_id?: string | null;
+    drug_name?: string | null;
+    brand_name?: string | null;
+    dose?: string | null;
+    dose_unit?: string | null;
     quantity?: number | null;
+    drug_role?: string | null;
+    pharmacy_item_id?: string | null;
   }[];
 }
 
@@ -238,11 +261,31 @@ export const pharmacyApi = {
       data
     ),
 
-  // Printing finalises a DRAFT: it moves to ISSUED and freezes the lines. A
-  // reprint only restamps printed_at.
+  issue: (pharmacySlipId: string, data: { note?: string | null } = {}) =>
+    API.post<{ success: boolean; message: string; data: PharmacySlipRecord }>(
+      `/pharmacy/slips/${pharmacySlipId}/issue`,
+      data
+    ),
+
+  amend: (pharmacySlipId: string, data: UpdateSlipItemsPayload & { reason: string }) =>
+    API.post<{ success: boolean; message: string; data: PharmacySlipRecord }>(
+      `/pharmacy/slips/${pharmacySlipId}/amend`,
+      data
+    ),
+
+  // Printing is a pure document action: it restamps printed_at without altering status.
   markPrinted: (pharmacySlipId: string, data: { printed_by?: string | null } = {}) =>
     API.post<{ success: boolean; message: string; data: PharmacySlipRecord }>(
       `/pharmacy/slips/${pharmacySlipId}/print`,
       data
     ),
+
+  getMasterItems: (params?: { medicine_ids?: string }, config?: AxiosRequestConfig) =>
+    API.get<{ success: boolean; message: string; data: PharmacyMasterItem[] }>("/pharmacy/master-items", {
+      params,
+      ...config,
+    }),
+
+  createMedicine: (data: { medicine_name: string; generic_name?: string; dosage_form?: string }) =>
+    API.post<{ success: boolean; message: string; data: any }>("/pharmacy/medicines", data),
 };

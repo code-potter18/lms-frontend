@@ -12,6 +12,9 @@ import {
   ClipboardList,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  Check,
   Eye,
   Plus,
   Copy,
@@ -29,7 +32,6 @@ import {
   convertUnit,
   convertMassToVolume,
   getRecommendedUnitsForDoseCalc,
-  calculatePatientDoseFromTemplate,
 } from "@/utils/chemoCalculations";
 
 // Styling tokens - merged from the mFOLFOX6 "Protocol Builder" mockup:
@@ -40,6 +42,20 @@ const inputCls =
   "w-full h-10 px-3.5 bg-[#f8fafc] border border-[#dde4ec] rounded-[11px] text-[13.5px] text-[#17212e] placeholder:text-[#a7b2bf] outline-none transition-all duration-150 hover:border-[#c7d2dd] hover:bg-[#f5f8fb] focus:border-[#12335c] focus:bg-white focus:ring-[3px] focus:ring-[#12335c]/15 disabled:bg-[#f1f3f5] disabled:text-[#9aa5b1] disabled:cursor-not-allowed";
 const labelCls = "block text-[12.5px] font-semibold text-[#5b6b7c] mb-[7px]";
 const Req = () => <span className="text-[#c0374a] ml-0.5">*</span>;
+
+const drawerLabelCls = "block text-xs font-semibold text-slate-700 mb-1.5";
+const drawerInputCls =
+  "w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:bg-white focus:border-[#12335c] focus:outline-none focus:ring-2 focus:ring-[#12335c]/10 transition disabled:bg-slate-100 disabled:text-slate-400";
+const drawerTextareaCls =
+  "w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:bg-white focus:border-[#12335c] focus:outline-none focus:ring-2 focus:ring-[#12335c]/10 transition resize-none disabled:bg-slate-100 disabled:text-slate-400";
+
+const getFormIcon = (form?: string) => {
+  const f = (form || "").toLowerCase();
+  if (f.includes("inject") || f.includes("infus")) return <Syringe className="w-3 h-3 text-indigo-600 shrink-0" />;
+  if (f.includes("tab") || f.includes("cap")) return <Pill className="w-3 h-3 text-emerald-600 shrink-0" />;
+  if (f.includes("sol") || f.includes("susp") || f.includes("syr")) return <FlaskConical className="w-3 h-3 text-amber-600 shrink-0" />;
+  return <Pill className="w-3 h-3 text-slate-500 shrink-0" />;
+};
 
 const ptGridWrap = "overflow-x-auto w-full px-5 pt-4 scrollbar-hide";
 const ptGridBox = "min-w-[1300px] border border-[#edf1f5] rounded-xl bg-white";
@@ -105,6 +121,7 @@ interface DilutionDetail {
   dilutionId: string;
   id: string;
   medication: string;
+  medicineName?: string;
   brandName?: string;
   form: string;
   dose: string;
@@ -123,6 +140,7 @@ const isLegacyDilution = (item: any) =>
 interface Premed {
   id: string;
   medication: string;
+  medicineName?: string;
   brandName?: string;
   form: string;
   dose: string;
@@ -134,13 +152,14 @@ interface Premed {
 interface ChemoPlan {
   id: string;
   medication: string;
+  medicineName?: string;
   brandName?: string;
   form: string;
   doseCalc: string;
   dose: string;
   unit: string;
-  patientDose: string;
-  patientUnit: string;
+  patientDose?: string;
+  patientUnit?: string;
   adminNotes: string;
   toxicity: string;
   remarks: string;
@@ -149,6 +168,7 @@ interface ChemoPlan {
 interface SupportiveCare {
   id: string;
   medication: string;
+  medicineName?: string;
   brandName?: string;
   form: string;
   dose?: string;
@@ -161,6 +181,7 @@ interface PostTreatment {
   id: string;
   form: string;
   medication: string;
+  medicineName?: string;
   brandName?: string;
   dose: string;
   unit: string;
@@ -208,14 +229,12 @@ const DOSAGE_FORM_OPTIONS = [
   "Capsule",
   "Oral Solution",
   "Oral Suspension",
-  "Concentrate for Infusion",
-  "Powder for Injection",
-  "Powder for Infusion",
   "Cream",
   "Gel",
   "Ointment",
-  "Intrathecal Injection",
-  "Implant",
+  "Powder for Injection",
+  "Powder for Infusion",
+  "Concentrate for Infusion",
 ];
 
 // Legacy protocol items store the role name in drug_type; a real dosage form
@@ -338,7 +357,7 @@ function ProtocolSelect({
 }
 
 interface ProtocolMultiSelectProps {
-  options: { label: string; value: string }[];
+  options: { label: string; value: string; group?: string }[];
   values: string[];
   onValuesChange: (values: string[]) => void;
   placeholder?: string;
@@ -454,6 +473,70 @@ export default function CreateProtocol() {
 
   // Calculation Modal State
   const [calcModalOpen, setCalcModalOpen] = useState(false);
+
+  // Pattern 5 Slide-Over Drawer State
+  const [activeDrawer, setActiveDrawer] = useState<{
+    section: "premeds" | "chemo" | "supportive" | "dilution" | "post";
+    index: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && activeDrawer !== null) {
+        setActiveDrawer(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeDrawer]);
+
+  const getMedName = (medId: string, list: MedicineOption[]) => {
+    if (!medId) return "";
+    const found = list.find((m) => m.medicine_id === medId);
+    return found ? found.medicine_name : medId;
+  };
+
+  const getDilutionMedName = (medId: string) => {
+    if (!medId) return "";
+    const found = allAvailableDilutionMeds.find((m) => m.value === medId);
+    if (found) return found.label;
+    const inCatalog = chemoMeds.find((m) => m.medicine_id === medId) || dilutionMeds.find((m) => m.medicine_id === medId) || premedMeds.find((m) => m.medicine_id === medId);
+    if (inCatalog) return inCatalog.medicine_name;
+    const inDilutionRows = dilution.find((d) => d.medication === medId);
+    return inDilutionRows?.medicineName || medId;
+  };
+
+  const getPostMedName = (medId: string) => {
+    if (!medId) return "";
+    const medList = [...dischargeMeds, ...premedMeds, ...chemoMeds];
+    const found = medList.find((m) => m.medicine_id === medId);
+    if (found) return found.medicine_name;
+    const inPostRows = post.find((p) => p.medication === medId);
+    return inPostRows?.medicineName || medId;
+  };
+
+  const getActiveSectionItemsCount = () => {
+    if (!activeDrawer) return 0;
+    switch (activeDrawer.section) {
+      case "premeds": return premeds.length;
+      case "chemo": return chemoPlans.length;
+      case "supportive": return supportive.length;
+      case "dilution": return dilution.length;
+      case "post": return post.length;
+      default: return 0;
+    }
+  };
+
+  const handleDeleteFromDrawer = () => {
+    if (disabled || !activeDrawer) return;
+    const { section, index } = activeDrawer;
+    if (section === "premeds") removePremed(index);
+    else if (section === "chemo") removeChemoPlan(index);
+    else if (section === "supportive") removeSupportive(index);
+    else if (section === "dilution") removeDilution(index);
+    else if (section === "post") removePost(index);
+    setActiveDrawer(null);
+  };
   const [calcTargetRow, setCalcTargetRow] = useState<{
     index: number;
     drug: string;
@@ -477,11 +560,11 @@ export default function CreateProtocol() {
   const [days, setDays] = useState<Array<{ dayNumber: number; protocolDayId?: string; sameAsDay?: number }>>([{ dayNumber: 1 }]);
   const [activeDay, setActiveDay] = useState(1);
 
-  const emptyPremed = (): Premed => ({ id: "", medication: "", brandName: "", form: "", dose: "", unit: "", adminNotes: "", remarks: "", dilutions: [] });
-  const emptyChemo = (): ChemoPlan => ({ id: "", medication: "", brandName: "", form: "", doseCalc: "", dose: "", unit: "", patientDose: "", patientUnit: "", adminNotes: "", toxicity: "", remarks: "", dilutions: [] });
-  const emptySupportive = (): SupportiveCare => ({ id: "", medication: "", brandName: "", form: "", dose: "", unit: "", adminNotes: "", remarks: "", dilutions: [] });
-    const emptyDilution = (): DilutionDetail => ({ dilutionId: "", id: "", medication: "", brandName: "", form: "", dose: "", unit: "", volume: "", volumeUnit: "", diluent: "" });
-    const emptyPost = (): PostTreatment => ({ id: "", form: "", medication: "", brandName: "", dose: "", unit: "", frequency: "", instructions: "", duration: "", durationDays: "D", remarks: "" });
+  const emptyPremed = (): Premed => ({ id: "", medication: "", medicineName: "", brandName: "", form: "", dose: "", unit: "", adminNotes: "", remarks: "", dilutions: [] });
+  const emptyChemo = (): ChemoPlan => ({ id: "", medication: "", medicineName: "", brandName: "", form: "", doseCalc: "", dose: "", unit: "", adminNotes: "", toxicity: "", remarks: "", dilutions: [] });
+  const emptySupportive = (): SupportiveCare => ({ id: "", medication: "", medicineName: "", brandName: "", form: "", dose: "", unit: "", adminNotes: "", remarks: "", dilutions: [] });
+    const emptyDilution = (): DilutionDetail => ({ dilutionId: "", id: "", medication: "", medicineName: "", brandName: "", form: "", dose: "", unit: "", volume: "", volumeUnit: "", diluent: "" });
+    const emptyPost = (): PostTreatment => ({ id: "", form: "", medication: "", medicineName: "", brandName: "", dose: "", unit: "", frequency: "", instructions: "", duration: "", durationDays: "D", remarks: "" });
 
     // Per-day maps for protocol items (each day owns its own rows; preserves
     // administration_day per item so repeated edits never re-stamp items onto
@@ -503,7 +586,7 @@ export default function CreateProtocol() {
   const setSupportive = (list: SupportiveCare[]) => setSupportiveByDay((prev) => ({ ...prev, [activeDay]: list }));
 
   const [cancerTypes, setCancerTypes] = useState<Array<{ cancer_type_id: string; cancer_type: string }>>([]);
-  const [subtypes, setSubtypes] = useState<Array<{ subtype_id: string; subtype_name: string }>>([]);
+  const [subtypes, setSubtypes] = useState<Array<{ subtype_id: string; subtype_name: string; group?: string }>>([]);
   const [filterByCancerAndSubtype, setFilterByCancerAndSubtype] = useState(true);
   const [allHospitalMeds, setAllHospitalMeds] = useState<MedicineOption[]>([]);
   const [loadingAllMeds, setLoadingAllMeds] = useState(false);
@@ -517,26 +600,65 @@ export default function CreateProtocol() {
   const [loadingSupportiveMeds, setLoadingSupportiveMeds] = useState(false);
   const [loadingDischargeMeds, setLoadingDischargeMeds] = useState(false);
   const [loadingDilutionMeds, setLoadingDilutionMeds] = useState(false);
+  const [genericCatalog, setGenericCatalog] = useState<
+    Record<string, { generic_name: string; forms: string[]; brandsByForm: Record<string, string[]> }>
+  >({});
 
-  /* Medication options. When the current value is not in the loaded list
-     (a newly typed drug, or a medicine dropped by the subtype filter) the
-     value itself is used as the label - never the brand name, so a brand
-     added afterwards can never show up inside the MEDICATION field. */
+  /* Medication options. Groups identical generic_id into a single entry
+     so duplicate generic entries are collapsed. Uncatalogued items (GEN_NOT_SPECIFIED)
+     or custom typed drugs remain visible as individual items. */
   const getDropdownOptions = (meds: MedicineOption[], selectedVal?: string) => {
-    const opts = meds.map((m) => ({ label: m.medicine_name, value: m.medicine_id }));
-    if (selectedVal && !opts.some((o) => o.value === selectedVal)) {
-      opts.unshift({ label: selectedVal, value: selectedVal });
+    const seenGenerics = new Set<string>();
+    const opts: { label: string; value: string }[] = [];
+
+    for (const m of meds) {
+      if (m.generic_id && m.generic_id !== "GEN_NOT_SPECIFIED") {
+        if (!seenGenerics.has(m.generic_id)) {
+          seenGenerics.add(m.generic_id);
+          const label = m.generic_name || m.medicine_name;
+          opts.push({ label, value: m.medicine_id });
+        }
+      } else {
+        opts.push({ label: m.medicine_name, value: m.medicine_id });
+      }
     }
+
+    if (selectedVal && !opts.some((o) => o.value === selectedVal)) {
+      const match = meds.find((m) => m.medicine_id === selectedVal || m.medicine_name === selectedVal);
+      opts.unshift({
+        label: match ? (match.generic_name || match.medicine_name) : selectedVal,
+        value: selectedVal,
+      });
+    }
+
     return stripOthersOpts(opts);
   };
 
-  // Shared BRAND dropdown options: current value + brands already used in the
-  // section + medicine/generic names from the loaded list (common brand source).
+  /* Form options filtered by the selected medication's generic formulation in the catalog.
+     Forms matching the generic appear first, followed by the standard 12 dosage forms. */
+  const getFormDropdownOptions = (selectedMedication?: string, currentForm?: string, meds: MedicineOption[] = []) => {
+    const med = meds.find((m) => m.medicine_id === selectedMedication);
+    const gid = med?.generic_id;
+    const formsFromCatalog = (gid && genericCatalog[gid]?.forms) || (med?.dosage_form ? [med.dosage_form] : []);
+    const validCatalogForms = formsFromCatalog.filter((f) => DOSAGE_FORM_OPTIONS.includes(f));
+
+    const forms = Array.from(new Set([
+      ...validCatalogForms,
+      ...DOSAGE_FORM_OPTIONS,
+      ...(currentForm ? [currentForm] : []),
+    ])).filter(Boolean);
+
+    return stripOthersStr(forms);
+  };
+
+  /* Brand options dynamically filtered by the selected medication's generic AND formulation.
+     Always preserves the current/legacy brand so existing protocol data is never lost. */
   const getBrandDropdownOptions = (
     rows: Array<{ brandName?: string }>,
     current: string | undefined,
-    _meds: MedicineOption[] = [],
-    _selectedMedId?: string,
+    meds: MedicineOption[] = [],
+    selectedMedId?: string,
+    selectedForm?: string,
   ) => {
     const seen = new Set<string>();
     const opts: string[] = [];
@@ -547,6 +669,18 @@ export default function CreateProtocol() {
         opts.push(t);
       }
     };
+
+    const med = meds.find((m) => m.medicine_id === selectedMedId);
+    const gid = med?.generic_id;
+    if (gid && genericCatalog[gid]) {
+      const brandsByForm = genericCatalog[gid].brandsByForm;
+      if (selectedForm && brandsByForm[selectedForm]) {
+        brandsByForm[selectedForm].forEach(push);
+      } else {
+        Object.values(brandsByForm).flat().forEach(push);
+      }
+    }
+
     push(current);
     rows.forEach((r) => push(r.brandName));
     return stripOthersStr(opts);
@@ -683,6 +817,14 @@ export default function CreateProtocol() {
           .catch(() => {});
       })
       .finally(() => setLoadingTreatmentIntents(false));
+
+    chemotherapyApi
+      .getGenericFormsAndBrands()
+      .then((res) => {
+        const data = (res.data as any)?.data ?? res.data;
+        if (data && typeof data === "object") setGenericCatalog(data);
+      })
+      .catch((err) => console.error("Failed to load generic forms and brands:", err));
   }, []);
 
   // Fetch subtypes for all selected cancer types. Subtypes belonging to
@@ -701,7 +843,12 @@ export default function CreateProtocol() {
           .listCancerSubtypes(typeId)
           .then((res) => {
             const data = (res.data as any)?.data ?? res.data;
-            return Array.isArray(data) ? data : [];
+            const cancerTypeObj = cancerTypes.find((c) => c.cancer_type_id === typeId);
+            const list = Array.isArray(data) ? data : [];
+            return list.map((s: any) => ({
+              ...s,
+              group: cancerTypeObj?.cancer_type || "Cancer Subtypes",
+            }));
           })
           .catch(() => [])
       )
@@ -717,7 +864,7 @@ export default function CreateProtocol() {
         setSubtypeIds((prev) => prev.filter((id) => combined.some((s) => s.subtype_id === id)));
       })
       .finally(() => setLoadingSubtypes(false));
-  }, [cancerTypeIds]);
+  }, [cancerTypeIds, cancerTypes]);
 
   // Fetch all hospital medicines on demand when filter is disabled
   useEffect(() => {
@@ -734,7 +881,7 @@ export default function CreateProtocol() {
     }
   }, [filterByCancerAndSubtype, allHospitalMeds.length]);
 
-  // Fetch medicines dynamically based on selected cancer types & subtypes for
+  // Fetch medicines dynamically based on clinical scope:
   // PREMEDICATION, PRIMARY (chemo), SUPPORTIVE, and DISCHARGE (post-treatment).
   useEffect(() => {
     if (!filterByCancerAndSubtype) {
@@ -747,17 +894,9 @@ export default function CreateProtocol() {
       return;
     }
 
-    if (!cancerTypeIds || cancerTypeIds.length === 0) {
-      setPremedMeds([]);
-      setChemoMeds([]);
-      setSupportiveMeds([]);
-      setDischargeMeds([]);
-      return;
-    }
-
     setLoadingPremedMeds(true);
     chemotherapyApi
-      .listMedicinesByCancerSubtype(cancerTypeIds, subtypeIds, "PREMEDICATION")
+      .listMedicinesByRole("PREMEDICATION")
       .then((res) => {
         const data = (res.data as any)?.data ?? res.data;
         setPremedMeds(Array.isArray(data) ? data : []);
@@ -767,7 +906,7 @@ export default function CreateProtocol() {
 
     setLoadingChemoMeds(true);
     chemotherapyApi
-      .listMedicinesByCancerSubtype(cancerTypeIds, subtypeIds, "PRIMARY")
+      .listMedicinesByRole("PRIMARY")
       .then((res) => {
         const data = (res.data as any)?.data ?? res.data;
         setChemoMeds(Array.isArray(data) ? data : []);
@@ -777,7 +916,7 @@ export default function CreateProtocol() {
 
     setLoadingSupportiveMeds(true);
     chemotherapyApi
-      .listMedicinesByCancerSubtype(cancerTypeIds, subtypeIds, "SUPPORTIVE")
+      .listMedicinesByRole("SUPPORTIVE")
       .then((res) => {
         const data = (res.data as any)?.data ?? res.data;
         setSupportiveMeds(Array.isArray(data) ? data : []);
@@ -787,7 +926,7 @@ export default function CreateProtocol() {
 
     setLoadingDischargeMeds(true);
     chemotherapyApi
-      .listMedicinesByCancerSubtype(cancerTypeIds, subtypeIds, "DISCHARGE")
+      .listMedicinesByRole("DISCHARGE")
       .then((res) => {
         const data = (res.data as any)?.data ?? res.data;
         setDischargeMeds(Array.isArray(data) ? data : []);
@@ -795,7 +934,7 @@ export default function CreateProtocol() {
       .catch(() => setDischargeMeds([]))
       .finally(() => setLoadingDischargeMeds(false));
 
-  }, [cancerTypeIds, subtypeIds, filterByCancerAndSubtype, allHospitalMeds]);
+  }, [filterByCancerAndSubtype, allHospitalMeds]);
 
   // Load existing protocol for edit/view
   useEffect(() => {
@@ -872,8 +1011,9 @@ export default function CreateProtocol() {
                       (premedsM[dayIndex] = premedsM[dayIndex] ?? []).push({
                         id: (x.protocol_item_id as string) ?? "",
                         medication: x.medicine_id ?? x.medicine_master?.medicine_name ?? "",
+                        medicineName: x.medicine_master?.medicine_name ?? "",
                         brandName: x.drug_brand_name ?? "",
-                        form: formFromDrugType(x.drug_type),
+                        form: formFromDrugType(x.drug_type) || x.medicine_master?.dosage_form || "",
                         dose: (x.patient_dose as any) ?? "",
                         unit: x.patient_dose_unit ?? "",
                         adminNotes: x.administration_detail ?? "",
@@ -895,13 +1035,12 @@ export default function CreateProtocol() {
                       (chemoM[dayIndex] = chemoM[dayIndex] ?? []).push({
                         id: (x.protocol_item_id as string) ?? "",
                         medication: x.medicine_id ?? "",
+                        medicineName: x.medicine_master?.medicine_name ?? "",
                         brandName: x.drug_brand_name ?? "",
-                        form: formFromDrugType(x.drug_type),
+                        form: formFromDrugType(x.drug_type) || x.medicine_master?.dosage_form || "",
                         doseCalc: (x as any).dose_calculation_method ?? "",
-                        dose: (x.dosage as any) ?? "",
-                        unit: x.dosage_unit ?? "",
-                        patientDose: (x.patient_dose as any) ?? "",
-                        patientUnit: x.patient_dose_unit ?? "",
+                        dose: (x.dosage != null ? String(x.dosage) : (x.patient_dose != null ? String(x.patient_dose) : "")),
+                        unit: x.dosage_unit ?? x.patient_dose_unit ?? "",
                         adminNotes: x.administration_detail ?? "",
                         toxicity: x.previous_toxicity ?? "",
                         remarks: x.remarks ?? "",
@@ -923,8 +1062,9 @@ export default function CreateProtocol() {
                         (suppM[dayIndex] = suppM[dayIndex] ?? []).push({
                           id: (x.protocol_item_id as string) ?? "",
                           medication: x.medicine_id ?? "",
+                          medicineName: x.medicine_master?.medicine_name ?? "",
                           brandName: x.drug_brand_name ?? "",
-                          form: formFromDrugType(x.drug_type),
+                          form: formFromDrugType(x.drug_type) || x.medicine_master?.dosage_form || "",
                           dose: x.dosage != null ? String(x.dosage) : "",
                           unit: x.dosage_unit ?? "",
                           adminNotes: x.administration_detail ?? "",
@@ -948,8 +1088,9 @@ export default function CreateProtocol() {
                         (suppM[dayIndex] = suppM[dayIndex] ?? []).push({
                           id: (x.protocol_item_id as string) ?? "",
                           medication: x.medicine_id ?? "",
+                          medicineName: x.medicine_master?.medicine_name ?? "",
                           brandName: x.drug_brand_name ?? "",
-                          form: formFromDrugType(x.drug_type),
+                          form: formFromDrugType(x.drug_type) || x.medicine_master?.dosage_form || "",
                           dose: x.dosage != null ? String(x.dosage) : "",
                           unit: x.dosage_unit ?? "",
                           adminNotes: x.administration_detail ?? "",
@@ -970,8 +1111,9 @@ export default function CreateProtocol() {
                         (suppM[dayIndex] = suppM[dayIndex] ?? []).push({
                           id: (x.protocol_item_id as string) ?? "",
                           medication: x.medicine_id ?? "",
+                          medicineName: x.medicine_master?.medicine_name ?? "",
                           brandName: x.drug_brand_name ?? "",
-                          form: formFromDrugType(x.drug_type),
+                          form: formFromDrugType(x.drug_type) || x.medicine_master?.dosage_form || "",
                           dose: x.dosage != null ? String(x.dosage) : "",
                           unit: x.dosage_unit ?? "",
                           adminNotes: x.administration_detail ?? "",
@@ -994,6 +1136,7 @@ export default function CreateProtocol() {
                         id: (d.discharge_instruction_id as string) ?? "",
                         form: d.drug_from ?? "Tab",
                         medication: d.medicine_id ?? "",
+                        medicineName: d.medicine_master?.medicine_name ?? (d.drug_brand_name || ""),
                         brandName: d.drug_brand_name ?? "",
                         dose: d.patient_dose != null ? String(d.patient_dose) : "",
                         unit: d.patient_dose_unit ?? "",
@@ -1010,6 +1153,7 @@ export default function CreateProtocol() {
                         id: (x.protocol_item_id as string) ?? "",
                         form: "Tab",
                         medication: x.medicine_id ?? "",
+                        medicineName: x.medicine_master?.medicine_name ?? (x.drug_brand_name || ""),
                         brandName: x.drug_brand_name ?? "",
                         dose: (x.dosage as any) ?? "",
                         unit: x.dosage_unit ?? "",
@@ -1030,6 +1174,7 @@ export default function CreateProtocol() {
                         dilutionId: (d.protocol_dilution_id as string) ?? "",
                         id: (d.protocol_item_id as string) ?? "",
                         medication: d.medicine_id ?? "",
+                        medicineName: d.medicine_master?.medicine_name ?? (d.drug_brand_name || ""),
                         brandName: d.drug_brand_name ?? "",
                         form: d.form ?? "",
                         dose: d.dose != null ? String(d.dose) : "",
@@ -1046,6 +1191,7 @@ export default function CreateProtocol() {
                           dilutionId: (d.protocol_dilution_id as string) ?? "",
                           id: (d.protocol_item_id as string) ?? "",
                           medication: d.medicine_id ?? x.medicine_id ?? "",
+                          medicineName: d.medicine_master?.medicine_name ?? x?.medicine_master?.medicine_name ?? (d.drug_brand_name || ""),
                           brandName: d.drug_brand_name ?? "",
                           form: d.form ?? "",
                           dose: d.dose != null ? String(d.dose) : "",
@@ -1163,6 +1309,8 @@ export default function CreateProtocol() {
       const items: Array<{
         protocol_item_id?: string;
         medicine_id: string;
+        medicine_name?: string | null;
+        generic_name?: string | null;
         drug_role: string;
         drug_type?: string | null;
         drug_sequence: number;
@@ -1187,9 +1335,11 @@ export default function CreateProtocol() {
           items.push({
             protocol_item_id: row.id || undefined,
             medicine_id: row.medication.trim(),
+            medicine_name: row.medicineName?.trim() || null,
+            generic_name: getMedName(row.medication, premedMeds) || row.medication.trim(),
             drug_brand_name: row.brandName?.trim() || null,
             drug_role: "PREMEDICATION",
-            drug_type: row.form?.trim() || "PREMEDICATION",
+            drug_type: row.form?.trim() || null,
             drug_sequence: seq++,
             patient_dose: row.dose || null,
             patient_dose_unit: row.unit || null,
@@ -1215,14 +1365,16 @@ export default function CreateProtocol() {
           items.push({
             protocol_item_id: row.id || undefined,
             medicine_id: row.medication.trim(),
+            medicine_name: row.medicineName?.trim() || null,
+            generic_name: getMedName(row.medication, chemoMeds) || row.medication.trim(),
             drug_brand_name: row.brandName?.trim() || null,
             drug_role: "PRIMARY",
-            drug_type: row.form?.trim() || "PRIMARY",
+            drug_type: row.form?.trim() || null,
             drug_sequence: seq++,
             dosage: row.dose || null,
             dosage_unit: row.unit || null,
-            patient_dose: row.patientDose || null,
-            patient_dose_unit: row.patientUnit || null,
+            patient_dose: row.dose || null,
+            patient_dose_unit: row.unit || null,
             dose_calculation_method: row.doseCalc || null,
             previous_toxicity: row.toxicity || null,
             administration_detail: row.adminNotes || null,
@@ -1247,9 +1399,11 @@ export default function CreateProtocol() {
           items.push({
             protocol_item_id: row.id || undefined,
             medicine_id: row.medication.trim(),
+            medicine_name: row.medicineName?.trim() || null,
+            generic_name: getMedName(row.medication, supportiveMeds) || row.medication.trim(),
             drug_brand_name: row.brandName?.trim() || null,
             drug_role: "SUPPORTIVE",
-            drug_type: row.form?.trim() || "SUPPORTIVE",
+            drug_type: row.form?.trim() || null,
             drug_sequence: seq++,
             dosage: row.dose || null,
             dosage_unit: row.unit || null,
@@ -1283,6 +1437,8 @@ export default function CreateProtocol() {
       .map((row, idx) => ({
         discharge_instruction_id: row.id || undefined,
         medicine_id: row.medication.trim(),
+        medicine_name: row.medicineName?.trim() || null,
+        generic_name: getMedName(row.medication, dischargeMeds.length > 0 ? dischargeMeds : premedMeds) || row.medication.trim(),
         drug_brand_name: row.brandName?.trim() || null,
         drug_sequence: idx + 1,
         drug_from: row.form || null,
@@ -1302,6 +1458,8 @@ export default function CreateProtocol() {
       .map((row) => ({
         protocol_dilution_id: row.dilutionId || undefined,
         medicine_id: row.medication.trim(),
+        medicine_name: row.medicineName?.trim() || null,
+        generic_name: getMedName(row.medication, dilutionMeds.length > 0 ? dilutionMeds : chemoMeds) || row.medication.trim(),
         drug_brand_name: row.brandName?.trim() || null,
         form: row.form || null,
         dose: row.dose || null,
@@ -1396,7 +1554,7 @@ export default function CreateProtocol() {
   const addPremed = () => setPremeds([...premeds, { id: "", medication: "", form: "", dose: "", unit: "", adminNotes: "", remarks: "" }]);
   const removePremed = (idx: number) => setPremeds(premeds.filter((_, i) => i !== idx));
   const addChemoPlan = () =>
-    setChemoPlans([...chemoPlans, { id: "", medication: "", form: "", doseCalc: "", dose: "", unit: "", patientDose: "", patientUnit: "", adminNotes: "", toxicity: "", remarks: "" }]);
+    setChemoPlans([...chemoPlans, { id: "", medication: "", form: "", doseCalc: "", dose: "", unit: "", adminNotes: "", toxicity: "", remarks: "" }]);
   const removeChemoPlan = (idx: number) => setChemoPlans(chemoPlans.filter((_, i) => i !== idx));
   const addSupportive = () => setSupportive([...supportive, { id: "", medication: "", form: "", dose: "", unit: "", adminNotes: "", remarks: "" }]);
   const removeSupportive = (idx: number) => setSupportive(supportive.filter((_, i) => i !== idx));
@@ -1405,24 +1563,7 @@ export default function CreateProtocol() {
   const addPost = () => setPost([...post, emptyPost()]);
   const removePost = (idx: number) => setPost(post.filter((_, i) => i !== idx));
 
-  const handleApplyDoseFromModal = (calcDose: string, calcUnit: string, doseCalcMethod: string) => {
-    if (calcTargetRow !== null && calcTargetRow.index >= 0) {
-      const idx = calcTargetRow.index;
-      const n = [...chemoPlans];
-      if (n[idx]) {
-        n[idx].patientDose = calcDose;
-        n[idx].patientUnit = calcUnit;
-        if (doseCalcMethod) {
-          n[idx].doseCalc = doseCalcMethod;
-        }
-        setChemoPlans(n);
-        toast({
-          title: "Calculated Dose Applied",
-          description: `Applied ${calcDose} ${calcUnit} to row #${idx + 1}.`,
-        });
-      }
-    }
-  };
+
 
   const allAvailableDilutionMeds = (() => {
     const map = new Map<string, string>();
@@ -1431,17 +1572,26 @@ export default function CreateProtocol() {
     }
     for (const dayNum of Object.keys(premedsByDay)) {
       for (const row of premedsByDay[Number(dayNum)] ?? []) {
-        if (row.id && row.medication) map.set(row.id, row.medication);
+        if (row.medication) {
+          const label = row.medicineName || getMedName(row.medication, premedMeds);
+          if (label && label !== row.medication) map.set(row.medication, label);
+        }
       }
     }
     for (const dayNum of Object.keys(chemoPlansByDay)) {
       for (const row of chemoPlansByDay[Number(dayNum)] ?? []) {
-        if (row.id && row.medication) map.set(row.id, row.medication);
+        if (row.medication) {
+          const label = row.medicineName || getMedName(row.medication, chemoMeds);
+          if (label && label !== row.medication) map.set(row.medication, label);
+        }
       }
     }
     for (const dayNum of Object.keys(supportiveByDay)) {
       for (const row of supportiveByDay[Number(dayNum)] ?? []) {
-        if (row.id && row.medication) map.set(row.id, row.medication);
+        if (row.medication) {
+          const label = row.medicineName || getMedName(row.medication, supportiveMeds);
+          if (label && label !== row.medication) map.set(row.medication, label);
+        }
       }
     }
     for (const m of chemoMeds) {
@@ -1709,7 +1859,7 @@ export default function CreateProtocol() {
                   <div>
                     <label className={labelCls}>Cancer Subtype(s)</label>
                     <ProtocolMultiSelect
-                      options={subtypes.map((s) => ({ label: s.subtype_name, value: s.subtype_id }))}
+                      options={subtypes.map((s) => ({ label: s.subtype_name, value: s.subtype_id, group: s.group }))}
                       values={subtypeIds}
                       onValuesChange={setSubtypeIds}
                       placeholder={cancerTypeIds.length === 0 ? "Select cancer type(s) first" : loadingSubtypes ? "Loading subtypes..." : subtypes.length ? "Select subtype(s)" : "No subtypes"}
@@ -1787,7 +1937,7 @@ export default function CreateProtocol() {
 
                   <div className="lg:col-span-3 flex flex-wrap items-center justify-between gap-2 pt-3 mt-1 border-t border-[#edf1f5] text-xs">
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-[#5b6b7c]">Medicine Dropdowns:</span>
+                      <span className="font-semibold text-[#5b6b7c]">Medicine Scope:</span>
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold ${
                         filterByCancerAndSubtype
                           ? "bg-[#eaf0f7] text-[#12335c] border border-[#d2dfef]"
@@ -1795,30 +1945,24 @@ export default function CreateProtocol() {
                       }`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${filterByCancerAndSubtype ? "bg-[#12335c]" : "bg-[#d97706]"}`} />
                         {filterByCancerAndSubtype
-                          ? subtypeIds.length > 0
-                            ? `Strictly filtered by Subtype (${subtypes.filter(s => subtypeIds.includes(s.subtype_id)).map(s => s.subtype_name).join(", ")})`
-                            : cancerTypeIds.length > 0
-                            ? `Filtered by Cancer Type (${cancerTypes.filter(c => cancerTypeIds.includes(c.cancer_type_id)).map(c => c.cancer_type).join(", ") || "Selected"})`
-                            : "Select cancer type & subtype to filter medicines"
-                          : `Showing ALL hospital medicines (${allHospitalMeds.length || "inventory"})`}
+                          ? "Filtered by Clinical Role (Premeds / Primary Chemo / Supportive)"
+                          : `Showing ALL hospital medicines (${allHospitalMeds.length || "catalog"})`}
                       </span>
                     </div>
-                    {cancerTypeIds.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => !disabled && setFilterByCancerAndSubtype(!filterByCancerAndSubtype)}
-                        disabled={disabled || loadingAllMeds}
-                        className="text-xs font-medium text-[#12335c] hover:underline"
-                      >
-                        {loadingAllMeds ? (
-                          <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Loading all medicines...</span>
-                        ) : filterByCancerAndSubtype ? (
-                          "Need an uncatalogued drug? Show all hospital medicines"
-                        ) : (
-                          "← Switch back to strictly filtered cancer/subtype medicines"
-                        )}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => !disabled && setFilterByCancerAndSubtype(!filterByCancerAndSubtype)}
+                      disabled={disabled || loadingAllMeds}
+                      className="text-xs font-medium text-[#12335c] hover:underline"
+                    >
+                      {loadingAllMeds ? (
+                        <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Loading all medicines...</span>
+                      ) : filterByCancerAndSubtype ? (
+                        "Need an uncatalogued drug? Show all hospital medicines"
+                      ) : (
+                        "← Switch back to Role-filtered medicines"
+                      )}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1874,970 +2018,727 @@ export default function CreateProtocol() {
           </div>
         </div>
 
-        {/* Pre-medications */}
-            <div className={cardCls + " mb-5"}>
-              <div
-                className="flex items-center justify-between px-6 py-[17px] cursor-pointer hover:bg-[#f8f9fb] transition-colors"
-                onClick={() => toggleSection("premeds")}
-              >
-                <div className="flex items-center gap-2.5 text-[13.5px] font-bold text-[#17212e]">
-                  <Pill className="w-4 h-4 text-[#12335c]" /> Pre-medications
-                </div>
-                {sections.premeds ? <ChevronUp className="w-4 h-4 text-[#8a97a6]" /> : <ChevronDown className="w-4 h-4 text-[#8a97a6]" />}
+        {/* =========================================================================
+            PATTERN 5: SLIDE DRAWER GRID - PRE-MEDICATIONS
+           ========================================================================= */}
+        <div className={cardCls + " mb-5"}>
+          <div
+            className="flex items-center justify-between px-6 py-[17px] cursor-pointer hover:bg-[#f8f9fb] transition-colors"
+            onClick={() => toggleSection("premeds")}
+          >
+            <div className="flex items-center gap-2.5 text-[13.5px] font-bold text-[#17212e]">
+              <div className="w-7 h-7 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center">
+                <Pill className="w-4 h-4" />
               </div>
-              {sections.premeds && (
-                <>
-                  <ProtocolGridTable
-                    columns={["#", "FORM", "MEDICATION / DRUG *", "BRAND", "DOSE", "UNIT", "ADMIN NOTES", "REMARKS", "ACTIONS"]}
-                    template="44px 1.1fr 1.4fr 1.1fr 0.9fr 130px 1.3fr 1.3fr 40px"
-                    addLabel="+ Add Row"
-                    onAdd={addPremed}
-                    disabled={disabled}
-                    rows={premeds.map((row, idx) => [
-                      idx + 1,
-                      <ProtocolSelect
-                        key="f"
-                        options={stripOthersStr(Array.from(new Set([...DOSAGE_FORM_OPTIONS, ...fieldOptions.dilution_forms, row.form].filter(Boolean))))}
-                        value={row.form}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...premeds];
-                          n[idx].form = v;
-                          setPremeds(n);
-                        }}
-                        placeholder="Select form"
-                        emptyMessage="No forms found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="m"
-                        options={getDropdownOptions(premedMeds, row.medication)}
-                        value={row.medication}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...premeds];
-                          n[idx].medication = v;
-                          const med = premedMeds.find((m) => m.medicine_id === v);
-                          if (!n[idx].form && med?.dosage_form) n[idx].form = med.dosage_form;
-                          setPremeds(n);
-                        }}
-                        placeholder={
-                          cancerTypeIds.length === 0
-                            ? "Select cancer type(s) first"
-                            : loadingPremedMeds
-                            ? "Loading medicines..."
-                            : "Select medicine"
-                        }
-                        emptyMessage={
-                          cancerTypeIds.length === 0
-                            ? "Select cancer type(s) first"
-                            : subtypeIds.length > 0 && filterByCancerAndSubtype
-                            ? "No premedications found for selected subtype"
-                            : "No premedications found"
-                        }
-                        loading={loadingPremedMeds}
-                        disabled={disabled || cancerTypeIds.length === 0}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="b"
-                        options={getBrandDropdownOptions(premeds, row.brandName, premedMeds, row.medication)}
-                        value={row.brandName ?? ""}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...premeds];
-                          n[idx].brandName = v;
-                          setPremeds(n);
-                        }}
-                        placeholder="Select brand"
-                        emptyMessage="No brand options"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="d"
-                        options={getDoseDropdownOptions(premeds, row.dose)}
-                        value={row.dose}
-                        onValueChange={(v) => {
-                          const n = [...premeds];
-                          n[idx].dose = v;
-                          setPremeds(n);
-                        }}
-                        placeholder="Select dose"
-                        emptyMessage="No dose options"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="u"
-                        options={Array.from(new Set([...fieldOptions.dosage_units, row.unit].filter(Boolean)))}
-                        value={row.unit}
-                        onValueChange={(v) => {
-                          const n = [...premeds];
-                          n[idx].unit = v;
-                          setPremeds(n);
-                        }}
-                        placeholder="Select unit"
-                        emptyMessage="No units found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <input
-                        key="a"
-                        type="text"
-                        value={row.adminNotes}
-                        onChange={(e) => {
-                          const n = [...premeds];
-                          n[idx].adminNotes = e.target.value;
-                          setPremeds(n);
-                        }}
-                        className={ptInput}
-                        placeholder="Enter notes"
-                        disabled={disabled}
-                      />,
-                      <input
-                        key="r"
-                        type="text"
-                        value={row.remarks}
-                        onChange={(e) => {
-                          const n = [...premeds];
-                          n[idx].remarks = e.target.value;
-                          setPremeds(n);
-                        }}
-                        className={ptInput}
-                        placeholder="Enter remarks"
-                        disabled={disabled}
-                      />,
-                      <button
-                        key="del"
-                        onClick={() => removePremed(idx)}
-                        disabled={disabled}
-                        className="p-1.5 rounded-lg hover:bg-gray-100 text-[#6b7280] hover:text-red-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>,
-                    ])}
-                  />
-                </>
-              )}
+              <span>Pre-medications</span>
+              <span className="px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-600 rounded-full">
+                {premeds.length} {premeds.length === 1 ? "drug" : "drugs"}
+              </span>
             </div>
+            {sections.premeds ? <ChevronUp className="w-4 h-4 text-[#8a97a6]" /> : <ChevronDown className="w-4 h-4 text-[#8a97a6]" />}
+          </div>
 
-            {/* Chemotherapy plan */}
-            <div className={cardCls + " mb-5"}>
-              <div className="flex items-center justify-between px-6 py-[17px] hover:bg-[#f8f9fb] transition-colors">
-                <div
-                  className="flex items-center gap-2.5 text-[13.5px] font-bold text-[#17212e] cursor-pointer flex-1"
-                  onClick={() => toggleSection("chemo")}
-                >
-                  <Syringe className="w-4 h-4 text-[#12335c]" /> Chemotherapy Plan
+          {sections.premeds && (
+            <div className="p-5 pt-0">
+              {premeds.length === 0 ? (
+                <div className="text-center py-10 border-2 border-dashed border-slate-200 rounded-xl my-2">
+                  <div className="w-10 h-10 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center mx-auto mb-2">
+                    <Pill className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-semibold text-slate-700">No pre-medications added</p>
+                  <p className="text-[11px] text-slate-400 mt-1">Click the "Add Medication Row" button below to create one.</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setCalcTargetRow(null);
-                      setCalcModalOpen(true);
-                    }}
-                    className="text-xs font-semibold text-[#12335c] bg-[#eaf0f7] hover:bg-[#dbe7f4] px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-colors"
-                    title="Open Medicine Dosage Calculator & Formulas Reference"
-                  >
-                    <Calculator className="w-3.5 h-3.5" />
-                    <span>Formulas & Dose Calculator</span>
-                  </button>
-                  <div
-                    className="cursor-pointer p-1"
-                    onClick={() => toggleSection("chemo")}
-                  >
-                    {sections.chemo ? <ChevronUp className="w-4 h-4 text-[#8a97a6]" /> : <ChevronDown className="w-4 h-4 text-[#8a97a6]" />}
+              ) : (
+                <div className="overflow-hidden border border-slate-200 rounded-xl bg-white shadow-2xs">
+                  <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    <span>Prescription Overview (Click row to edit details)</span>
+                    <span>Status</span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {premeds.map((row, idx) => {
+                      const medName = getMedName(row.medication, premedMeds);
+                      const isReady = !!row.medication?.trim();
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => setActiveDrawer({ section: "premeds", index: idx })}
+                          className="p-3.5 hover:bg-sky-50/50 cursor-pointer transition flex items-center justify-between group gap-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="text-xs font-mono text-slate-400 font-semibold w-6 shrink-0">
+                              {String(idx + 1).padStart(2, "0")}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-slate-900 group-hover:text-sky-700 transition truncate">
+                                  {medName || <span className="italic text-slate-400 font-normal">Select medication...</span>}
+                                </span>
+                                {row.form && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/80">
+                                    {getFormIcon(row.form)}
+                                    <span>{row.form}</span>
+                                  </span>
+                                )}
+                                {row.brandName && (
+                                  <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
+                                    {row.brandName}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1 truncate">
+                                {row.dose ? `${row.dose} ${row.unit || ""}` : "No dose specified"}
+                                {row.adminNotes ? ` • ${row.adminNotes}` : ""}
+                                {row.remarks ? ` (Remark: ${row.remarks})` : ""}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            {isReady ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <Check className="w-3 h-3 text-emerald-600" /> Ready
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                Incomplete
+                              </span>
+                            )}
+
+                            {!disabled && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removePremed(idx);
+                                }}
+                                title="Delete row"
+                                className="w-7 h-7 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition opacity-60 group-hover:opacity-100"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            <div className="w-7 h-7 rounded-lg bg-slate-100 group-hover:bg-sky-100 group-hover:text-sky-700 text-slate-400 flex items-center justify-center transition">
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-              </div>
-              {sections.chemo && (
-                <>
-                  <ProtocolGridTable
-                    columns={["#", "FORM", "MEDICATION *", "BRAND", "DOSE", "DOSE CALC", "UNIT", "PATIENT DOSE", "UNIT", "ADMIN NOTES", "TOXICITY", "REMARKS", "ACTIONS"]}
-                    template="44px 1.1fr 1.6fr 1.1fr 0.7fr 1.1fr 1.1fr 0.7fr 1.0fr 1.3fr 0.9fr 0.9fr 68px"
-                    addLabel="+ Add Row"
-                    onAdd={addChemoPlan}
-                    disabled={disabled}
-                    rows={chemoPlans.map((row, idx) => [
-                      idx + 1,
-                      <ProtocolSelect
-                        key="f"
-                        options={stripOthersStr(Array.from(new Set([...DOSAGE_FORM_OPTIONS, ...fieldOptions.dilution_forms, row.form].filter(Boolean))))}
-                        value={row.form}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...chemoPlans];
-                          n[idx].form = v;
-                          setChemoPlans(n);
-                        }}
-                        placeholder="Select form"
-                        emptyMessage="No forms found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="m"
-                        options={getDropdownOptions(chemoMeds, row.medication)}
-                        value={row.medication}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...chemoPlans];
-                          n[idx].medication = v;
-                          const medObj = chemoMeds.find((m) => m.medicine_id === v);
-                          if (medObj && !n[idx].doseCalc) {
-                            const inferred = inferDosingBasisForMedicine(medObj.medicine_name);
-                            if (inferred === "AUC") n[idx].doseCalc = "AUC (Calvert)";
-                            else if (inferred === "Weight") n[idx].doseCalc = "Weight (mg/kg)";
-                            else n[idx].doseCalc = "BSA (mg/m²)";
-                          }
-                          if (!n[idx].form && medObj?.dosage_form) n[idx].form = medObj.dosage_form;
-                          setChemoPlans(n);
-                        }}
-                        placeholder={
-                          cancerTypeIds.length === 0
-                            ? "Select cancer type(s) first"
-                            : loadingChemoMeds
-                            ? "Loading medicines..."
-                            : "Select medicine"
-                        }
-                        emptyMessage={
-                          cancerTypeIds.length === 0
-                            ? "Select cancer type(s) first"
-                            : subtypeIds.length > 0 && filterByCancerAndSubtype
-                            ? "No chemo medicines found for selected subtype"
-                            : "No chemo medicines found"
-                        }
-                        loading={loadingChemoMeds}
-                        disabled={disabled || cancerTypeIds.length === 0}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="b"
-                        options={getBrandDropdownOptions(chemoPlans, row.brandName, chemoMeds, row.medication)}
-                        value={row.brandName ?? ""}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...chemoPlans];
-                          n[idx].brandName = v;
-                          setChemoPlans(n);
-                        }}
-                        placeholder="Select brand"
-                        emptyMessage="No brand options"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="d"
-                        options={getDoseDropdownOptions(chemoPlans, row.dose)}
-                        value={row.dose}
-                        onValueChange={(v) => {
-                          const n = [...chemoPlans];
-                          n[idx].dose = v;
-                          const numDose = parseFloat(v);
-                          if (!isNaN(numDose) && numDose > 0 && n[idx].doseCalc) {
-                            const calcPatientDose = calculatePatientDoseFromTemplate(numDose, n[idx].doseCalc);
-                            if (calcPatientDose != null) {
-                              n[idx].patientDose = String(calcPatientDose);
-                            }
-                          } else if (!v.trim()) {
-                            n[idx].patientDose = "";
-                          }
-                          setChemoPlans(n);
-                        }}
-                        placeholder="Select dose"
-                        emptyMessage="No dose options"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="dc"
-                        options={DOSE_CALC_OPTIONS}
-                        value={row.doseCalc}
-                        onValueChange={(v) => {
-                          const n = [...chemoPlans];
-                          n[idx].doseCalc = v;
-                          const recommended = getRecommendedUnitsForDoseCalc(v);
-                          if (!n[idx].unit || v) {
-                            n[idx].unit = recommended.unit;
-                          }
-                          if (!n[idx].patientUnit || v) {
-                            n[idx].patientUnit = recommended.patientUnit;
-                          }
-                          const numDose = parseFloat(n[idx].dose);
-                          if (!isNaN(numDose) && numDose > 0) {
-                            const calcPatientDose = calculatePatientDoseFromTemplate(numDose, v);
-                            if (calcPatientDose != null) {
-                              n[idx].patientDose = String(calcPatientDose);
-                            }
-                          }
-                          setChemoPlans(n);
-                        }}
-                        placeholder="Select dose calc"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="u"
-                        options={Array.from(new Set([...fieldOptions.dosage_units, row.unit, "mg/m²", "mg/kg", "AUC", "mg", "g", "mcg"].filter(Boolean)))}
-                        value={row.unit}
-                        onValueChange={(v) => {
-                          const n = [...chemoPlans];
-                          const oldUnit = n[idx].unit;
-                          n[idx].unit = v;
-                          const numDose = parseFloat(n[idx].dose);
-                          if (!isNaN(numDose) && numDose > 0 && oldUnit && oldUnit !== v) {
-                            const converted = convertUnit(numDose, oldUnit, v);
-                            if (converted != null) {
-                              n[idx].dose = String(converted);
-                            }
-                          }
-                          setChemoPlans(n);
-                        }}
-                        placeholder="Select unit"
-                        emptyMessage="No units found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <input
-                        key="pd"
-                        type="text"
-                        value={row.patientDose}
-                        onChange={(e) => {
-                          const n = [...chemoPlans];
-                          n[idx].patientDose = e.target.value;
-                          setChemoPlans(n);
-                        }}
-                        className={ptInput}
-                        placeholder="8"
-                        disabled={disabled}
-                      />,
-                      <input
-                        key="pu"
-                        type="text"
-                        value={row.patientUnit}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const n = [...chemoPlans];
-                          const oldUnit = n[idx].patientUnit;
-                          n[idx].patientUnit = val;
-                          const numPatientDose = parseFloat(n[idx].patientDose);
-                          if (!isNaN(numPatientDose) && numPatientDose > 0 && oldUnit && oldUnit !== val) {
-                            const converted = convertUnit(numPatientDose, oldUnit, val);
-                            if (converted != null) {
-                              n[idx].patientDose = String(converted);
-                            }
-                          }
-                          setChemoPlans(n);
-                        }}
-                        className={ptInput}
-                        placeholder="mg"
-                        disabled={disabled}
-                      />,
-                      <input
-                        key="an"
-                        type="text"
-                        value={row.adminNotes}
-                        onChange={(e) => {
-                          const n = [...chemoPlans];
-                          n[idx].adminNotes = e.target.value;
-                          setChemoPlans(n);
-                        }}
-                        className={ptInput}
-                        placeholder="Notes"
-                        disabled={disabled}
-                      />,
-                      <input
-                        key="t"
-                        type="text"
-                        value={row.toxicity}
-                        onChange={(e) => {
-                          const n = [...chemoPlans];
-                          n[idx].toxicity = e.target.value;
-                          setChemoPlans(n);
-                        }}
-                        className={ptInput}
-                        placeholder="Toxicity"
-                        disabled={disabled}
-                      />,
-                      <input
-                        key="rm"
-                        type="text"
-                        value={row.remarks}
-                        onChange={(e) => {
-                          const n = [...chemoPlans];
-                          n[idx].remarks = e.target.value;
-                          setChemoPlans(n);
-                        }}
-                        className={ptInput}
-                        placeholder="Remarks"
-                        disabled={disabled}
-                      />,
-                      <div key="act" className="flex items-center justify-center gap-1">
-                        <button
-                          key="calc"
-                          type="button"
-                          onClick={() => {
-                            const selectedMed = chemoMeds.find((m) => m.medicine_id === row.medication)?.medicine_name || row.medication;
-                            setCalcTargetRow({
-                              index: idx,
-                              drug: selectedMed || row.brandName || "",
-                              dose: row.dose || "",
-                              doseCalc: row.doseCalc || "",
-                            });
-                            setCalcModalOpen(true);
-                          }}
-                          title="Calculate Dose (BSA / Weight / Calvert AUC)"
-                          className="p-1.5 rounded-lg hover:bg-[#eaf0f7] text-[#12335c] hover:text-[#0e2848] transition-colors"
-                        >
-                          <Calculator className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          key="del"
-                          onClick={() => removeChemoPlan(idx)}
-                          disabled={disabled}
-                          className="p-1.5 rounded-lg hover:bg-gray-100 text-[#6b7280] hover:text-red-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>,
-                    ])}
-                  />
-                </>
               )}
-            </div>
 
-            {/* Supportive care */}
-            <div className={cardCls + " mb-5"}>
-              <div
-                className="flex items-center justify-between px-6 py-[17px] cursor-pointer hover:bg-[#f8f9fb] transition-colors"
-                onClick={() => toggleSection("supportive")}
-              >
-                <div className="flex items-center gap-2.5 text-[13.5px] font-bold text-[#17212e]">
-                  <ShieldPlus className="w-4 h-4 text-[#2f8f5b]" /> Supportive Care
-                </div>
-                {sections.supportive ? <ChevronUp className="w-4 h-4 text-[#8a97a6]" /> : <ChevronDown className="w-4 h-4 text-[#8a97a6]" />}
+              {/* Bottom Add Bar */}
+              <div className="px-5 py-3.5 bg-slate-50/70 border-t border-slate-100 flex items-center justify-center mt-3 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (disabled) return;
+                    const newIdx = premeds.length;
+                    addPremed();
+                    setActiveDrawer({ section: "premeds", index: newIdx });
+                  }}
+                  disabled={disabled}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-sky-600 hover:text-sky-700 bg-white hover:bg-sky-50 border border-sky-200 px-4 py-2 rounded-lg shadow-2xs transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Medication Row</span>
+                </button>
               </div>
-              {sections.supportive && (
-                <>
-                  <ProtocolGridTable
-                    columns={["#", "FORM", "SUPPORTIVE MEDICINE *", "BRAND", "DOSE", "UNIT", "ADMIN NOTES", "REMARKS", "ACTIONS"]}
-                    template="44px 1.1fr 1.7fr 1.1fr 1fr 130px 1.4fr 1.4fr 40px"
-                    addLabel="+ Add Row"
-                    onAdd={addSupportive}
-                    disabled={disabled}
-                    rows={supportive.map((row, idx) => [
-                      idx + 1,
-                      <ProtocolSelect
-                        key="f"
-                        options={stripOthersStr(Array.from(new Set([...DOSAGE_FORM_OPTIONS, ...fieldOptions.dilution_forms, row.form].filter(Boolean))))}
-                        value={row.form}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...supportive];
-                          n[idx].form = v;
-                          setSupportive(n);
-                        }}
-                        placeholder="Select form"
-                        emptyMessage="No forms found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="m"
-                        options={getDropdownOptions(supportiveMeds, row.medication)}
-                        value={row.medication}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...supportive];
-                          n[idx].medication = v;
-                          const med = supportiveMeds.find((m) => m.medicine_id === v);
-                          if (!n[idx].form && med?.dosage_form) n[idx].form = med.dosage_form;
-                          setSupportive(n);
-                        }}
-                        placeholder={
-                          cancerTypeIds.length === 0
-                            ? "Select cancer type(s) first"
-                            : loadingSupportiveMeds
-                            ? "Loading medicines..."
-                            : "Select medicine"
-                        }
-                        emptyMessage={
-                          cancerTypeIds.length === 0
-                            ? "Select cancer type(s) first"
-                            : subtypeIds.length > 0 && filterByCancerAndSubtype
-                            ? "No supportive medicines found for selected subtype"
-                            : "No supportive medicines found"
-                        }
-                        loading={loadingSupportiveMeds}
-                        disabled={disabled || cancerTypeIds.length === 0}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="b"
-                        options={getBrandDropdownOptions(supportive, row.brandName, supportiveMeds, row.medication)}
-                        value={row.brandName ?? ""}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...supportive];
-                          n[idx].brandName = v;
-                          setSupportive(n);
-                        }}
-                        placeholder="Select brand"
-                        emptyMessage="No brand options"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="d"
-                        options={getDoseDropdownOptions(supportive, row.dose)}
-                        value={row.dose ?? ""}
-                        onValueChange={(v) => {
-                          const n = [...supportive];
-                          n[idx].dose = v;
-                          setSupportive(n);
-                        }}
-                        placeholder="Select dose"
-                        emptyMessage="No dose options"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="u"
-                        options={Array.from(new Set([...fieldOptions.dosage_units, row.unit].filter(Boolean)))}
-                        value={row.unit ?? ""}
-                        onValueChange={(v) => {
-                          const n = [...supportive];
-                          n[idx].unit = v;
-                          setSupportive(n);
-                        }}
-                        placeholder="Select unit"
-                        emptyMessage="No units found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <input
-                        key="an"
-                        type="text"
-                        value={row.adminNotes}
-                        onChange={(e) => {
-                          const n = [...supportive];
-                          n[idx].adminNotes = e.target.value;
-                          setSupportive(n);
-                        }}
-                        className={ptInput}
-                        placeholder="Enter notes"
-                        disabled={disabled}
-                      />,
-                      <input
-                        key="r"
-                        type="text"
-                        value={row.remarks}
-                        onChange={(e) => {
-                          const n = [...supportive];
-                          n[idx].remarks = e.target.value;
-                          setSupportive(n);
-                        }}
-                        className={ptInput}
-                        placeholder="Enter remarks"
-                        disabled={disabled}
-                      />,
-                      <button
-                        key="d"
-                        onClick={() => removeSupportive(idx)}
-                        disabled={disabled}
-                        className="p-1.5 rounded-lg hover:bg-gray-100 text-[#6b7280] hover:text-red-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>,
-                    ])}
-                  />
-                </>
-              )}
             </div>
+          )}
+        </div>
 
-            {/* Dilution details */}
-            <div className={cardCls + " mb-5"}>
-              <div
-                className="flex items-center justify-between px-6 py-[17px] cursor-pointer hover:bg-[#f8f9fb] transition-colors"
-                onClick={() => toggleSection("dilution")}
-              >
-                <div className="flex items-center gap-2.5 text-[13.5px] font-bold text-[#17212e]">
-                  <FlaskConical className="w-4 h-4 text-[#c9822f]" /> Dilution Details
-                </div>
-                {sections.dilution ? <ChevronUp className="w-4 h-4 text-[#8a97a6]" /> : <ChevronDown className="w-4 h-4 text-[#8a97a6]" />}
+        {/* =========================================================================
+            PATTERN 5: SLIDE DRAWER GRID - CHEMOTHERAPY PLAN
+           ========================================================================= */}
+        <div className={cardCls + " mb-5"}>
+          <div className="flex items-center justify-between px-6 py-[17px] hover:bg-[#f8f9fb] transition-colors">
+            <div
+              className="flex items-center gap-2.5 text-[13.5px] font-bold text-[#17212e] cursor-pointer flex-1"
+              onClick={() => toggleSection("chemo")}
+            >
+              <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                <Syringe className="w-4 h-4" />
               </div>
-              {sections.dilution && (
-                <>
-                  <ProtocolGridTable
-                    columns={["#", "FORM", "MEDICATION", "BRAND", "DOSE", "DOSE UNIT", "DILUTION VOLUME", "VOLUME UNIT", "DILUENT", "ACTIONS"]}
-                    template="44px 1.1fr 1.8fr 1.2fr 0.8fr 1.1fr 1fr 1.1fr 1.5fr 40px"
-                    addLabel="+ Add Row"
-                    onAdd={addDilution}
-                    disabled={disabled}
-                    rows={dilution.map((row, idx) => [
-                      idx + 1,
-                      <ProtocolSelect
-                        key="f"
-                        options={stripOthersStr(Array.from(new Set([...DOSAGE_FORM_OPTIONS, ...fieldOptions.dilution_forms, row.form].filter(Boolean))))}
-                        value={row.form}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...dilution];
-                          n[idx].form = v;
-                          setDilution(n);
-                        }}
-                        placeholder="Select form"
-                        emptyMessage="No forms found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="m"
-                        options={allAvailableDilutionMeds}
-                        value={row.medication}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...dilution];
-                          n[idx].medication = v;
-                          const med = dilutionMeds.find((m) => m.medicine_id === v);
-                          if (!n[idx].form && med?.dosage_form) n[idx].form = med.dosage_form;
-                          setDilution(n);
-                        }}
-                        placeholder={loadingDilutionMeds ? "Loading medicines..." : "Select medicine"}
-                        emptyMessage="No medicines found"
-                        loading={loadingDilutionMeds}
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="b"
-                        options={getBrandDropdownOptions(dilution, row.brandName, dilutionMeds, row.medication)}
-                        value={row.brandName ?? ""}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...dilution];
-                          n[idx].brandName = v;
-                          setDilution(n);
-                        }}
-                        placeholder="Select brand"
-                        emptyMessage="No brand options"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="d"
-                        options={getDoseDropdownOptions(dilution, row.dose)}
-                        value={row.dose}
-                        onValueChange={(v) => {
-                          const n = [...dilution];
-                          n[idx].dose = v;
-                          const numDose = parseFloat(v);
-                          if (!isNaN(numDose) && numDose > 0 && n[idx].unit) {
-                            const vol = convertMassToVolume(numDose, n[idx].unit, n[idx].volumeUnit || "CC");
-                            if (vol != null) {
-                              n[idx].volume = String(vol);
-                              if (!n[idx].volumeUnit) n[idx].volumeUnit = "CC";
-                            }
-                          }
-                          setDilution(n);
-                        }}
-                        placeholder="Select dose"
-                        emptyMessage="No dose options"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="du"
-                        options={Array.from(new Set([...fieldOptions.dilution_dose_units, row.unit, "mg", "g", "mcg", "kg"].filter(Boolean)))}
-                        value={row.unit}
-                        onValueChange={(v) => {
-                          const n = [...dilution];
-                          const oldUnit = n[idx].unit;
-                          n[idx].unit = v;
-                          const numDose = parseFloat(n[idx].dose);
-                          if (!isNaN(numDose) && numDose > 0) {
-                            if (oldUnit && oldUnit !== v) {
-                              const convertedDose = convertUnit(numDose, oldUnit, v);
-                              if (convertedDose != null) {
-                                n[idx].dose = String(convertedDose);
-                              }
-                            }
-                            const currentDose = parseFloat(n[idx].dose) || numDose;
-                            const vol = convertMassToVolume(currentDose, v, n[idx].volumeUnit || "CC");
-                            if (vol != null) {
-                              n[idx].volume = String(vol);
-                              if (!n[idx].volumeUnit) n[idx].volumeUnit = "CC";
-                            }
-                          }
-                          setDilution(n);
-                        }}
-                        placeholder="Select unit"
-                        emptyMessage="No units found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <input
-                        key="v"
-                        type="text"
-                        value={row.volume}
-                        onChange={(e) => {
-                          const n = [...dilution];
-                          n[idx].volume = e.target.value;
-                          setDilution(n);
-                        }}
-                        className={ptInput}
-                        placeholder="100"
-                        disabled={disabled}
-                      />,
-                      <ProtocolSelect
-                        key="vu"
-                        options={Array.from(new Set([...fieldOptions.dilution_volume_units, row.volumeUnit, "CC", "mL", "L"].filter(Boolean)))}
-                        value={row.volumeUnit}
-                        onValueChange={(v) => {
-                          const n = [...dilution];
-                          const oldVolUnit = n[idx].volumeUnit;
-                          n[idx].volumeUnit = v;
-                          const numVol = parseFloat(n[idx].volume);
-                          if (!isNaN(numVol) && numVol > 0 && oldVolUnit && oldVolUnit !== v) {
-                            const convertedVol = convertUnit(numVol, oldVolUnit, v);
-                            if (convertedVol != null) {
-                              n[idx].volume = String(convertedVol);
-                            }
-                          }
-                          setDilution(n);
-                        }}
-                        placeholder="Select unit"
-                        emptyMessage="No units found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="dl"
-                        options={fieldOptions.diluents}
-                        value={row.diluent}
-                        onValueChange={(v) => {
-                          const n = [...dilution];
-                          n[idx].diluent = v;
-                          setDilution(n);
-                        }}
-                        placeholder="Select diluent"
-                        emptyMessage="No diluents found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <button
-                        key="x"
-                        onClick={() => removeDilution(idx)}
-                        disabled={disabled}
-                        className="p-1.5 rounded-lg hover:bg-gray-100 text-[#6b7280] hover:text-red-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>,
-                    ])}
-                  />
-                </>
-              )}
+              <span>Chemotherapy Plan</span>
+              <span className="px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-600 rounded-full">
+                {chemoPlans.length} {chemoPlans.length === 1 ? "drug" : "drugs"}
+              </span>
             </div>
-
-            {/* Post-treatment medications */}
-            <div className={cardCls + " mb-5"}>
-              <div
-                className="flex items-center justify-between px-6 py-[17px] cursor-pointer hover:bg-[#f8f9fb] transition-colors"
-                onClick={() => toggleSection("post")}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCalcTargetRow(null);
+                  setCalcModalOpen(true);
+                }}
+                className="text-xs font-semibold text-[#12335c] bg-[#eaf0f7] hover:bg-[#dbe7f4] px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-colors"
+                title="Open Medicine Dosage Calculator & Formulas Reference"
               >
-                <div className="flex items-center gap-2.5 text-[13.5px] font-bold text-[#c0374a]">
-                  <ClipboardList className="w-4 h-4" /> Post-treatment Medications (On Discharge)
-                </div>
-                {sections.post ? <ChevronUp className="w-4 h-4 text-[#8a97a6]" /> : <ChevronDown className="w-4 h-4 text-[#8a97a6]" />}
+                <Calculator className="w-3.5 h-3.5" />
+                <span>Formulas & Dose Calculator</span>
+              </button>
+              <div
+                className="cursor-pointer p-1"
+                onClick={() => toggleSection("chemo")}
+              >
+                {sections.chemo ? <ChevronUp className="w-4 h-4 text-[#8a97a6]" /> : <ChevronDown className="w-4 h-4 text-[#8a97a6]" />}
               </div>
-              {sections.post && (
-                <>
-                  <ProtocolGridTable
-                    columns={["#", "FORM", "MEDICATION", "BRAND", "DOSE", "UNIT", "FREQUENCY", "INSTRUCTIONS", "DURATION", "DAYS", "REMARKS", "ACTIONS"]}
-                    template="44px 140px 200px 130px 75px 70px 105px 140px 75px 120px 120px 60px"
-                    addLabel="+ Add Row"
-                    onAdd={addPost}
-                    disabled={disabled}
-                    addClassName="text-[#c0374a] hover:bg-[#fbecef]"
-                    boxClassName="min-w-[1450px] border border-[#edf1f5] rounded-xl bg-white"
-                    rows={post.map((row, idx) => {
-                      const isDurationFilledWithNumber = /^\d+(\.\d+)?$/.test(String(row.duration ?? "").trim());
-                      return [
-                        idx + 1,
-                      <ProtocolSelect
-                        key="f"
-                        options={stripOthersStr(Array.from(new Set([...DOSAGE_FORM_OPTIONS, ...fieldOptions.dilution_forms, row.form].filter(Boolean))))}
-                        value={row.form}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...post];
-                          n[idx].form = v;
-                          setPost(n);
-                        }}
-                        placeholder="Select form"
-                        emptyMessage="No forms found"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="m"
-                        options={getDropdownOptions(dischargeMeds.length > 0 ? dischargeMeds : premedMeds, row.medication)}
-                        value={row.medication}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...post];
-                          n[idx].medication = v;
-                          const medList = dischargeMeds.length > 0 ? dischargeMeds : premedMeds;
-                          const med = medList.find((m) => m.medicine_id === v);
-                          if (!n[idx].form && med?.dosage_form) n[idx].form = med.dosage_form;
-                          setPost(n);
-                        }}
-                        placeholder={
-                          cancerTypeIds.length === 0
-                            ? "Select cancer type(s) first"
-                            : loadingDischargeMeds
-                            ? "Loading medicines..."
-                            : "Select medicine"
-                        }
-                        emptyMessage={
-                          cancerTypeIds.length === 0
-                            ? "Select cancer type(s) first"
-                            : subtypeIds.length > 0 && filterByCancerAndSubtype
-                            ? "No discharge medicines found for selected subtype"
-                            : "No discharge medicines found"
-                        }
-                        loading={loadingDischargeMeds}
-                        disabled={disabled || cancerTypeIds.length === 0}
-                        className="h-8"
-                      />,
-                      <input
-                        key="b"
-                        type="text"
-                        value={row.brandName ?? ""}
-                        onChange={(e) => {
-                          const n = [...post];
-                          n[idx].brandName = e.target.value;
-                          setPost(n);
-                        }}
-                        className={ptInput}
-                        placeholder="Brand"
-                        disabled={disabled}
-                      />,
-                      <input
-                        key="d"
-                        type="text"
-                        value={row.dose}
-                        onChange={(e) => {
-                          const n = [...post];
-                          n[idx].dose = e.target.value;
-                          setPost(n);
-                        }}
-                        className={ptInput}
-                        placeholder="4"
-                        disabled={disabled}
-                      />,
-                      <input
-                        key="u"
-                        type="text"
-                        value={row.unit}
-                        onChange={(e) => {
-                          const n = [...post];
-                          n[idx].unit = e.target.value;
-                          setPost(n);
-                        }}
-                        className={ptInput}
-                        placeholder="mg"
-                        disabled={disabled}
-                      />,
-                      <ProtocolSelect
-                        key="fr"
-                        options={Array.from(new Set([...PROTOCOL_FREQUENCY_OPTIONS, row.frequency].filter(Boolean)))}
-                        value={row.frequency}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...post];
-                          n[idx].frequency = v;
-                          setPost(n);
-                        }}
-                        placeholder="Select frequency"
-                        emptyMessage="No frequency options"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <input
-                        key="i"
-                        type="text"
-                        value={row.instructions}
-                        onChange={(e) => {
-                          const n = [...post];
-                          n[idx].instructions = e.target.value;
-                          setPost(n);
-                        }}
-                        className={ptInput}
-                        placeholder="Enter notes"
-                        disabled={disabled}
-                      />,
-                      <ProtocolSelect
-                        key="dur"
-                        options={Array.from(new Set([...PROTOCOL_INSTRUCTION_OPTIONS, row.duration].filter(Boolean)))}
-                        value={row.duration}
-                        allowCreate
-                        onValueChange={(v) => {
-                          const n = [...post];
-                          n[idx].duration = v;
-                          setPost(n);
-                        }}
-                        placeholder="Select duration"
-                        emptyMessage="No duration options"
-                        disabled={disabled}
-                        className="h-8"
-                      />,
-                      <ProtocolSelect
-                        key="days"
-                        options={getDurationUnitOptions(row.duration, row.durationDays)}
-                        value={getDurationUnitCode(row.durationDays)}
-                        onValueChange={(v) => {
-                          const n = [...post];
-                          n[idx].durationDays = v;
-                          setPost(n);
-                        }}
-                        placeholder={parseInt(String(row.duration ?? "").trim(), 10) === 1 ? "Day" : "Days"}
-                        disabled={disabled || !isDurationFilledWithNumber}
-                        className="h-8"
-                      />, 
-                      <input
-                        key="r"
-                        type="text"
-                        value={row.remarks}
-                        onChange={(e) => {
-                          const n = [...post];
-                          n[idx].remarks = e.target.value;
-                          setPost(n);
-                        }}
-                        className={ptInput}
-                        placeholder="Remarks"
-                        disabled={disabled}
-                      />,
-                      <button
-                        key="x"
-                        onClick={() => removePost(idx)}
-                        disabled={disabled}
-                        className="p-1.5 rounded-lg hover:bg-gray-100 text-[#6b7280] hover:text-red-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>,
-                    ];
-                  })}
-                  />
-                </>
-              )}
             </div>
           </div>
+
+          {sections.chemo && (
+            <div className="p-5 pt-0">
+              {chemoPlans.length === 0 ? (
+                <div className="text-center py-10 border-2 border-dashed border-slate-200 rounded-xl my-2">
+                  <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-2">
+                    <Syringe className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-semibold text-slate-700">No chemotherapy drugs added</p>
+                  <p className="text-[11px] text-slate-400 mt-1">Click the "Add Chemotherapy Drug" button below to create one.</p>
+                </div>
+              ) : (
+                <div className="overflow-hidden border border-slate-200 rounded-xl bg-white shadow-2xs">
+                  <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    <span>Prescription Overview (Click row to edit details)</span>
+                    <span>Status</span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {chemoPlans.map((row, idx) => {
+                      const medName = getMedName(row.medication, chemoMeds);
+                      const isReady = !!row.medication?.trim();
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => setActiveDrawer({ section: "chemo", index: idx })}
+                          className="p-3.5 hover:bg-sky-50/50 cursor-pointer transition flex items-center justify-between group gap-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="text-xs font-mono text-slate-400 font-semibold w-6 shrink-0">
+                              {String(idx + 1).padStart(2, "0")}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-slate-900 group-hover:text-indigo-700 transition truncate">
+                                  {medName || <span className="italic text-slate-400 font-normal">Select chemo drug...</span>}
+                                </span>
+                                {row.form && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/80">
+                                    {getFormIcon(row.form)}
+                                    <span>{row.form}</span>
+                                  </span>
+                                )}
+                                {row.brandName && (
+                                  <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
+                                    {row.brandName}
+                                  </span>
+                                )}
+                                {row.doseCalc && (
+                                  <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2 py-0.5 rounded-full">
+                                    {row.doseCalc}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1 truncate">
+                                <span className="font-medium text-slate-700">
+                                  {row.dose ? `${row.dose} ${row.unit || ""}` : "No dose"}
+                                </span>
+                                {row.adminNotes ? ` • ${row.adminNotes}` : ""}
+                                {row.toxicity ? ` (Toxicity: ${row.toxicity})` : ""}
+                                {row.remarks ? ` (Remark: ${row.remarks})` : ""}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCalcTargetRow({
+                                  index: idx,
+                                  drug: medName || row.brandName || "",
+                                  dose: row.dose || "",
+                                  doseCalc: row.doseCalc || "",
+                                });
+                                setCalcModalOpen(true);
+                              }}
+                              title="Calculate Dose (BSA / Weight / Calvert AUC)"
+                              className="w-7 h-7 rounded-lg bg-sky-50 hover:bg-[#12335c] text-[#12335c] hover:text-white flex items-center justify-center transition shadow-2xs"
+                            >
+                              <Calculator className="w-3.5 h-3.5" />
+                            </button>
+
+                            {isReady ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <Check className="w-3 h-3 text-emerald-600" /> Ready
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                Incomplete
+                              </span>
+                            )}
+
+                            {!disabled && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeChemoPlan(idx);
+                                }}
+                                title="Delete row"
+                                className="w-7 h-7 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition opacity-60 group-hover:opacity-100"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            <div className="w-7 h-7 rounded-lg bg-slate-100 group-hover:bg-indigo-100 group-hover:text-indigo-700 text-slate-400 flex items-center justify-center transition">
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Bottom Add Bar */}
+              <div className="px-5 py-3.5 bg-slate-50/70 border-t border-slate-100 flex items-center justify-center mt-3 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (disabled) return;
+                    const newIdx = chemoPlans.length;
+                    addChemoPlan();
+                    setActiveDrawer({ section: "chemo", index: newIdx });
+                  }}
+                  disabled={disabled}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-700 bg-white hover:bg-indigo-50 border border-indigo-200 px-4 py-2 rounded-lg shadow-2xs transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Chemotherapy Drug</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* =========================================================================
+            PATTERN 5: SLIDE DRAWER GRID - SUPPORTIVE CARE
+           ========================================================================= */}
+        <div className={cardCls + " mb-5"}>
+          <div
+            className="flex items-center justify-between px-6 py-[17px] cursor-pointer hover:bg-[#f8f9fb] transition-colors"
+            onClick={() => toggleSection("supportive")}
+          >
+            <div className="flex items-center gap-2.5 text-[13.5px] font-bold text-[#17212e]">
+              <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <ShieldPlus className="w-4 h-4" />
+              </div>
+              <span>Supportive Care</span>
+              <span className="px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-600 rounded-full">
+                {supportive.length} {supportive.length === 1 ? "drug" : "drugs"}
+              </span>
+            </div>
+            {sections.supportive ? <ChevronUp className="w-4 h-4 text-[#8a97a6]" /> : <ChevronDown className="w-4 h-4 text-[#8a97a6]" />}
+          </div>
+
+          {sections.supportive && (
+            <div className="p-5 pt-0">
+              {supportive.length === 0 ? (
+                <div className="text-center py-10 border-2 border-dashed border-slate-200 rounded-xl my-2">
+                  <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-2">
+                    <ShieldPlus className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-semibold text-slate-700">No supportive care medications added</p>
+                  <p className="text-[11px] text-slate-400 mt-1">Click the "Add Supportive Medicine" button below to create one.</p>
+                </div>
+              ) : (
+                <div className="overflow-hidden border border-slate-200 rounded-xl bg-white shadow-2xs">
+                  <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    <span>Prescription Overview (Click row to edit details)</span>
+                    <span>Status</span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {supportive.map((row, idx) => {
+                      const medName = getMedName(row.medication, supportiveMeds);
+                      const isReady = !!row.medication?.trim();
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => setActiveDrawer({ section: "supportive", index: idx })}
+                          className="p-3.5 hover:bg-emerald-50/40 cursor-pointer transition flex items-center justify-between group gap-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="text-xs font-mono text-slate-400 font-semibold w-6 shrink-0">
+                              {String(idx + 1).padStart(2, "0")}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-slate-900 group-hover:text-emerald-700 transition truncate">
+                                  {medName || <span className="italic text-slate-400 font-normal">Select supportive medicine...</span>}
+                                </span>
+                                {row.form && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/80">
+                                    {getFormIcon(row.form)}
+                                    <span>{row.form}</span>
+                                  </span>
+                                )}
+                                {row.brandName && (
+                                  <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
+                                    {row.brandName}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1 truncate">
+                                {row.dose ? `${row.dose} ${row.unit || ""}` : "No dose specified"}
+                                {row.adminNotes ? ` • ${row.adminNotes}` : ""}
+                                {row.remarks ? ` (Remark: ${row.remarks})` : ""}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            {isReady ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <Check className="w-3 h-3 text-emerald-600" /> Ready
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                Incomplete
+                              </span>
+                            )}
+
+                            {!disabled && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeSupportive(idx);
+                                }}
+                                title="Delete row"
+                                className="w-7 h-7 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition opacity-60 group-hover:opacity-100"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            <div className="w-7 h-7 rounded-lg bg-slate-100 group-hover:bg-emerald-100 group-hover:text-emerald-700 text-slate-400 flex items-center justify-center transition">
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Bottom Add Bar */}
+              <div className="px-5 py-3.5 bg-slate-50/70 border-t border-slate-100 flex items-center justify-center mt-3 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (disabled) return;
+                    const newIdx = supportive.length;
+                    addSupportive();
+                    setActiveDrawer({ section: "supportive", index: newIdx });
+                  }}
+                  disabled={disabled}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800 bg-white hover:bg-emerald-50 border border-emerald-200 px-4 py-2 rounded-lg shadow-2xs transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Supportive Medicine</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* =========================================================================
+            PATTERN 5: SLIDE DRAWER GRID - DILUTION DETAILS
+           ========================================================================= */}
+        <div className={cardCls + " mb-5"}>
+          <div
+            className="flex items-center justify-between px-6 py-[17px] cursor-pointer hover:bg-[#f8f9fb] transition-colors"
+            onClick={() => toggleSection("dilution")}
+          >
+            <div className="flex items-center gap-2.5 text-[13.5px] font-bold text-[#17212e]">
+              <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+                <FlaskConical className="w-4 h-4" />
+              </div>
+              <span>Dilution Details</span>
+              <span className="px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-600 rounded-full">
+                {dilution.length} {dilution.length === 1 ? "dilution" : "dilutions"}
+              </span>
+            </div>
+            {sections.dilution ? <ChevronUp className="w-4 h-4 text-[#8a97a6]" /> : <ChevronDown className="w-4 h-4 text-[#8a97a6]" />}
+          </div>
+
+          {sections.dilution && (
+            <div className="p-5 pt-0">
+              {dilution.length === 0 ? (
+                <div className="text-center py-10 border-2 border-dashed border-slate-200 rounded-xl my-2">
+                  <div className="w-10 h-10 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-2">
+                    <FlaskConical className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-semibold text-slate-700">No dilution details added</p>
+                  <p className="text-[11px] text-slate-400 mt-1">Click the "Add Dilution Row" button below to create one.</p>
+                </div>
+              ) : (
+                <div className="overflow-hidden border border-slate-200 rounded-xl bg-white shadow-2xs">
+                  <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    <span>Prescription Overview (Click row to edit details)</span>
+                    <span>Status</span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {dilution.map((row, idx) => {
+                      const medName = getDilutionMedName(row.medication);
+                      const isReady = !!row.medication?.trim();
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => setActiveDrawer({ section: "dilution", index: idx })}
+                          className="p-3.5 hover:bg-amber-50/40 cursor-pointer transition flex items-center justify-between group gap-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="text-xs font-mono text-slate-400 font-semibold w-6 shrink-0">
+                              {String(idx + 1).padStart(2, "0")}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-slate-900 group-hover:text-amber-700 transition truncate">
+                                  {medName || <span className="italic text-slate-400 font-normal">Select dilution drug...</span>}
+                                </span>
+                                {row.form && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/80">
+                                    {getFormIcon(row.form)}
+                                    <span>{row.form}</span>
+                                  </span>
+                                )}
+                                {row.brandName && (
+                                  <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
+                                    {row.brandName}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1 truncate">
+                                <span className="font-medium text-slate-700">
+                                  {row.dose ? `${row.dose} ${row.unit || ""}` : "No dose"}
+                                </span>
+                                {row.volume ? (
+                                  <span className="text-amber-800">
+                                    {` in ${row.volume} ${row.volumeUnit || "CC"}`}
+                                  </span>
+                                ) : ""}
+                                {row.diluent ? (
+                                  <span className="text-slate-600 font-medium">
+                                    {` (${row.diluent})`}
+                                  </span>
+                                ) : ""}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            {isReady ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <Check className="w-3 h-3 text-emerald-600" /> Ready
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                Incomplete
+                              </span>
+                            )}
+
+                            {!disabled && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeDilution(idx);
+                                }}
+                                title="Delete row"
+                                className="w-7 h-7 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition opacity-60 group-hover:opacity-100"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            <div className="w-7 h-7 rounded-lg bg-slate-100 group-hover:bg-amber-100 group-hover:text-amber-700 text-slate-400 flex items-center justify-center transition">
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Bottom Add Bar */}
+              <div className="px-5 py-3.5 bg-slate-50/70 border-t border-slate-100 flex items-center justify-center mt-3 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (disabled) return;
+                    const newIdx = dilution.length;
+                    addDilution();
+                    setActiveDrawer({ section: "dilution", index: newIdx });
+                  }}
+                  disabled={disabled}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:text-amber-800 bg-white hover:bg-amber-50 border border-amber-200 px-4 py-2 rounded-lg shadow-2xs transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Dilution Row</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* =========================================================================
+            PATTERN 5: SLIDE DRAWER GRID - POST-TREATMENT (ON DISCHARGE)
+           ========================================================================= */}
+        <div className={cardCls + " mb-5"}>
+          <div
+            className="flex items-center justify-between px-6 py-[17px] cursor-pointer hover:bg-[#f8f9fb] transition-colors"
+            onClick={() => toggleSection("post")}
+          >
+            <div className="flex items-center gap-2.5 text-[13.5px] font-bold text-[#c0374a]">
+              <div className="w-7 h-7 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                <ClipboardList className="w-4 h-4" />
+              </div>
+              <span>Post-treatment Medications (On Discharge)</span>
+              <span className="px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-600 rounded-full">
+                {post.length} {post.length === 1 ? "medication" : "medications"}
+              </span>
+            </div>
+            {sections.post ? <ChevronUp className="w-4 h-4 text-[#8a97a6]" /> : <ChevronDown className="w-4 h-4 text-[#8a97a6]" />}
+          </div>
+
+          {sections.post && (
+            <div className="p-5 pt-0">
+              {post.length === 0 ? (
+                <div className="text-center py-10 border-2 border-dashed border-slate-200 rounded-xl my-2">
+                  <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-2">
+                    <ClipboardList className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-semibold text-slate-700">No post-treatment medications added</p>
+                  <p className="text-[11px] text-slate-400 mt-1">Click the "Add Discharge Medication" button below to create one.</p>
+                </div>
+              ) : (
+                <div className="overflow-hidden border border-slate-200 rounded-xl bg-white shadow-2xs">
+                  <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    <span>Prescription Overview (Click row to edit details)</span>
+                    <span>Status</span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {post.map((row, idx) => {
+                      const medName = getPostMedName(row.medication);
+                      const isReady = !!row.medication?.trim();
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => setActiveDrawer({ section: "post", index: idx })}
+                          className="p-3.5 hover:bg-rose-50/40 cursor-pointer transition flex items-center justify-between group gap-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="text-xs font-mono text-slate-400 font-semibold w-6 shrink-0">
+                              {String(idx + 1).padStart(2, "0")}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-slate-900 group-hover:text-rose-700 transition truncate">
+                                  {medName || <span className="italic text-slate-400 font-normal">Select discharge medication...</span>}
+                                </span>
+                                {row.form && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/80">
+                                    {getFormIcon(row.form)}
+                                    <span>{row.form}</span>
+                                  </span>
+                                )}
+                                {row.brandName && (
+                                  <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
+                                    {row.brandName}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1 truncate">
+                                <span className="font-medium text-slate-700">
+                                  {row.dose ? `${row.dose} ${row.unit || ""}` : "No dose"}
+                                </span>
+                                {row.frequency ? ` • ${row.frequency}` : ""}
+                                {row.duration ? ` • ${row.duration} ${row.durationDays || "D"}` : ""}
+                                {row.instructions ? ` • ${row.instructions}` : ""}
+                                {row.remarks ? ` (Remark: ${row.remarks})` : ""}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            {isReady ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <Check className="w-3 h-3 text-emerald-600" /> Ready
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                Incomplete
+                              </span>
+                            )}
+
+                            {!disabled && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removePost(idx);
+                                }}
+                                title="Delete row"
+                                className="w-7 h-7 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition opacity-60 group-hover:opacity-100"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            <div className="w-7 h-7 rounded-lg bg-slate-100 group-hover:bg-rose-100 group-hover:text-rose-700 text-slate-400 flex items-center justify-center transition">
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Bottom Add Bar */}
+              <div className="px-5 py-3.5 bg-slate-50/70 border-t border-slate-100 flex items-center justify-center mt-3 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (disabled) return;
+                    const newIdx = post.length;
+                    addPost();
+                    setActiveDrawer({ section: "post", index: newIdx });
+                  }}
+                  disabled={disabled}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 bg-white hover:bg-rose-50 border border-rose-200 px-4 py-2 rounded-lg shadow-2xs transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Discharge Medication</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
 
       <ConfirmationDialog
         open={showLeaveConfirm}
@@ -2859,8 +2760,1147 @@ export default function CreateProtocol() {
         initialDrugName={calcTargetRow?.drug ?? ""}
         initialDose={calcTargetRow?.dose ?? ""}
         initialDoseCalc={calcTargetRow?.doseCalc ?? ""}
-        onApplyDose={handleApplyDoseFromModal}
       />
+
+      {/* =========================================================================
+          PATTERN 5: SLIDE-OVER EDIT DRAWER
+         ========================================================================= */}
+      {activeDrawer && (
+        <div
+          className="fixed inset-0 z-50 overflow-hidden"
+          aria-labelledby="slide-over-title"
+          role="dialog"
+          aria-modal="true"
+        >
+          {/* Backdrop blur overlay */}
+          <div
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
+            onClick={() => setActiveDrawer(null)}
+          />
+
+          <div className="fixed inset-y-0 right-0 pl-10 max-w-full flex">
+            <div className="w-screen max-w-md sm:max-w-lg bg-white shadow-2xl flex flex-col h-full border-l border-slate-200 animate-in slide-in-from-right duration-200">
+              {/* Header */}
+              <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="w-9 h-9 rounded-xl bg-sky-100 text-sky-700 flex items-center justify-center font-bold shrink-0">
+                    {activeDrawer.section === "premeds" && <Pill className="w-4 h-4 text-sky-600" />}
+                    {activeDrawer.section === "chemo" && <Syringe className="w-4 h-4 text-indigo-600" />}
+                    {activeDrawer.section === "supportive" && <ShieldPlus className="w-4 h-4 text-emerald-600" />}
+                    {activeDrawer.section === "dilution" && <FlaskConical className="w-4 h-4 text-amber-600" />}
+                    {activeDrawer.section === "post" && <ClipboardList className="w-4 h-4 text-rose-600" />}
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold text-slate-900 truncate">
+                      {activeDrawer.section === "premeds" && "Edit Pre-medication Details"}
+                      {activeDrawer.section === "chemo" && "Edit Chemotherapy Drug"}
+                      {activeDrawer.section === "supportive" && "Edit Supportive Care"}
+                      {activeDrawer.section === "dilution" && "Edit Dilution Details"}
+                      {activeDrawer.section === "post" && "Edit Discharge Medication"}
+                    </h3>
+                    <p className="text-xs text-slate-500 truncate">
+                      {activeDrawer.section === "premeds" && (getMedName(premeds[activeDrawer.index]?.medication, premedMeds) || `Row #${activeDrawer.index + 1}`)}
+                      {activeDrawer.section === "chemo" && (getMedName(chemoPlans[activeDrawer.index]?.medication, chemoMeds) || `Row #${activeDrawer.index + 1}`)}
+                      {activeDrawer.section === "supportive" && (getMedName(supportive[activeDrawer.index]?.medication, supportiveMeds) || `Row #${activeDrawer.index + 1}`)}
+                      {activeDrawer.section === "dilution" && (getDilutionMedName(dilution[activeDrawer.index]?.medication) || `Row #${activeDrawer.index + 1}`)}
+                      {activeDrawer.section === "post" && (getPostMedName(post[activeDrawer.index]?.medication) || `Row #${activeDrawer.index + 1}`)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {/* Stepper Navigation */}
+                  <div className="flex items-center gap-1 border border-slate-200 rounded-lg bg-white px-1 py-0.5 shadow-2xs">
+                    <button
+                      type="button"
+                      disabled={activeDrawer.index <= 0}
+                      onClick={() => setActiveDrawer({ ...activeDrawer, index: activeDrawer.index - 1 })}
+                      className="p-1 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent transition"
+                      title="Previous item"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-[11px] font-medium text-slate-500 px-1 font-mono">
+                      {activeDrawer.index + 1} / {getActiveSectionItemsCount()}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={activeDrawer.index >= getActiveSectionItemsCount() - 1}
+                      onClick={() => setActiveDrawer({ ...activeDrawer, index: activeDrawer.index + 1 })}
+                      className="p-1 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent transition"
+                      title="Next item"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveDrawer(null)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition"
+                    title="Close drawer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Drawer Body - Scrollable Form Fields */}
+              <div className="p-6 overflow-y-auto space-y-4 flex-1 text-xs">
+                {/* PREMEDS FORM */}
+                {activeDrawer.section === "premeds" && premeds[activeDrawer.index] && (() => {
+                  const row = premeds[activeDrawer.index];
+                  const idx = activeDrawer.index;
+                  return (
+                    <>
+                      <div>
+                        <label className={drawerLabelCls}>Drug Formulation</label>
+                        <ProtocolSelect
+                          options={getFormDropdownOptions(row.medication, row.form, premedMeds)}
+                          value={row.form}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...premeds];
+                            n[idx].form = v;
+                            setPremeds(n);
+                          }}
+                          placeholder="Select formulation"
+                          emptyMessage="No forms found"
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>
+                          Medication / Generic Name <Req />
+                        </label>
+                        <ProtocolSelect
+                          options={getDropdownOptions(premedMeds, row.medication)}
+                          value={row.medication}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...premeds];
+                            n[idx].medication = v;
+                            const med = premedMeds.find((m) => m.medicine_id === v);
+                            const gid = med?.generic_id;
+                            const availableForms = (gid && genericCatalog[gid]?.forms) || (med?.dosage_form ? [med.dosage_form] : []);
+                            if (availableForms.length === 1 && !n[idx].form) {
+                              n[idx].form = availableForms[0];
+                            } else if (!n[idx].form && med?.dosage_form) {
+                              n[idx].form = med.dosage_form;
+                            }
+                            if (med && !n[idx].medicineName) {
+                              n[idx].medicineName = med.medicine_name;
+                            }
+                            setPremeds(n);
+                          }}
+                          placeholder={
+                            loadingPremedMeds
+                              ? "Loading premedications..."
+                              : "Select or type generic medication"
+                          }
+                          emptyMessage="No premedications found"
+                          loading={loadingPremedMeds}
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>
+                          Medicine / Formulary Name (Display Title)
+                        </label>
+                        <input
+                          type="text"
+                          value={row.medicineName ?? ""}
+                          onChange={(e) => {
+                            const n = [...premeds];
+                            n[idx].medicineName = e.target.value;
+                            setPremeds(n);
+                          }}
+                          placeholder={
+                            row.medication
+                              ? (row.form
+                                  ? (row.form + " " + getMedName(row.medication, premedMeds))
+                                  : getMedName(row.medication, premedMeds))
+                              : "Auto-generated from generic name if left blank"
+                          }
+                          disabled={disabled}
+                          className={drawerInputCls}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={drawerLabelCls}>Brand Name (Recommended)</label>
+                          <ProtocolSelect
+                            options={getBrandDropdownOptions(premeds, row.brandName, premedMeds, row.medication, row.form)}
+                            value={row.brandName ?? ""}
+                            allowCreate
+                            onValueChange={(v) => {
+                              const n = [...premeds];
+                              n[idx].brandName = v;
+                              setPremeds(n);
+                            }}
+                            placeholder="Select brand (Optional - Recommended)"
+                            emptyMessage="No brand options"
+                            disabled={disabled}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <label className={drawerLabelCls}>Dosage & Unit</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <ProtocolSelect
+                              options={getDoseDropdownOptions(premeds, row.dose)}
+                              value={row.dose}
+                              onValueChange={(v) => {
+                                const n = [...premeds];
+                                n[idx].dose = v;
+                                setPremeds(n);
+                              }}
+                              placeholder="Dose"
+                              emptyMessage="No dose options"
+                              disabled={disabled}
+                              className="h-9"
+                            />
+                            <ProtocolSelect
+                              options={Array.from(new Set([...fieldOptions.dosage_units, row.unit].filter(Boolean)))}
+                              value={row.unit}
+                              onValueChange={(v) => {
+                                const n = [...premeds];
+                                n[idx].unit = v;
+                                setPremeds(n);
+                              }}
+                              placeholder="Unit"
+                              emptyMessage="No units found"
+                              disabled={disabled}
+                              className="h-9"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Admin Notes</label>
+                        <textarea
+                          rows={3}
+                          value={row.adminNotes}
+                          onChange={(e) => {
+                            const n = [...premeds];
+                            n[idx].adminNotes = e.target.value;
+                            setPremeds(n);
+                          }}
+                          placeholder="e.g. Administer slow IV push over 3-5 mins in 50ml NS"
+                          className={drawerTextareaCls}
+                          disabled={disabled}
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Clinical Remarks</label>
+                        <textarea
+                          rows={2}
+                          value={row.remarks}
+                          onChange={(e) => {
+                            const n = [...premeds];
+                            n[idx].remarks = e.target.value;
+                            setPremeds(n);
+                          }}
+                          placeholder="e.g. Pre-chemo antiemetic protocol"
+                          className={drawerTextareaCls}
+                          disabled={disabled}
+                        />
+                      </div>
+                    </>
+                  );
+                })()}
+
+                {/* CHEMOTHERAPY FORM */}
+                {activeDrawer.section === "chemo" && chemoPlans[activeDrawer.index] && (() => {
+                  const row = chemoPlans[activeDrawer.index];
+                  const idx = activeDrawer.index;
+                  const selectedMed = chemoMeds.find((m) => m.medicine_id === row.medication)?.medicine_name || row.medication;
+                  return (
+                    <>
+                      <div>
+                        <label className={drawerLabelCls}>Drug Formulation</label>
+                        <ProtocolSelect
+                          options={getFormDropdownOptions(row.medication, row.form, chemoMeds)}
+                          value={row.form}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...chemoPlans];
+                            n[idx].form = v;
+                            setChemoPlans(n);
+                          }}
+                          placeholder="Select form"
+                          emptyMessage="No forms found"
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>
+                          Chemotherapy Medicine (Generic Name) <Req />
+                        </label>
+                        <ProtocolSelect
+                          options={getDropdownOptions(chemoMeds, row.medication)}
+                          value={row.medication}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...chemoPlans];
+                            n[idx].medication = v;
+                            const medObj = chemoMeds.find((m) => m.medicine_id === v);
+                            if (medObj && !n[idx].doseCalc) {
+                              const inferred = inferDosingBasisForMedicine(medObj.medicine_name);
+                              if (inferred === "AUC") n[idx].doseCalc = "AUC (Calvert)";
+                              else if (inferred === "Weight") n[idx].doseCalc = "Weight (mg/kg)";
+                              else n[idx].doseCalc = "BSA (mg/m²)";
+                            }
+                            const gid = medObj?.generic_id;
+                            const availableForms = (gid && genericCatalog[gid]?.forms) || (medObj?.dosage_form ? [medObj.dosage_form] : []);
+                            if (availableForms.length === 1 && !n[idx].form) {
+                              n[idx].form = availableForms[0];
+                            } else if (!n[idx].form && medObj?.dosage_form) {
+                              n[idx].form = medObj.dosage_form;
+                            }
+                            if (medObj && !n[idx].medicineName) {
+                              n[idx].medicineName = medObj.medicine_name;
+                            }
+                            setChemoPlans(n);
+                          }}
+                          placeholder={
+                            loadingChemoMeds
+                              ? "Loading chemo drugs..."
+                              : "Select or type chemo generic drug"
+                          }
+                          emptyMessage="No chemo medicines found"
+                          loading={loadingChemoMeds}
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>
+                          Medicine / Formulary Name (Display Title)
+                        </label>
+                        <input
+                          type="text"
+                          value={row.medicineName ?? ""}
+                          onChange={(e) => {
+                            const n = [...chemoPlans];
+                            n[idx].medicineName = e.target.value;
+                            setChemoPlans(n);
+                          }}
+                          placeholder={
+                            row.medication
+                              ? (row.form
+                                  ? (row.form + " " + getMedName(row.medication, chemoMeds))
+                                  : getMedName(row.medication, chemoMeds))
+                              : "Auto-generated from generic name if left blank"
+                          }
+                          disabled={disabled}
+                          className={drawerInputCls}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={drawerLabelCls}>Brand Name (Recommended)</label>
+                          <ProtocolSelect
+                            options={getBrandDropdownOptions(chemoPlans, row.brandName, chemoMeds, row.medication, row.form)}
+                            value={row.brandName ?? ""}
+                            allowCreate
+                            onValueChange={(v) => {
+                              const n = [...chemoPlans];
+                              n[idx].brandName = v;
+                              setChemoPlans(n);
+                            }}
+                            placeholder="Select brand (Optional - Recommended)"
+                            emptyMessage="No brand options"
+                            disabled={disabled}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <label className={drawerLabelCls}>Dose Calculation Basis</label>
+                          <ProtocolSelect
+                            options={DOSE_CALC_OPTIONS}
+                            value={row.doseCalc}
+                            onValueChange={(v) => {
+                              const n = [...chemoPlans];
+                              n[idx].doseCalc = v;
+                              const recommended = getRecommendedUnitsForDoseCalc(v);
+                              if (!n[idx].unit || v) {
+                                n[idx].unit = recommended.unit;
+                              }
+                              setChemoPlans(n);
+                            }}
+                            placeholder="Select dose calc"
+                            disabled={disabled}
+                            className="h-9"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Protocol Dose & Unit</label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <ProtocolSelect
+                            options={getDoseDropdownOptions(chemoPlans, row.dose)}
+                            value={row.dose}
+                            onValueChange={(v) => {
+                              const n = [...chemoPlans];
+                              n[idx].dose = v;
+                              setChemoPlans(n);
+                            }}
+                            placeholder="Dose"
+                            emptyMessage="No dose options"
+                            disabled={disabled}
+                            className="h-9"
+                          />
+                          <ProtocolSelect
+                            options={Array.from(new Set([...fieldOptions.dosage_units, row.unit, "mg/m²", "mg/kg", "AUC", "mg", "g", "mcg"].filter(Boolean)))}
+                            value={row.unit}
+                            onValueChange={(v) => {
+                              const n = [...chemoPlans];
+                              const oldUnit = n[idx].unit;
+                              n[idx].unit = v;
+                              const numDose = parseFloat(n[idx].dose);
+                              if (!isNaN(numDose) && numDose > 0 && oldUnit && oldUnit !== v) {
+                                const converted = convertUnit(numDose, oldUnit, v);
+                                if (converted != null) {
+                                  n[idx].dose = String(converted);
+                                }
+                              }
+                              setChemoPlans(n);
+                            }}
+                            placeholder="Unit"
+                            emptyMessage="No units found"
+                            disabled={disabled}
+                            className="h-9"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="bg-sky-50/70 border border-sky-100 rounded-xl p-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Calculator className="w-4 h-4 text-sky-600" />
+                          <span className="text-xs font-semibold text-sky-900">Need patient BSA or AUC formula?</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCalcTargetRow({
+                              index: idx,
+                              drug: selectedMed || row.brandName || "",
+                              dose: row.dose || "",
+                              doseCalc: row.doseCalc || "",
+                            });
+                            setCalcModalOpen(true);
+                          }}
+                          className="text-xs font-bold text-sky-700 hover:text-sky-900 underline"
+                        >
+                          Open Calculator
+                        </button>
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Admin Notes</label>
+                        <textarea
+                          rows={3}
+                          value={row.adminNotes}
+                          onChange={(e) => {
+                            const n = [...chemoPlans];
+                            n[idx].adminNotes = e.target.value;
+                            setChemoPlans(n);
+                          }}
+                          placeholder="e.g. Infuse over 2 hours in 500ml D5W. Protect from light."
+                          className={drawerTextareaCls}
+                          disabled={disabled}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={drawerLabelCls}>Previous Toxicity</label>
+                          <input
+                            type="text"
+                            value={row.toxicity}
+                            onChange={(e) => {
+                              const n = [...chemoPlans];
+                              n[idx].toxicity = e.target.value;
+                              setChemoPlans(n);
+                            }}
+                            placeholder="e.g. Neuropathy grade 1"
+                            className={drawerInputCls}
+                            disabled={disabled}
+                          />
+                        </div>
+                        <div>
+                          <label className={drawerLabelCls}>Clinical Remarks</label>
+                          <input
+                            type="text"
+                            value={row.remarks}
+                            onChange={(e) => {
+                              const n = [...chemoPlans];
+                              n[idx].remarks = e.target.value;
+                              setChemoPlans(n);
+                            }}
+                            placeholder="Remarks"
+                            className={drawerInputCls}
+                            disabled={disabled}
+                          />
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+
+                {/* SUPPORTIVE CARE FORM */}
+                {activeDrawer.section === "supportive" && supportive[activeDrawer.index] && (() => {
+                  const row = supportive[activeDrawer.index];
+                  const idx = activeDrawer.index;
+                  return (
+                    <>
+                      <div>
+                        <label className={drawerLabelCls}>Drug Formulation</label>
+                        <ProtocolSelect
+                          options={getFormDropdownOptions(row.medication, row.form, supportiveMeds)}
+                          value={row.form}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...supportive];
+                            n[idx].form = v;
+                            setSupportive(n);
+                          }}
+                          placeholder="Select form"
+                          emptyMessage="No forms found"
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>
+                          Supportive Medicine (Generic Name) <Req />
+                        </label>
+                        <ProtocolSelect
+                          options={getDropdownOptions(supportiveMeds, row.medication)}
+                          value={row.medication}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...supportive];
+                            n[idx].medication = v;
+                            const med = supportiveMeds.find((m) => m.medicine_id === v);
+                            const gid = med?.generic_id;
+                            const availableForms = (gid && genericCatalog[gid]?.forms) || (med?.dosage_form ? [med.dosage_form] : []);
+                            if (availableForms.length === 1 && !n[idx].form) {
+                              n[idx].form = availableForms[0];
+                            } else if (!n[idx].form && med?.dosage_form) {
+                              n[idx].form = med.dosage_form;
+                            }
+                            if (med && !n[idx].medicineName) {
+                              n[idx].medicineName = med.medicine_name;
+                            }
+                            setSupportive(n);
+                          }}
+                          placeholder={
+                            loadingSupportiveMeds
+                              ? "Loading supportive drugs..."
+                              : "Select or type supportive drug (Generic)"
+                          }
+                          emptyMessage="No supportive medicines found"
+                          loading={loadingSupportiveMeds}
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>
+                          Medicine / Formulary Name (Display Title)
+                        </label>
+                        <input
+                          type="text"
+                          value={row.medicineName ?? ""}
+                          onChange={(e) => {
+                            const n = [...supportive];
+                            n[idx].medicineName = e.target.value;
+                            setSupportive(n);
+                          }}
+                          placeholder={
+                            row.medication
+                              ? (row.form
+                                  ? (row.form + " " + getMedName(row.medication, supportiveMeds))
+                                  : getMedName(row.medication, supportiveMeds))
+                              : "Auto-generated from generic name if left blank"
+                          }
+                          disabled={disabled}
+                          className={drawerInputCls}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={drawerLabelCls}>Brand Name (Recommended)</label>
+                          <ProtocolSelect
+                            options={getBrandDropdownOptions(supportive, row.brandName, supportiveMeds, row.medication, row.form)}
+                            value={row.brandName ?? ""}
+                            allowCreate
+                            onValueChange={(v) => {
+                              const n = [...supportive];
+                              n[idx].brandName = v;
+                              setSupportive(n);
+                            }}
+                            placeholder="Select brand (Optional - Recommended)"
+                            emptyMessage="No brand options"
+                            disabled={disabled}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <label className={drawerLabelCls}>Dosage & Unit</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <ProtocolSelect
+                              options={getDoseDropdownOptions(supportive, row.dose)}
+                              value={row.dose ?? ""}
+                              onValueChange={(v) => {
+                                const n = [...supportive];
+                                n[idx].dose = v;
+                                setSupportive(n);
+                              }}
+                              placeholder="Dose"
+                              emptyMessage="No dose options"
+                              disabled={disabled}
+                              className="h-9"
+                            />
+                            <ProtocolSelect
+                              options={Array.from(new Set([...fieldOptions.dosage_units, row.unit].filter(Boolean)))}
+                              value={row.unit ?? ""}
+                              onValueChange={(v) => {
+                                const n = [...supportive];
+                                n[idx].unit = v;
+                                setSupportive(n);
+                              }}
+                              placeholder="Unit"
+                              emptyMessage="No units found"
+                              disabled={disabled}
+                              className="h-9"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Admin Notes</label>
+                        <textarea
+                          rows={3}
+                          value={row.adminNotes}
+                          onChange={(e) => {
+                            const n = [...supportive];
+                            n[idx].adminNotes = e.target.value;
+                            setSupportive(n);
+                          }}
+                          placeholder="e.g. Take with food or as directed"
+                          className={drawerTextareaCls}
+                          disabled={disabled}
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Clinical Remarks</label>
+                        <textarea
+                          rows={2}
+                          value={row.remarks}
+                          onChange={(e) => {
+                            const n = [...supportive];
+                            n[idx].remarks = e.target.value;
+                            setSupportive(n);
+                          }}
+                          placeholder="Clinical remarks"
+                          className={drawerTextareaCls}
+                          disabled={disabled}
+                        />
+                      </div>
+                    </>
+                  );
+                })()}
+
+                {/* DILUTION FORM */}
+                {activeDrawer.section === "dilution" && dilution[activeDrawer.index] && (() => {
+                  const row = dilution[activeDrawer.index];
+                  const idx = activeDrawer.index;
+                  return (
+                    <>
+                      <div>
+                        <label className={drawerLabelCls}>Drug Formulation</label>
+                        <ProtocolSelect
+                          options={getFormDropdownOptions(row.medication, row.form, dilutionMeds)}
+                          value={row.form}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...dilution];
+                            n[idx].form = v;
+                            setDilution(n);
+                          }}
+                          placeholder="Select form"
+                          emptyMessage="No forms found"
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Medication / Generic Name</label>
+                        <ProtocolSelect
+                          options={allAvailableDilutionMeds}
+                          value={row.medication}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...dilution];
+                            n[idx].medication = v;
+                            const med = dilutionMeds.find((m) => m.medicine_id === v) || chemoMeds.find((m) => m.medicine_id === v) || premedMeds.find((m) => m.medicine_id === v);
+                            const gid = med?.generic_id;
+                            const availableForms = (gid && genericCatalog[gid]?.forms) || (med?.dosage_form ? [med.dosage_form] : []);
+                            if (availableForms.length === 1 && !n[idx].form) {
+                              n[idx].form = availableForms[0];
+                            } else if (!n[idx].form && med?.dosage_form) {
+                              n[idx].form = med.dosage_form;
+                            }
+                            if (med && !n[idx].medicineName) {
+                              n[idx].medicineName = med.medicine_name;
+                            }
+                            setDilution(n);
+                          }}
+                          placeholder={loadingDilutionMeds ? "Loading medicines..." : "Select medicine"}
+                          emptyMessage="No medicines found"
+                          loading={loadingDilutionMeds}
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>
+                          Medicine / Formulary Name (Display Title)
+                        </label>
+                        <input
+                          type="text"
+                          value={row.medicineName ?? ""}
+                          onChange={(e) => {
+                            const n = [...dilution];
+                            n[idx].medicineName = e.target.value;
+                            setDilution(n);
+                          }}
+                          placeholder={
+                            row.medication
+                              ? (row.form
+                                  ? (row.form + " " + getDilutionMedName(row.medication))
+                                  : getDilutionMedName(row.medication))
+                              : "Auto-generated from generic name if left blank"
+                          }
+                          disabled={disabled}
+                          className={drawerInputCls}
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Brand Name (Recommended)</label>
+                        <ProtocolSelect
+                          options={getBrandDropdownOptions(dilution, row.brandName, dilutionMeds, row.medication, row.form)}
+                          value={row.brandName ?? ""}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...dilution];
+                            n[idx].brandName = v;
+                            setDilution(n);
+                          }}
+                          placeholder="Select brand (Optional - Recommended)"
+                          emptyMessage="No brand options"
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={drawerLabelCls}>Dose & Unit</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <ProtocolSelect
+                              options={getDoseDropdownOptions(dilution, row.dose)}
+                              value={row.dose}
+                              onValueChange={(v) => {
+                                const n = [...dilution];
+                                n[idx].dose = v;
+                                const numDose = parseFloat(v);
+                                if (!isNaN(numDose) && numDose > 0 && n[idx].unit) {
+                                  const vol = convertMassToVolume(numDose, n[idx].unit, n[idx].volumeUnit || "CC");
+                                  if (vol != null) {
+                                    n[idx].volume = String(vol);
+                                    if (!n[idx].volumeUnit) n[idx].volumeUnit = "CC";
+                                  }
+                                }
+                                setDilution(n);
+                              }}
+                              placeholder="Dose"
+                              emptyMessage="No dose options"
+                              disabled={disabled}
+                              className="h-9"
+                            />
+                            <ProtocolSelect
+                              options={Array.from(new Set([...fieldOptions.dilution_dose_units, row.unit, "mg", "g", "mcg", "kg"].filter(Boolean)))}
+                              value={row.unit}
+                              onValueChange={(v) => {
+                                const n = [...dilution];
+                                const oldUnit = n[idx].unit;
+                                n[idx].unit = v;
+                                const numDose = parseFloat(n[idx].dose);
+                                if (!isNaN(numDose) && numDose > 0) {
+                                  if (oldUnit && oldUnit !== v) {
+                                    const convertedDose = convertUnit(numDose, oldUnit, v);
+                                    if (convertedDose != null) {
+                                      n[idx].dose = String(convertedDose);
+                                    }
+                                  }
+                                  const currentDose = parseFloat(n[idx].dose) || numDose;
+                                  const vol = convertMassToVolume(currentDose, v, n[idx].volumeUnit || "CC");
+                                  if (vol != null) {
+                                    n[idx].volume = String(vol);
+                                    if (!n[idx].volumeUnit) n[idx].volumeUnit = "CC";
+                                  }
+                                }
+                                setDilution(n);
+                              }}
+                              placeholder="Unit"
+                              emptyMessage="No units found"
+                              disabled={disabled}
+                              className="h-9"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className={drawerLabelCls}>Dilution Volume & Unit</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <input
+                              type="text"
+                              value={row.volume}
+                              onChange={(e) => {
+                                const n = [...dilution];
+                                n[idx].volume = e.target.value;
+                                setDilution(n);
+                              }}
+                              placeholder="100"
+                              className={drawerInputCls}
+                              disabled={disabled}
+                            />
+                            <ProtocolSelect
+                              options={Array.from(new Set([...fieldOptions.dilution_volume_units, row.volumeUnit, "CC", "mL", "L"].filter(Boolean)))}
+                              value={row.volumeUnit}
+                              onValueChange={(v) => {
+                                const n = [...dilution];
+                                const oldVolUnit = n[idx].volumeUnit;
+                                n[idx].volumeUnit = v;
+                                const numVol = parseFloat(n[idx].volume);
+                                if (!isNaN(numVol) && numVol > 0 && oldVolUnit && oldVolUnit !== v) {
+                                  const convertedVol = convertUnit(numVol, oldVolUnit, v);
+                                  if (convertedVol != null) {
+                                    n[idx].volume = String(convertedVol);
+                                  }
+                                }
+                                setDilution(n);
+                              }}
+                              placeholder="Unit"
+                              emptyMessage="No units found"
+                              disabled={disabled}
+                              className="h-9"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Diluent</label>
+                        <ProtocolSelect
+                          options={fieldOptions.diluents}
+                          value={row.diluent}
+                          onValueChange={(v) => {
+                            const n = [...dilution];
+                            n[idx].diluent = v;
+                            setDilution(n);
+                          }}
+                          placeholder="Select diluent"
+                          emptyMessage="No diluents found"
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+                    </>
+                  );
+                })()}
+
+                {/* POST-TREATMENT (DISCHARGE) FORM */}
+                {activeDrawer.section === "post" && post[activeDrawer.index] && (() => {
+                  const row = post[activeDrawer.index];
+                  const idx = activeDrawer.index;
+                  const isDurationFilledWithNumber = /^\d+(\.\d+)?$/.test(String(row.duration ?? "").trim());
+                  return (
+                    <>
+                      <div>
+                        <label className={drawerLabelCls}>Drug Formulation</label>
+                        <ProtocolSelect
+                          options={getFormDropdownOptions(row.medication, row.form, dischargeMeds.length > 0 ? dischargeMeds : premedMeds)}
+                          value={row.form}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...post];
+                            n[idx].form = v;
+                            setPost(n);
+                          }}
+                          placeholder="Select form"
+                          emptyMessage="No forms found"
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Medication / Generic Name (On Discharge) <Req /></label>
+                        <ProtocolSelect
+                          options={getDropdownOptions(dischargeMeds.length > 0 ? dischargeMeds : premedMeds, row.medication)}
+                          value={row.medication}
+                          allowCreate
+                          onValueChange={(v) => {
+                            const n = [...post];
+                            n[idx].medication = v;
+                            const medList = dischargeMeds.length > 0 ? dischargeMeds : premedMeds;
+                            const med = medList.find((m) => m.medicine_id === v) || chemoMeds.find((m) => m.medicine_id === v);
+                            const gid = med?.generic_id;
+                            const availableForms = (gid && genericCatalog[gid]?.forms) || (med?.dosage_form ? [med.dosage_form] : []);
+                            if (availableForms.length === 1 && !n[idx].form) {
+                              n[idx].form = availableForms[0];
+                            } else if (!n[idx].form && med?.dosage_form) {
+                              n[idx].form = med.dosage_form;
+                            }
+                            if (med && !n[idx].medicineName) {
+                              n[idx].medicineName = med.medicine_name;
+                            }
+                            setPost(n);
+                          }}
+                          placeholder={
+                            loadingDischargeMeds
+                              ? "Loading discharge drugs..."
+                              : "Select or type discharge generic drug"
+                          }
+                          emptyMessage="No discharge medicines found"
+                          loading={loadingDischargeMeds}
+                          disabled={disabled}
+                          className="h-9"
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>
+                          Medicine / Formulary Name (Display Title)
+                        </label>
+                        <input
+                          type="text"
+                          value={row.medicineName ?? ""}
+                          onChange={(e) => {
+                            const n = [...post];
+                            n[idx].medicineName = e.target.value;
+                            setPost(n);
+                          }}
+                          placeholder={
+                            row.medication
+                              ? (row.form
+                                  ? (row.form + " " + getPostMedName(row.medication))
+                                  : getPostMedName(row.medication))
+                              : "Auto-generated from generic name if left blank"
+                          }
+                          disabled={disabled}
+                          className={drawerInputCls}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={drawerLabelCls}>Brand Name (Recommended)</label>
+                          <ProtocolSelect
+                            options={getBrandDropdownOptions(post, row.brandName, dischargeMeds.length > 0 ? dischargeMeds : premedMeds, row.medication, row.form)}
+                            value={row.brandName ?? ""}
+                            allowCreate
+                            onValueChange={(v) => {
+                              const n = [...post];
+                              n[idx].brandName = v;
+                              setPost(n);
+                            }}
+                            placeholder="Select brand (Optional - Recommended)"
+                            emptyMessage="No brand options"
+                            disabled={disabled}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <label className={drawerLabelCls}>Dose & Unit</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <input
+                              type="text"
+                              value={row.dose}
+                              onChange={(e) => {
+                                const n = [...post];
+                                n[idx].dose = e.target.value;
+                                setPost(n);
+                              }}
+                              placeholder="e.g. 4"
+                              className={drawerInputCls}
+                              disabled={disabled}
+                            />
+                            <input
+                              type="text"
+                              value={row.unit}
+                              onChange={(e) => {
+                                const n = [...post];
+                                n[idx].unit = e.target.value;
+                                setPost(n);
+                              }}
+                              placeholder="e.g. mg"
+                              className={drawerInputCls}
+                              disabled={disabled}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={drawerLabelCls}>Frequency</label>
+                          <ProtocolSelect
+                            options={Array.from(new Set([...PROTOCOL_FREQUENCY_OPTIONS, row.frequency].filter(Boolean)))}
+                            value={row.frequency}
+                            allowCreate
+                            onValueChange={(v) => {
+                              const n = [...post];
+                              n[idx].frequency = v;
+                              setPost(n);
+                            }}
+                            placeholder="Select frequency"
+                            emptyMessage="No frequency options"
+                            disabled={disabled}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <label className={drawerLabelCls}>Duration & Unit</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <ProtocolSelect
+                              options={Array.from(new Set([...PROTOCOL_INSTRUCTION_OPTIONS, row.duration].filter(Boolean)))}
+                              value={row.duration}
+                              allowCreate
+                              onValueChange={(v) => {
+                                const n = [...post];
+                                n[idx].duration = v;
+                                setPost(n);
+                              }}
+                              placeholder="Duration"
+                              emptyMessage="No duration options"
+                              disabled={disabled}
+                              className="h-9"
+                            />
+                            <ProtocolSelect
+                              options={getDurationUnitOptions(row.duration, row.durationDays)}
+                              value={getDurationUnitCode(row.durationDays)}
+                              onValueChange={(v) => {
+                                const n = [...post];
+                                n[idx].durationDays = v;
+                                setPost(n);
+                              }}
+                              placeholder={parseInt(String(row.duration ?? "").trim(), 10) === 1 ? "Day" : "Days"}
+                              disabled={disabled || !isDurationFilledWithNumber}
+                              className="h-9"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Administration Instructions</label>
+                        <textarea
+                          rows={3}
+                          value={row.instructions}
+                          onChange={(e) => {
+                            const n = [...post];
+                            n[idx].instructions = e.target.value;
+                            setPost(n);
+                          }}
+                          placeholder="e.g. Take after food with plenty of water"
+                          className={drawerTextareaCls}
+                          disabled={disabled}
+                        />
+                      </div>
+
+                      <div>
+                        <label className={drawerLabelCls}>Clinical Remarks</label>
+                        <textarea
+                          rows={2}
+                          value={row.remarks}
+                          onChange={(e) => {
+                            const n = [...post];
+                            n[idx].remarks = e.target.value;
+                            setPost(n);
+                          }}
+                          placeholder="Remarks"
+                          className={drawerTextareaCls}
+                          disabled={disabled}
+                        />
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* Drawer Footer */}
+              <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between shrink-0">
+                <div>
+                  {!disabled && (
+                    <button
+                      type="button"
+                      onClick={handleDeleteFromDrawer}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg text-xs font-semibold transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Row</span>
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveDrawer(null)}
+                    className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-100 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveDrawer(null)}
+                    className="px-4 py-2 bg-[#12335c] text-white rounded-lg text-xs font-semibold hover:bg-[#0e2848] shadow-xs transition"
+                  >
+                    Done / Save
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

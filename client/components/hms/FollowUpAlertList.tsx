@@ -214,9 +214,13 @@ export function FollowUpAlertSection({
   if (!enabled || alerts.length === 0) return null;
 
   const bookAppointment = (alert: FollowUpAlert) => {
-    const date = alert.follow_up_date >= todayIso() ? alert.follow_up_date : todayIso();
-    const placement = alert.doctor && alert.department
-      ? { doctorId: alert.doctor.employee_id, branchId: alert.branch.branch_id, departmentId: alert.department.department_id }
+    const date = alert.follow_up_date;
+    const placement = alert.doctor
+      ? {
+          doctorId: alert.doctor.employee_id,
+          branchId: alert.branch?.branch_id || "",
+          departmentId: alert.department?.department_id || "",
+        }
       : null;
     const state = {
       patient: {
@@ -225,8 +229,14 @@ export function FollowUpAlertSection({
         patient_primary_mobile: alert.patient.mobile ?? "",
       },
       ...(placement ? { slot: { ...placement, date } } : {}),
+      ...(placement?.doctorId ? { doctorId: placement.doctorId } : {}),
       /* Doctor portal: book with the follow-up doctor and return there. */
       ...(portal === "doctor" && placement ? { doctorBooking: placement } : {}),
+      selectedDate: date,
+      followUpDate: date,
+      date,
+      keepDate: true,
+      isFollowUpBooking: true,
       defaultVisitType: "Follow-up",
     };
     onNavigate?.();

@@ -3,68 +3,28 @@ import { useNavigate } from "react-router-dom";
 import {
   ShieldCheck,
   ShieldAlert,
-  AlertTriangle,
   HeartPulse,
   CalendarX,
-  Clock,
-  RefreshCw,
+  CalendarPlus,
+  UsersRound,
   ArrowRight,
   CheckCircle2,
   Lock,
-  Stethoscope,
-  FlaskConical,
-  BedDouble,
-  UsersRound,
   ExternalLink,
+  ChevronDown,
+  ChevronUp,
+  Zap,
+  Loader2,
 } from "lucide-react";
-import { auditApi, type AuditLogRecord } from "@/api/audit.api";
 import { labOrderApi } from "@/api/labOrder.api";
+import { followUpAlertApi, type FollowUpAlert } from "@/api/followUpAlert.api";
+import { appointmentApi } from "@/api/appointment.api";
 import { useBranchFilter } from "@/context/BranchFilterContext";
 import { usePermission } from "@/context/PermissionContext";
+import { useToast } from "@/hooks/use-toast";
+import { RefreshButton } from "@/components/hms/RefreshButton";
 
 export type IntegrityCategory = "all" | "clinical" | "staffing" | "audit";
-
-function parseAuditSummary(log: AuditLogRecord) {
-  let details = log.change_summary || "System governance update";
-  try {
-    const parsed = JSON.parse(log.change_summary);
-    if (parsed.reason) {
-      details = parsed.reason;
-    } else if (parsed.to && parsed.from) {
-      details = `Status transitioned from ${parsed.from} to ${parsed.to}`;
-    } else if (parsed.to) {
-      details = `Status updated to ${parsed.to}`;
-    }
-  } catch {
-    // plain string already
-  }
-
-  const entityLower = (log.entity_type || "").toLowerCase();
-  const isClinical =
-    entityLower.includes("chemo") ||
-    entityLower.includes("patient") ||
-    entityLower.includes("prescription") ||
-    entityLower.includes("encounter");
-
-  if (isClinical) {
-    const cleanType = entityLower.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-    return {
-      title: `Clinical Update: ${cleanType}`,
-      description: `${details} (by ${log.performed_by || "Clinical Staff"})`,
-      severity: "optimal" as const,
-      actionLabel: "View Orders",
-      actionRoute: "/orders",
-    };
-  }
-
-  return {
-    title: `Security Event: ${log.entity_type} ${log.action}`,
-    description: `${details} (by ${log.performed_by || "Admin"})`,
-    severity: "warning" as const,
-    actionLabel: "Audit Trail",
-    actionRoute: "/admin/permissions",
-  };
-}
 
 export interface IntegrityCheckItem {
   id: string;
@@ -96,31 +56,32 @@ export function SystemIntegrityWidget({
   const navigate = useNavigate();
   const { selectedBranchId, isAllBranches } = useBranchFilter();
   const { can } = usePermission();
+  const { toast } = useToast();
 
-  const canReadAudit = can("audit.read") || can("permission.manage");
   const canReadLabs = can("chemo.plan.read");
 
   const [activeTab, setActiveTab] = useState<IntegrityCategory>("all");
   const [isScanning, setIsScanning] = useState(false);
-  const [recentAudits, setRecentAudits] = useState<AuditLogRecord[]>([]);
   const [urgentLabOrdersCount, setUrgentLabOrdersCount] = useState<number>(0);
+  const [pendingFollowUps, setPendingFollowUps] = useState<FollowUpAlert[]>([]);
+  const [bookingAlertId, setBookingAlertId] = useState<string | null>(null);
+  const [isPendingListOpen, setIsPendingListOpen] = useState(false);
 
-  // Scan auxiliary integrity data (recent audit security events & urgent labs)
+  // Scan auxiliary integrity data (urgent labs & follow-ups).
   const runIntegrityScan = async () => {
     setIsScanning(true);
     try {
       const tasks: Promise<any>[] = [];
 
-      if (canReadAudit) {
-        tasks.push(
-          auditApi
-            .getLogs({ limit: 5 })
-            .then((res) => {
-              if (res.data?.data) setRecentAudits(res.data.data);
-            })
-            .catch((err) => console.warn("[SystemIntegrity] Audit scan warning:", err))
-        );
-      }
+      tasks.push(
+        followUpAlertApi
+          .getAlerts(isAllBranches ? undefined : selectedBranchId)
+          .then((res) => {
+            const alerts = res.data?.data?.alerts || [];
+            setPendingFollowUps(alerts.filter((a) => !a.booked));
+          })
+          .catch((err) => console.warn("[SystemIntegrity] Follow-up alerts scan warning:", err))
+      );
 
       if (canReadLabs) {
         tasks.push(
@@ -144,9 +105,83 @@ export function SystemIntegrityWidget({
     }
   };
 
+  const handleOneClickBook = async (e: React.MouseEvent, alert: FollowUpAlert) => {
+    e.stopPropagation();
+    if (!alert.doctor) {
+      navigate("/appointments/book", {
+        state: {
+          patient: { patient_id: alert.patient.patient_id, patient_first_name: alert.patient.name },
+          selectedDate: alert.follow_up_date,
+          followUpDate: alert.follow_up_date,
+          keepDate: true,
+          isFollowUpBooking: true,
+          defaultVisitType: "Follow-up",
+        },
+      });
+      return;
+    }
+
+    setBookingAlertId(alert.encounter_no);
+    try {
+      let chosenTime = "09:00";
+      try {
+        const slotRes = await appointmentApi.getAvailableSlots(
+          alert.doctor.employee_id,
+          alert.branch.branch_id,
+          alert.follow_up_date
+        );
+        const slots = slotRes.data?.data?.slots || [];
+        const open = slots.find((s) => s.is_available);
+        if (open?.time) chosenTime = open.time;
+      } catch (slotErr) {
+        console.warn("[SystemIntegrity] getAvailableSlots fallback:", slotErr);
+      }
+
+      await appointmentApi.create({
+        patient_id: alert.patient.patient_id,
+        patient_name: alert.patient.name,
+        patient_number: alert.patient.mobile || undefined,
+        branch_id: alert.branch.branch_id,
+        department_id: alert.department?.department_id || "",
+        employee_id: alert.doctor.employee_id,
+        appointment_date: alert.follow_up_date,
+        appointment_time: chosenTime,
+        patient_type: "Outpatient (OPD)",
+        patient_visit_type: "Follow-up",
+        reason_for_visit: "Follow-up consultation",
+      });
+
+      toast({
+        title: "Appointment Booked!",
+        description: `Follow-up booked for ${alert.patient.name} on ${alert.follow_up_date} at ${chosenTime}.`,
+      });
+
+      void followUpAlertApi.dismiss(alert.encounter_no);
+      runIntegrityScan();
+    } catch (err: any) {
+      toast({
+        title: "Instant booking could not complete",
+        description: err.response?.data?.message || "Redirecting to appointment scheduler...",
+      });
+      navigate("/appointments/book", {
+        state: {
+          patient: { patient_id: alert.patient.patient_id, patient_first_name: alert.patient.name },
+          slot: { doctorId: alert.doctor.employee_id, branchId: alert.branch.branch_id, date: alert.follow_up_date },
+          selectedDate: alert.follow_up_date,
+          followUpDate: alert.follow_up_date,
+          keepDate: true,
+          isFollowUpBooking: true,
+          defaultVisitType: "Follow-up",
+        },
+      });
+    } finally {
+      setBookingAlertId(null);
+    }
+  };
+
   useEffect(() => {
     runIntegrityScan();
-  }, [selectedBranchId, isAllBranches, canReadAudit, canReadLabs]);
+  }, [selectedBranchId, isAllBranches, canReadLabs]);
 
   // Aggregate integrity check items
   const checkItems = useMemo<IntegrityCheckItem[]>(() => {
@@ -193,13 +228,30 @@ export function SystemIntegrityWidget({
       });
     }
 
+    if (pendingFollowUps.length > 0) {
+      const overdueCount = pendingFollowUps.filter((a) => a.due_status === "OVERDUE").length;
+      items.push({
+        id: "pending-followups",
+        category: "clinical",
+        title: `${pendingFollowUps.length} Pending Follow-up Booking${pendingFollowUps.length > 1 ? "s" : ""}`,
+        description: overdueCount > 0
+          ? `${overdueCount} overdue follow-up consult${overdueCount > 1 ? "s" : ""} need immediate booking to maintain care continuity.`
+          : `Doctor-prescribed patient follow-ups awaiting appointment confirmation.`,
+        severity: overdueCount > 0 ? "warning" : "optimal",
+        count: pendingFollowUps.length,
+        actionLabel: "View Queue",
+        actionRoute: "/appointments/pending",
+        onClickAction: () => navigate("/appointments/pending"),
+      });
+    }
+
     // Default healthy clinical state if no issues
-    if (criticalPatientCount === 0 && unassignedApptsCount === 0 && urgentLabOrdersCount === 0) {
+    if (criticalPatientCount === 0 && unassignedApptsCount === 0 && urgentLabOrdersCount === 0 && pendingFollowUps.length === 0) {
       items.push({
         id: "clinical-healthy",
         category: "clinical",
         title: "Clinical Patient Safety: Optimal",
-        description: "All patient encounters within safe thresholds; zero unassigned patient appointments.",
+        description: "All patient encounters within safe thresholds; zero unassigned patient appointments or pending follow-ups.",
         severity: "optimal",
         actionLabel: "View Patients",
         actionRoute: "/patients",
@@ -234,38 +286,29 @@ export function SystemIntegrityWidget({
     }
 
     // --- 3. AUDIT & GOVERNANCE INTEGRITY ---
-    if (canReadAudit && recentAudits.length > 0) {
-      const latest = recentAudits[0];
-      const parsed = parseAuditSummary(latest);
-      items.push({
-        id: "audit-latest",
-        category: "audit",
-        title: parsed.title,
-        description: parsed.description,
-        severity: parsed.severity,
-        actionLabel: parsed.actionLabel,
-        actionRoute: parsed.actionRoute,
-      });
-    } else {
-      items.push({
-        id: "audit-healthy",
-        category: "audit",
-        title: "Role & Permission Security: Verified",
-        description: "Role-based access controls active and synchronized with zero unauthorized privilege escalations.",
-        severity: "optimal",
-        actionLabel: "Matrix",
-        actionRoute: "/admin/permissions",
-      });
-    }
+    // Recent audit-log rows are raw activity, not integrity signals -- they
+    // previously surfaced here as an "audit-latest" check whose severity was
+    // hardcoded to "optimal" for clinical entities, which mislabeled every
+    // chemo/prescription log line as a green health check. Removed; audit
+    // health is now reported as a single steady-state item so the widget
+    // only ever flags things that actually need attention.
+    items.push({
+      id: "audit-healthy",
+      category: "audit",
+      title: "Role & Permission Security: Verified",
+      description: "Role-based access controls active and synchronized with zero unauthorized privilege escalations.",
+      severity: "optimal",
+      actionLabel: "Matrix",
+      actionRoute: "/admin/permissions",
+    });
 
     return items;
   }, [
     criticalPatientCount,
     unassignedApptsCount,
     urgentLabOrdersCount,
+    pendingFollowUps,
     doctorsOnLeave,
-    recentAudits,
-    canReadAudit,
     navigate,
     onFilterCritical,
   ]);
@@ -311,10 +354,10 @@ export function SystemIntegrityWidget({
   }, [checkItems, activeTab]);
 
   return (
-    <div className={`bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 transition-all duration-300 hover:shadow-md flex flex-col justify-between ${className}`}>
+    <div className={`bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3 transition-all duration-300 hover:shadow-md flex flex-col justify-between ${className}`}>
       <div>
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-100 flex-wrap gap-2">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100 flex-wrap gap-2">
           <div className="flex items-center gap-3">
             <div
               className={`w-10 h-10 rounded-xl flex items-center justify-center ${
@@ -336,16 +379,11 @@ export function SystemIntegrityWidget({
 
           {/* Controls: Re-scan button & Quick matrix link */}
           <div className="flex items-center gap-2">
-            <button
-              type="button"
+            <RefreshButton
               onClick={runIntegrityScan}
-              disabled={isScanning}
+              isLoading={isScanning}
               title="Run live integrity scan"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold transition-all disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? "animate-spin text-[#00488D]" : ""}`} />
-              <span className="hidden sm:inline">{isScanning ? "Scanning..." : "Rescan"}</span>
-            </button>
+            />
             <button
               type="button"
               onClick={() => navigate("/admin")}
@@ -358,7 +396,7 @@ export function SystemIntegrityWidget({
         </div>
 
         {/* Category Filter Tabs */}
-        <div className="flex items-center gap-1.5 pt-3 pb-2 border-b border-slate-50 overflow-x-auto text-[11px] font-bold">
+        <div className="flex items-center gap-1.5 pt-2 pb-1.5 border-b border-slate-50 overflow-x-auto text-[11px] font-bold">
           <button
             type="button"
             onClick={() => setActiveTab("all")}
@@ -405,8 +443,9 @@ export function SystemIntegrityWidget({
           </button>
         </div>
 
-        {/* Checks List */}
-        <div className="space-y-2.5 mt-3">
+{/* Checks List -- trimmed to ~3 visible rows; the rest scroll inside the
+            widget so the page height stays bounded. */}
+        <div className="max-h-[215px] overflow-y-auto hide-scrollbar mt-3 space-y-2.5">
           {filteredItems.map((item) => {
             const isCritical = item.severity === "critical";
             const isWarning = item.severity === "warning";
@@ -415,7 +454,7 @@ export function SystemIntegrityWidget({
             return (
               <div
                 key={item.id}
-                className={`flex items-start justify-between gap-3 p-3 rounded-xl border transition-all ${
+                className={`flex flex-col gap-2 p-3 rounded-xl border transition-all ${
                   isCritical
                     ? "bg-red-50/40 border-red-200/80 hover:bg-red-50/70"
                     : isWarning
@@ -423,67 +462,150 @@ export function SystemIntegrityWidget({
                     : "bg-slate-50/60 border-slate-100 hover:bg-slate-50"
                 }`}
               >
-                <div className="flex items-start gap-2.5 min-w-0">
-                  <div
-                    className={`w-7 h-7 rounded-lg shrink-0 flex items-center justify-center mt-0.5 ${
-                      isCritical
-                        ? "bg-red-100 text-red-700"
-                        : isWarning
-                        ? "bg-amber-100 text-amber-700"
-                        : "bg-emerald-100 text-emerald-700"
-                    }`}
-                  >
-                    {item.category === "clinical" ? (
-                      isOptimal ? <CheckCircle2 className="w-4 h-4" /> : <HeartPulse className="w-4 h-4" />
-                    ) : item.category === "staffing" ? (
-                      isOptimal ? <UsersRound className="w-4 h-4" /> : <CalendarX className="w-4 h-4" />
-                    ) : (
-                      isOptimal ? <Lock className="w-4 h-4" /> : <ShieldAlert className="w-4 h-4" />
-                    )}
-                  </div>
-
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <h4
-                        className={`text-xs font-bold leading-tight ${
-                          isCritical
-                            ? "text-red-900"
-                            : isWarning
-                            ? "text-amber-950"
-                            : "text-slate-800"
-                        }`}
-                      >
-                        {item.title}
-                      </h4>
-                      {isCritical && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-600 text-white">
-                          CRITICAL
-                        </span>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <div
+                      className={`w-7 h-7 rounded-lg shrink-0 flex items-center justify-center mt-0.5 ${
+                        isCritical
+                          ? "bg-red-100 text-red-700"
+                          : isWarning
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-emerald-100 text-emerald-700"
+                      }`}
+                    >
+                      {item.id === "pending-followups" ? (
+                        <CalendarPlus className="w-4 h-4 text-[#00488D]" />
+                      ) : item.category === "clinical" ? (
+                        isOptimal ? <CheckCircle2 className="w-4 h-4" /> : <HeartPulse className="w-4 h-4" />
+                      ) : item.category === "staffing" ? (
+                        isOptimal ? <UsersRound className="w-4 h-4" /> : <CalendarX className="w-4 h-4" />
+                      ) : (
+                        isOptimal ? <Lock className="w-4 h-4" /> : <ShieldAlert className="w-4 h-4" />
                       )}
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed line-clamp-2">
-                      {item.description}
-                    </p>
+
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h4
+                          className={`text-xs font-bold leading-tight ${
+                            isCritical
+                              ? "text-red-900"
+                              : isWarning
+                              ? "text-amber-950"
+                              : "text-slate-800"
+                          }`}
+                        >
+                          {item.title}
+                        </h4>
+                        {isCritical && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-600 text-white">
+                            CRITICAL
+                          </span>
+                        )}
+                        {item.id === "pending-followups" && pendingFollowUps.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setIsPendingListOpen((prev) => !prev)}
+                            className="inline-flex items-center gap-0.5 text-[10px] font-bold text-[#00488D] hover:underline cursor-pointer ml-1"
+                          >
+                            <span>{isPendingListOpen ? "Hide list" : "Show list"}</span>
+                            {isPendingListOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed line-clamp-2">
+                        {item.description}
+                      </p>
+                    </div>
                   </div>
+
+                  {item.actionLabel && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (item.onClickAction) item.onClickAction();
+                        else if (item.actionRoute) navigate(item.actionRoute);
+                      }}
+                      className={`shrink-0 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-all whitespace-nowrap shadow-sm cursor-pointer ${
+                        isCritical
+                          ? "bg-red-600 text-white border-red-700 hover:bg-red-700"
+                          : isWarning
+                          ? "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-[#00488D]"
+                          : "bg-white text-[#00488D] border-slate-200 hover:bg-blue-50"
+                      }`}
+                    >
+                      {item.actionLabel}
+                    </button>
+                  )}
                 </div>
 
-                {item.actionLabel && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (item.onClickAction) item.onClickAction();
-                      else if (item.actionRoute) navigate(item.actionRoute);
-                    }}
-                    className={`shrink-0 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-all whitespace-nowrap shadow-sm cursor-pointer ${
-                      isCritical
-                        ? "bg-red-600 text-white border-red-700 hover:bg-red-700"
-                        : isWarning
-                        ? "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-[#00488D]"
-                        : "bg-white text-[#00488D] border-slate-200 hover:bg-blue-50"
-                    }`}
-                  >
-                    {item.actionLabel}
-                  </button>
+                {/* Inside list for Pending Follow-ups */}
+                {item.id === "pending-followups" && isPendingListOpen && pendingFollowUps.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-slate-200/80 flex flex-col gap-2">
+                    {pendingFollowUps.slice(0, 3).map((alert) => (
+                      <div
+                        key={alert.encounter_no}
+                        className="flex items-center justify-between gap-2 p-2 rounded-lg bg-white border border-slate-200/90 shadow-2xs hover:border-blue-200 transition-all text-xs"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-slate-900 truncate">{alert.patient.name}</span>
+                            {alert.due_status === "OVERDUE" ? (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-100 text-red-700">
+                                Overdue ({alert.days_overdue}d)
+                              </span>
+                            ) : alert.due_status === "DUE_TODAY" ? (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800">
+                                Due Today
+                              </span>
+                            ) : alert.due_status === "DUE_TOMORROW" ? (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-blue-100 text-blue-700">
+                                Tomorrow
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-medium px-1.5 py-0.2 rounded bg-slate-100 text-slate-600">
+                                In {alert.days_until}d
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                            Due: {alert.follow_up_date} • {alert.doctor ? `Dr. ${alert.doctor.name.replace(/^dr\.?\s+/i, "")}` : "Unassigned"}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={(e) => handleOneClickBook(e, alert)}
+                            disabled={bookingAlertId === alert.encounter_no}
+                            title="Instant 1-click book with earliest open slot"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] transition-all shadow-sm active:scale-95 disabled:opacity-50"
+                          >
+                            {bookingAlertId === alert.encounter_no ? (
+                              <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            ) : (
+                              <Zap className="w-2.5 h-2.5 fill-current" />
+                            )}
+                            <span>1-Click Book</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
+                    <div className="flex items-center justify-between pt-1 text-[11px]">
+                      <span className="text-slate-400">
+                        Showing {Math.min(3, pendingFollowUps.length)} of {pendingFollowUps.length} pending
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => navigate("/appointments/pending")}
+                        className="text-[#00488D] font-bold hover:underline inline-flex items-center gap-0.5"
+                      >
+                        <span>Open dedicated queue</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             );

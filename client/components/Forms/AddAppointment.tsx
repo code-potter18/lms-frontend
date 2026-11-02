@@ -170,7 +170,8 @@ async function findNearestAvailableDate(
 ): Promise<string | null> {
   const start = new Date(`${startDateStr}T00:00:00Z`);
   const max = new Date(`${maxDateStr}T00:00:00Z`);
-  const maxDays = Math.max(0, Math.round((max.getTime() - start.getTime()) / 86400000));
+  const diffDays = Math.round((max.getTime() - start.getTime()) / 86400000);
+  const maxDays = Math.min(60, Math.max(0, diffDays));
 
   for (let i = 0; i <= maxDays; i++) {
     const d = new Date(start);
@@ -348,6 +349,18 @@ export default function AddAppointment() {
     } | null
   )?.slot;
 
+  const preselectedDate =
+    (location.state as any)?.selectedDate ||
+    (location.state as any)?.followUpDate ||
+    (location.state as any)?.date ||
+    preselectedSlot?.date;
+
+  const isFollowUpBooking = Boolean(
+    (location.state as any)?.isFollowUpBooking ||
+    (location.state as any)?.followUpDate ||
+    (location.state as any)?.keepDate
+  );
+
   // Branch Admin / Staff Admin sessions are tied to one branch (their active
   // user_branch_mapping) -- default the Branch dropdown to it so the
   // Department/Doctor dropdowns narrow to that branch automatically.
@@ -367,6 +380,9 @@ export default function AddAppointment() {
           patientNumber: preselectedPatient.patient_primary_mobile || "",
         }
       : emptyFormData;
+    if (preselectedDate) {
+      base = { ...base, selectDate: preselectedDate };
+    }
     // Admin's own branch is the default unless a Day View slot already
     // decided the exact branch (preselectedSlot below still wins).
     if (currentBranchId) base = { ...base, branchId: currentBranchId };
@@ -374,10 +390,10 @@ export default function AddAppointment() {
     if (preselectedSlot) {
       base = {
         ...base,
-        doctorId: preselectedSlot.doctorId,
-        branchId: preselectedSlot.branchId,
-        departmentId: preselectedSlot.departmentId,
-        selectDate: preselectedSlot.date,
+        ...(preselectedSlot.doctorId ? { doctorId: preselectedSlot.doctorId } : {}),
+        ...(preselectedSlot.branchId ? { branchId: preselectedSlot.branchId } : {}),
+        ...(preselectedSlot.departmentId ? { departmentId: preselectedSlot.departmentId } : {}),
+        selectDate: preselectedSlot.date || base.selectDate,
       };
     }
     // Doctor portal booking: the logged-in doctor books for themselves --
@@ -1639,10 +1655,10 @@ const isDirty = Boolean(
     ? `Dr. ${selectedDoctor.first_name}${selectedDoctor.middle_name ? ` ${selectedDoctor.middle_name}` : ""} ${selectedDoctor.last_name}`
     : "";
 
-  // Appointment Date is bookable only within exactly 14 days from today --
-  // no past dates, nothing beyond the two-week window.
+  // Appointment Date is bookable from today up to 365 days in advance (1 year) --
+  // no past dates.
   const minSelectableDate = format(new Date(), "yyyy-MM-dd");
-  const maxSelectableDate = format(addDays(new Date(), 14), "yyyy-MM-dd");
+  const maxSelectableDate = format(addDays(new Date(), 365), "yyyy-MM-dd");
 
   // Weekdays (MONDAY..SUNDAY) the selected doctor actually works at the
   // selected branch, derived from their active schedules. null = no doctor or
@@ -1753,7 +1769,11 @@ const isDirty = Boolean(
     // IPD bookings are date-first: choosing a doctor must never move the
     // already-selected date, so the nearest-available-date search is skipped
     // entirely (schedules/branches below still load for the card + guards).
-    const keepDate = formData.patientType === "Inpatient (IPD)";
+    // Follow-up bookings also lock in the doctor's prescribed date.
+    const keepDate =
+      formData.patientType === "Inpatient (IPD)" ||
+      isFollowUpBooking ||
+      Boolean(preselectedDate);
 
     if (!keepDate) setFindingNearestDate(true);
 
@@ -1800,7 +1820,7 @@ const isDirty = Boolean(
         } else if (date === null) {
           toast({
             title: "No available date found",
-            description: "This doctor has no open slots this week or next week at their branch.",
+            description: "This doctor has no open slots available for the selected period at their branch.",
             variant: "destructive",
           });
         }
@@ -2059,7 +2079,7 @@ const branchField = (
               hideThemePicker
               selected={parseISO(formData.selectDate)}
               minDate={new Date()}
-              maxDate={addDays(new Date(), 14)}
+              maxDate={addDays(new Date(), 365)}
               isDateDisabled={isDateDisabled}
               onSelect={(date) => {
                 if (date instanceof Date) {

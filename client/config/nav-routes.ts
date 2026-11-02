@@ -18,6 +18,10 @@ export const NAV_ROUTES: Record<string, string> = {
     "week view": "/appointments/week-view",
     "reschedule queue": "/appointments/reschedule-queue",
     reschedule: "/appointments/reschedule-queue",
+    "pending bookings": "/appointments/pending",
+    "pending follow-ups": "/appointments/pending",
+    "pending followups": "/appointments/pending",
+    "follow-ups due": "/appointments/pending",
 
     // Patients
     patients: "/patients",
