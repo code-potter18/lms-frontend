@@ -115,7 +115,10 @@ const dilutionToHydrationRow = (
   sourceDilutionId: dilution.protocol_dilution_id,
   stage: (dilution.hydration_stage ?? "").toUpperCase() === "POST" ? "POST" : "PRE",
   agent:
-    dilution.medicine_master?.medicine_name || dilution.drug_brand_name || "",
+    dilution.medicine_master?.generic_name ||
+    dilution.medicine_master?.medicine_name ||
+    dilution.drug_brand_name ||
+    "",
   diluent: dilution.diluent ?? "",
   volume:
     dilution.dilution_volume != null ? String(Number(dilution.dilution_volume)) : "",
@@ -136,11 +139,13 @@ const protocolDilutionToDrug = (
 ): Drug => ({
   id: index,
   name:
+    item?.generic_name ||
+    dilution.medicine_master?.generic_name ||
     dilution.medicine_master?.medicine_name ||
     dilution.drug_brand_name ||
     (!dilution.medicine_id || dilution.medicine_id === item?.medicine_id
-      ? item?.medicine_master?.medicine_name ||
-        item?.medicine_master?.generic_name
+      ? item?.medicine_master?.generic_name ||
+        item?.medicine_master?.medicine_name
       : "") ||
     "",
   form: dilution.form ?? "",
@@ -892,8 +897,9 @@ const ChemotherapyOrder: React.FC<{
   ): Drug => ({
     id: index,
     name:
-      item.medicine_master?.medicine_name ||
+      item.generic_name ||
       item.medicine_master?.generic_name ||
+      item.medicine_master?.medicine_name ||
       "",
     form:
       item.medicine_master?.dosage_form ||
@@ -940,8 +946,9 @@ const ChemotherapyOrder: React.FC<{
       id: index,
       planItemId: item.chemotherapy_plan_item_id,
       name:
-        item.medicine_master?.medicine_name ||
+        template?.generic_name ||
         item.medicine_master?.generic_name ||
+        item.medicine_master?.medicine_name ||
         item.drug_name ||
         "",
       form: item.formulation || item.medicine_master?.dosage_form || "",

@@ -93,6 +93,7 @@ export interface RegimenProtocolItem {
   patient_dose_unit: string | null;
   administration_detail: string | null;
   previous_toxicity: string | null;
+  generic_name?: string | null;
   remarks: string | null;
   medicine_master: { medicine_name: string | null } | null;
   chemotherapy_protocol_dilutions?: RegimenProtocolDilution[] | null;
@@ -610,8 +611,8 @@ export const chemoPlanItemName = (item?: {
   drug_name?: string | null;
   medicine_master?: { medicine_name?: string | null; generic_name?: string | null } | null;
 } | null) =>
-  item?.medicine_master?.medicine_name ||
   item?.medicine_master?.generic_name ||
+  item?.medicine_master?.medicine_name ||
   item?.drug_name ||
   "";
 
