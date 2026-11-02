@@ -120,6 +120,25 @@ interface FormData {
 
 const PATIENT_TYPE_OPTIONS = ["Self", "Referral"];
 
+// Nationality choices for the Add/Edit Patient form (free text before).
+// "Others" is always the last option.
+const NATIONALITY_OPTIONS = [
+  "Indian",
+  "Nepalese",
+  "Sri Lankan",
+  "Bangladeshi",
+  "Pakistani",
+  "American",
+  "British",
+  "Canadian",
+  "Australian",
+  "German",
+  "French",
+  "Emirati",
+  "Saudi Arabian",
+  "Others",
+];
+
 const DEFAULT_REFERRAL_TYPES = [
   "Hospital",
   "Clinic",
@@ -1650,14 +1669,21 @@ export default function PatientRegistrationForm({
 
               <div>
                 <label className={labelCls}>Nationality <Req /></label>
-                <input
-                  type="text"
-                  placeholder="e.g. Indian"
+                <FormDropdown
                   className={inputCls}
+                  options={[
+                    ...NATIONALITY_OPTIONS,
+                    // Keep any value already on the record (edit mode) selectable
+                    // even when it isn't in the fixed list.
+                    ...(formData.patient_nationality &&
+                    !NATIONALITY_OPTIONS.includes(formData.patient_nationality)
+                      ? [formData.patient_nationality]
+                      : []),
+                  ]}
                   value={formData.patient_nationality}
-                  onChange={(e) => handleInputChange(e, "patient_nationality")}
+                  onValueChange={(val) => setField("patient_nationality", val)}
+                  placeholder="Select"
                   disabled={submitting}
-                  required
                 />
               </div>
               <div>
