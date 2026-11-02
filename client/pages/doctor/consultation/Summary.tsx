@@ -59,6 +59,13 @@ import {
   type FollowUpValues,
 } from "./helpers";
 import { adviceMedicinesOf, findAdvicePrescription } from "./AdviceSection";
+import {
+  buildMedicineSentence,
+  groupMedicinesByType,
+  medicineName,
+  patientDoseText,
+  protocolDoseText,
+} from "./printMedicines";
 
 /* ============================================================
    SUMMARY COMPONENT
@@ -235,26 +242,8 @@ type SummaryPlanOrder = ChemoPlanOrderHeader & {
   chemotherapy_plan_hydration?: ChemoPlanHydration[] | null;
 };
 
-/* A plan item's display name: its medicine, else the typed name. */
-const planItemName = (item: SummaryPlanItem) =>
-  item.medicine_master?.medicine_name ||
-  item.medicine_master?.generic_name ||
-  item.drug_name ||
-  "";
-
-/* "297.5 mg": the Dose Cal result (chemotherapy drugs only), "" if none. */
-const patientDoseLabel = (item: SummaryPlanItem) =>
-  item.calculated_dose != null && item.calculated_dose !== ""
-    ? `${Number(item.calculated_dose)} ${
-        item.calculated_dose_unit || item.protocol_dose_unit || ""
-      }`.trim()
-    : "";
-
-/* "175 mg/m²": the protocol (ordered) dose, "" if none. */
-const protocolDoseLabel = (item: SummaryPlanItem) =>
-  item.protocol_dose != null
-    ? `${Number(item.protocol_dose)} ${item.protocol_dose_unit ?? ""}`.trim()
-    : "";
+/* Medicine naming and dose text are shared with the printed summary
+   (see printMedicines.ts). */
 
 type ChemoOrderRow = {
   drug: string;
@@ -1175,18 +1164,18 @@ const Summary: React.FC<{
   const chemotherapyOrders: ChemoOrderRow[] = planItems
     .filter((item) => item.drug_role === "PRIMARY")
     .map((item) => ({
-      drug: planItemName(item),
+      drug: medicineName(item),
       form:
         item.formulation || item.medicine_master?.dosage_form || "",
       dose: item.protocol_dose != null ? String(Number(item.protocol_dose)) : "",
       unit: item.protocol_dose_unit || item.medicine_master?.unit || "",
-      patientDose: patientDoseLabel(item),
+      patientDose: patientDoseText(item),
     }));
 
   const premedications: PremedRow[] = planItems
     .filter((item) => item.drug_role === "PREMEDICATION")
     .map((item) => ({
-      drug: planItemName(item),
+      drug: medicineName(item),
       dose: item.protocol_dose != null ? String(item.protocol_dose) : "",
       route: item.administration_route || "",
       time: item.frequency || "",
@@ -1242,7 +1231,7 @@ const Summary: React.FC<{
   );
   const adminInstructionRows: AdminInstructionRow[] = sortedPlanItems
     .map((item) => ({
-      drug: planItemName(item),
+      drug: medicineName(item),
       category:
         DRUG_ROLE_CATEGORY[(item.drug_role ?? "").toUpperCase()] ?? item.drug_role ?? "",
       route: item.administration_route ?? "",
@@ -1269,7 +1258,7 @@ const Summary: React.FC<{
       .filter((item) => (item.drug_role ?? "").toUpperCase() === "DILUTION")
       .filter((item) => {
         const key = JSON.stringify([
-          item.medicine_id ?? planItemName(item).trim().toLowerCase(),
+          item.medicine_id ?? medicineName(item).trim().toLowerCase(),
           item.formulation || item.medicine_master?.dosage_form || "",
           item.protocol_dose ?? "",
           item.protocol_dose_unit ?? "",
@@ -1283,12 +1272,12 @@ const Summary: React.FC<{
       });
   })();
   const dilutionRows: DilutionRow[] = savedDilutionItems.some((item) =>
-    planItemName(item).trim()
+    medicineName(item).trim()
   )
     ? savedDilutionItems.map((item) => ({
-        drug: planItemName(item),
+        drug: medicineName(item),
         form: item.formulation || item.medicine_master?.dosage_form || "",
-        dose: protocolDoseLabel(item),
+        dose: protocolDoseText(item),
         diluent: item.dilution_solution ?? "",
         volume: item.dilution_volume ?? "",
         guidance: item.administration_detail ?? "",
@@ -1407,7 +1396,7 @@ const Summary: React.FC<{
           type: slipTypeLabel(item.drug_role),
         }))
       : sortedPlanItems.map((item) => ({
-          drug: planItemName(item),
+          drug: medicineName(item),
           form: item.medicine_master?.dosage_form || item.formulation || "",
           patientDose: [item.calculated_dose ?? item.protocol_dose, item.calculated_dose_unit ?? item.protocol_dose_unit]
             .filter(Boolean)
@@ -1794,6 +1783,20 @@ const Summary: React.FC<{
         if (rightLabel) doc.text(`:  ${rightValue || "-"}`, 430, y);
         y += 18;
       });
+
+      /* Safety line: only when the visit actually recorded allergies. */
+      if (full && summaryAllergies.length > 0) {
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...BLACK);
+        doc.text("Allergies:", marginX, y);
+        doc.setFont("helvetica", "normal");
+        const allergyLines = doc.splitTextToSize(
+          summaryAllergies.join(", "),
+          pageWidth - marginX * 2 - 70
+        ) as string[];
+        doc.text(allergyLines, marginX + 65, y);
+        y += allergyLines.length * 14 + 2;
+      }
       return y + 8;
     };
 
@@ -1978,99 +1981,126 @@ const Summary: React.FC<{
             !dilution.hydration_stage &&
             dilution.diluent &&
             ((medicineId && dilution.medicine_id === medicineId) ||
-              dilution.medicine_master?.medicine_name === planItemName(item))
+              dilution.medicine_master?.medicine_name === medicineName(item))
         )?.diluent ?? ""
       );
     };
-    const formPrefix = (item: SummaryPlanItem) => {
-      const form = item.formulation || item.medicine_master?.dosage_form || "";
-      return /inj/i.test(form) || !form ? "Inj." : `${form}.`;
-    };
-    const infusionLabel = (item: SummaryPlanItem) => {
-      const minutes = item.infusion_duration_minutes;
-      if (minutes == null) return "";
-      return minutes % 60 === 0
-        ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`
-        : `${minutes} mins`;
-    };
-
     /* Every drug of the day's order except the dilutions (their own table
-       below), in the order of the Chemotherapy Order tabs. */
+       below), grouped by medicine type. */
     const scheduleItems = sortedPlanItems.filter(
       (item) => (item.drug_role ?? "").toUpperCase() !== "DILUTION"
+    );
+    const medicineTypeSections = [
+      { role: "PREMEDICATION", label: "Premedication" },
+      { role: "PRIMARY", label: "Chemotherapy" },
+      { role: "SUPPORTIVE", label: "Supportive" },
+      { role: "POSTMEDICATION", label: "Post-Medication" },
+    ];
+    const scheduleGroups = groupMedicinesByType(
+      scheduleItems,
+      medicineTypeSections
     );
     const hydrationLine = (row: HydrationSummaryRow) =>
       [[row.agent, row.volume, row.diluent].filter(Boolean).join(" "), row.guidance]
         .filter(Boolean)
         .join(" - ");
-    /* A saved dilution volume may already carry its unit ("500 mL"). */
-    const volumeText = (volume: string) =>
-      /[a-z]/i.test(volume) ? volume : `${volume} ml`;
 
-    /* One readable sentence per drug, e.g. "2. Inj. Paclitaxel
-       (Chemotherapy) - protocol dose 175 mg/m², patient dose 297.5 mg,
-       given IV in 500 ml of NS over 3 hours as infusion, once." */
-    const drugSentence = (item: SummaryPlanItem, index: number) => {
-      const role = (item.drug_role ?? "").toUpperCase();
-      const category = DRUG_ROLE_CATEGORY[role] ?? item.drug_role ?? "";
-      const protocolDose = protocolDoseLabel(item);
-      const patientDose = patientDoseLabel(item);
-      const diluent = diluentFor(item);
-      const duration = infusionLabel(item);
-      const doses =
-        role === "PRIMARY"
-          ? [
-              protocolDose ? `protocol dose ${protocolDose}` : "",
-              patientDose ? `patient dose ${patientDose}` : "",
-            ]
-          : [protocolDose ? `dose ${protocolDose}` : ""];
-      const administration = [
-        item.administration_route ? `given ${item.administration_route}` : "",
-        item.dilution_volume
-          ? `in ${volumeText(item.dilution_volume)}${diluent ? ` of ${diluent}` : ""}`
-          : diluent
-            ? `in ${diluent}`
-            : "",
-        duration ? `over ${duration}` : "",
-        item.infusion_type ? `as ${item.infusion_type}` : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const details = [
-        ...doses,
-        administration,
-        item.frequency ?? "",
-        item.timing_relative_to_primary ?? "",
-      ]
-        .filter(Boolean)
-        .join(", ");
-      return sentence(
-        `${index + 1}. ${formPrefix(item)} ${planItemName(item)}${
-          category ? ` (${category})` : ""
-        }${details ? ` - ${details}` : ""}`
-      );
+    const entryIndent = 18;
+    /* Split with the same font the entry is drawn in, so the line breaks
+       match what the reader sees. */
+    const splitEntry = (text: string) => {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10.5);
+      return doc.splitTextToSize(
+        text,
+        pageWidth - marginX * 2 - entryIndent
+      ) as string[];
     };
 
-    hydrationRows
-      .filter((row) => row.stage === "PRE")
-      .forEach((row) => writeLines(hydrationLine(row)));
+    /* A medicine type sub-heading: bold label with a thin rule under it. */
+    const subHeading = (label: string, firstItemLines = 1) => {
+      ensureSpace(16 + Math.max(1, firstItemLines) * 15);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10.5);
+      doc.setTextColor(...BLACK);
+      doc.text(label, marginX, y);
+      doc.setDrawColor(220, 220, 220);
+      doc.setLineWidth(0.5);
+      doc.line(marginX, y + 4.5, pageWidth - marginX, y + 4.5);
+      y += 16;
+    };
 
-    scheduleItems.forEach((item, index) => {
-      const notes = [
-        item.administration_detail ? `Administration: ${sentence(item.administration_detail)}` : "",
-        item.remarks ? `Remarks: ${sentence(item.remarks)}` : "",
-      ].filter(Boolean);
-      writeLines(drugSentence(item, index), false, notes.length > 0 ? 0 : 8);
-      notes.forEach((note, noteIndex) =>
-        writeLines(note, false, noteIndex === notes.length - 1 ? 8 : 0, 16)
+    /* Space a type sub-heading away from the entry above it. */
+    let renderedGroup = false;
+    const startGroup = (label: string, firstItemLines = 1) => {
+      if (renderedGroup) y += 8;
+      subHeading(label, firstItemLines);
+      renderedGroup = true;
+    };
+
+    /* A numbered/bulleted entry. If it starts a fresh page, repeat the
+       type sub-heading so the reader never loses the category. */
+    const writeEntry = (
+      marker: string,
+      text: string,
+      groupLabel?: string,
+      gapAfter = 8
+    ) => {
+      const lines = splitEntry(text);
+      const pageBefore = doc.getNumberOfPages();
+      ensureSpace(lines.length * 15);
+      if (doc.getNumberOfPages() > pageBefore && groupLabel) {
+        subHeading(`${groupLabel} (continued)`, lines.length);
+      }
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10.5);
+      doc.setTextColor(...BLACK);
+      doc.text(marker, marginX, y);
+      doc.text(lines, marginX + entryIndent, y);
+      y += lines.length * 15 + gapAfter;
+    };
+
+    const writeHydration = (stage: "PRE" | "POST") => {
+      const texts = hydrationRows
+        .filter((row) => row.stage === stage)
+        .map(hydrationLine)
+        .filter(Boolean);
+      if (texts.length === 0) return;
+      startGroup(
+        stage === "PRE" ? "Pre-Hydration" : "Post-Hydration",
+        splitEntry(sentence(texts[0])).length
       );
+      texts.forEach((text) => {
+        writeEntry("-", sentence(text), undefined, 6);
+      });
+    };
+
+    let medicineNumber = 0;
+    writeHydration("PRE");
+
+    scheduleGroups.forEach((group) => {
+      const entries = group.items
+        .map((item) => ({
+          item,
+          text: buildMedicineSentence(item, { diluent: diluentFor(item) }),
+        }))
+        .filter((entry) => entry.text);
+      if (entries.length === 0) return;
+
+      startGroup(group.label, splitEntry(sentence(entries[0].text)).length);
+
+      entries.forEach(({ item, text }) => {
+        medicineNumber += 1;
+        writeEntry(`${medicineNumber}.`, sentence(text), group.label);
+        if (item.remarks) {
+          writeEntry("", `Note: ${sentence(item.remarks)}`, group.label);
+        }
+      });
     });
 
-    hydrationRows
-      .filter((row) => row.stage === "POST")
-      .forEach((row) => writeLines(hydrationLine(row)));
+    writeHydration("POST");
 
-    if (scheduleItems.length === 0) {
+    if (medicineNumber === 0) {
       writeLines("No chemotherapy ordered for this visit.");
     }
 
@@ -2078,7 +2108,7 @@ const Summary: React.FC<{
     if (dilutionRows.length > 0) {
       y += 14;
       ensureSpace(60);
-      y = sectionHeading("Dilution", y);
+      subHeading("Dilution");
       y = drawTable(
         sheetTitle,
         y,
@@ -2141,17 +2171,11 @@ const Summary: React.FC<{
       (item) => (item.drug_role ?? "").toUpperCase() === "POSTMEDICATION"
     );
     const postLines = [
-      ...postMeds.map((item, index) =>
-        [
-          `${index + 1}. ${planItemName(item)}`,
-          item.protocol_dose != null
-            ? `${item.protocol_dose} ${item.protocol_dose_unit ?? ""}`.trim()
-            : "",
-          item.frequency ? `- ${item.frequency}` : "",
-          item.administration_detail ? `(${item.administration_detail})` : "",
-        ]
-          .filter(Boolean)
-          .join(" ")
+      ...postMeds.map(
+        (item, index) =>
+          `${index + 1}. ${sentence(
+            buildMedicineSentence(item, { diluent: diluentFor(item) })
+          )}`
       ),
       nextVisitDate || nextCycle
         ? `Next visit: ${[nextVisitDate, nextCycle].filter(Boolean).join(" - ")}`
@@ -2383,7 +2407,18 @@ const Summary: React.FC<{
       // Open the same PDF in a new tab with the print dialog triggered.
       doc.autoPrint();
       const printUrl = URL.createObjectURL(doc.output("blob"));
-      window.open(printUrl, "_blank");
+      const printWindow = window.open(printUrl, "_blank");
+      if (!printWindow) {
+        /* Popup blocked - download instead so the printout is not lost. */
+        const link = document.createElement("a");
+        link.href = printUrl;
+        link.download = `${chemoPrint ? "chemotherapy" : "visit"}-summary-${
+          resolvedPatientId || "patient"
+        }.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
       setTimeout(() => URL.revokeObjectURL(printUrl), 60_000);
       return;
     }
