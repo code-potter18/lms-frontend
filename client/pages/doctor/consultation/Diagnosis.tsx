@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+﻿import React, { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import API from "../../../api/axios";
 import { isChemoPlanClosed } from "../../../api/chemotherapy.api";
@@ -271,7 +271,7 @@ const DiagnosisAddRows: React.FC<{
         add.pending === cancerType ? (
           <div
             key={cancerType || "_"}
-            className="rounded-md bg-blue-50 p-2 text-xs text-blue-800"
+            className="rounded-md bg-blue-50 p-2 text-[10px] text-blue-800"
           >
             <div className="mb-1.5 font-medium">
               Add “{text}”{cancerType ? ` to ${cancerType}` : ""}
@@ -292,7 +292,7 @@ const DiagnosisAddRows: React.FC<{
                       add.reset();
                     }
                   }}
-                  className="w-40 rounded border border-blue-200 bg-white px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="w-40 rounded border border-blue-200 bg-white px-2 py-1 text-[10px] text-gray-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               </label>
               <button
@@ -319,7 +319,7 @@ const DiagnosisAddRows: React.FC<{
             type="button"
             disabled={add.saving}
             onClick={() => add.start(cancerType, text)}
-            className="w-full rounded-md bg-blue-50 px-2 py-1.5 text-left text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60"
+            className="w-full rounded-md bg-blue-50 px-2 py-1.5 text-left text-[10px] font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60"
           >
             {add.saving && !add.pending ? "Adding..." : `+ Add “${text}”`}
             {cancerType ? ` to ${cancerType}` : ""}
@@ -327,7 +327,7 @@ const DiagnosisAddRows: React.FC<{
         )
       )}
 
-      {add.error && <p className="text-xs text-red-600">{add.error}</p>}
+      {add.error && <p className="text-[10px] text-red-600">{add.error}</p>}
     </div>
   );
 };
@@ -356,7 +356,7 @@ const DiagnosisSearchInput: React.FC<{
       }
     }}
     placeholder={placeholder}
-    className="mb-3 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+    className="mb-3 w-full rounded-md border border-gray-200 px-3 py-2 text-[10px] text-gray-900 placeholder:text-gray-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
   />
 );
 
@@ -438,7 +438,7 @@ const DiagnosisChip: React.FC<{
             }
           }}
           onBlur={() => finish(true)}
-          className="w-44 border-0 bg-transparent p-0 text-xs text-gray-900 focus:outline-none focus:ring-0"
+          className="w-44 border-0 bg-transparent p-0 text-[10px] text-gray-900 focus:outline-none focus:ring-0"
         />
       </span>
     );
@@ -448,7 +448,7 @@ const DiagnosisChip: React.FC<{
     <span
       title={edited ? `Edited for this patient - master value: ${original}` : undefined}
       className={
-        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium " +
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-medium " +
         (edited ? "bg-amber-50 italic text-amber-800" : "bg-blue-50 text-blue-700")
       }
     >
@@ -561,7 +561,7 @@ const DiagnosisCheckboxList: React.FC<{
 
   return (
     <div>
-      <label className="mb-2 block text-sm font-semibold text-gray-600">
+      <label className="mb-2 block text-[10px] font-bold text-gray-900">
         {title}
       </label>
 
@@ -581,7 +581,7 @@ const DiagnosisCheckboxList: React.FC<{
               setOpen((current) => !current);
             }
           }}
-          className="flex min-h-[46px] w-full cursor-pointer flex-wrap items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-left"
+          className="flex min-h-[46px] w-full cursor-pointer flex-wrap items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2 text-[10px] text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-left"
         >
           {selected.length === 0 ? (
             <span className="text-gray-400">
@@ -615,7 +615,7 @@ const DiagnosisCheckboxList: React.FC<{
 
         {/* Dropdown body: only rendered on hover or click. */}
         {open && (
-          <div className="absolute left-0 right-0 top-full z-20 mt-2 block w-full max-h-72 overflow-y-auto rounded-md border border-gray-300 bg-white p-3 text-sm text-gray-800 shadow-lg slim-scrollbar">
+          <div className="absolute left-0 right-0 top-full z-20 mt-2 block w-full max-h-72 overflow-y-auto rounded-md border border-gray-300 bg-white p-3 text-[10px] text-gray-800 shadow-lg slim-scrollbar">
             {onAdd && (
               <DiagnosisSearchInput
                 value={query}
@@ -634,7 +634,7 @@ const DiagnosisCheckboxList: React.FC<{
             <DiagnosisAddRows add={add} text={text} targets={addTargets} />
 
             {total === 0 && !text && (
-              <p className="text-sm text-gray-400">
+              <p className="text-[10px] text-gray-400">
                 {loading
                   ? "Loading..."
                   : `No ${title.toLowerCase()} options for the selected cancer type(s)`}
@@ -642,12 +642,12 @@ const DiagnosisCheckboxList: React.FC<{
             )}
 
             {text && visibleGroups.length === 0 && addTargets.length === 0 && (
-              <p className="text-sm text-gray-400">No matching options</p>
+              <p className="text-[10px] text-gray-400">No matching options</p>
             )}
 
             {visibleGroups.map((group) => (
               <div key={group.cancerType} className="mb-3 last:mb-0">
-                <div className="mb-1.5 border-b border-gray-100 pb-1 text-[11px] font-bold uppercase tracking-wide text-[#1d4ed8]">
+                <div className="mb-1.5 border-b border-gray-100 pb-1 text-[10px] font-bold uppercase tracking-wide text-[#1d4ed8]">
                   {group.cancerType}
                 </div>
 
@@ -670,7 +670,7 @@ const DiagnosisCheckboxList: React.FC<{
                     return (
                       <label
                         key={item.value}
-                        className="flex cursor-pointer items-center gap-1.5 text-sm text-gray-700"
+                        className="flex cursor-pointer items-center gap-1.5 text-[10px] text-gray-700"
                       >
                         <input
                           type="checkbox"
@@ -770,7 +770,7 @@ const DiagnosisCheckboxSelect: React.FC<{
 
   return (
     <div>
-      <label className="mb-2 block text-sm font-semibold text-gray-600">
+      <label className="mb-2 block text-[10px] font-bold text-gray-900">
         {title}
       </label>
 
@@ -790,7 +790,7 @@ const DiagnosisCheckboxSelect: React.FC<{
               setOpen((current) => !current);
             }
           }}
-          className="flex min-h-[46px] w-full cursor-pointer flex-wrap items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-left"
+          className="flex min-h-[46px] w-full cursor-pointer flex-wrap items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2 text-[10px] text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-left"
         >
           {!value ? (
             <span className="text-gray-400">
@@ -816,7 +816,7 @@ const DiagnosisCheckboxSelect: React.FC<{
 
         {/* Dropdown body: rendered on click. */}
         {open && (
-          <div className="absolute left-0 right-0 top-full z-20 mt-2 block w-full max-h-72 overflow-y-auto rounded-md border border-gray-300 bg-white p-3 text-sm text-gray-800 shadow-lg slim-scrollbar">
+          <div className="absolute left-0 right-0 top-full z-20 mt-2 block w-full max-h-72 overflow-y-auto rounded-md border border-gray-300 bg-white p-3 text-[10px] text-gray-800 shadow-lg slim-scrollbar">
             {onAdd && (
               <DiagnosisSearchInput
                 value={query}
@@ -835,7 +835,7 @@ const DiagnosisCheckboxSelect: React.FC<{
             <DiagnosisAddRows add={add} text={text} targets={canAdd ? [""] : []} />
 
             {options.length === 0 && !text && (
-              <p className="text-sm text-gray-400">
+              <p className="text-[10px] text-gray-400">
                 {loading
                   ? "Loading..."
                   : `No ${title.toLowerCase()} options available`}
@@ -843,13 +843,13 @@ const DiagnosisCheckboxSelect: React.FC<{
             )}
 
             {text && visibleOptions.length === 0 && !canAdd && (
-              <p className="text-sm text-gray-400">No matching options</p>
+              <p className="text-[10px] text-gray-400">No matching options</p>
             )}
 
             {visibleOptions.map((option) => (
               <label
                 key={option}
-                className="flex cursor-pointer items-center gap-1.5 py-1 text-sm text-gray-700"
+                className="flex cursor-pointer items-center gap-1.5 py-1 text-[10px] text-gray-700"
               >
                 <input
                   type="checkbox"
@@ -883,7 +883,7 @@ const DiagnosisDateField: React.FC<{
     <div>
       <label
         htmlFor={id}
-        className="mb-2 block text-sm font-semibold text-gray-600"
+        className="mb-2 block text-[10px] font-bold text-gray-900"
       >
         {title}
       </label>
@@ -896,7 +896,7 @@ const DiagnosisDateField: React.FC<{
             value={value}
             onChange={(event) => onChange(event.target.value)}
             placeholder="DD-MM-YYYY"
-            className="block w-full rounded-md border border-gray-300 bg-white py-3 pl-4 pr-12 text-sm text-gray-800 shadow-sm focus:border-[#1d4ed8] focus:outline-none focus:ring-[#1d4ed8]"
+            className="block w-full rounded-md border border-gray-300 bg-white py-3 pl-4 pr-12 text-[10px] text-gray-800 shadow-sm focus:border-[#1d4ed8] focus:outline-none focus:ring-[#1d4ed8]"
           />
 
           <PopoverTrigger asChild>
@@ -1038,7 +1038,7 @@ const DiagnosisScoreList: React.FC<{
     <div>
       <label
         htmlFor="scoreInput"
-        className="mb-2 block text-sm font-semibold text-gray-600"
+        className="mb-2 block text-[10px] font-bold text-gray-900"
       >
         {title}
       </label>
@@ -1047,7 +1047,7 @@ const DiagnosisScoreList: React.FC<{
         {/* Trigger: selected chips + free-text input. */}
         <div
           onClick={() => setOpen(true)}
-          className="flex min-h-[46px] w-full cursor-text flex-wrap items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 shadow-sm focus-within:border-transparent focus-within:ring-2 focus-within:ring-blue-500"
+          className="flex min-h-[46px] w-full cursor-text flex-wrap items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2 text-[10px] text-gray-900 shadow-sm focus-within:border-transparent focus-within:ring-2 focus-within:ring-blue-500"
         >
           {selected.map((value) => {
             const original = splitQualified(value).raw || value;
@@ -1082,7 +1082,7 @@ const DiagnosisScoreList: React.FC<{
               }
             }}
             placeholder={selected.length === 0 ? "Type or select score" : ""}
-            className="min-w-[8rem] flex-1 border-0 bg-transparent p-0 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-0"
+            className="min-w-[8rem] flex-1 border-0 bg-transparent p-0 text-[10px] text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-0"
           />
 
           <button
@@ -1102,7 +1102,7 @@ const DiagnosisScoreList: React.FC<{
         </div>
 
         {open && (
-          <div className="absolute left-0 right-0 top-full z-20 mt-2 block w-full max-h-72 overflow-y-auto rounded-md border border-gray-300 bg-white p-3 text-sm text-gray-800 shadow-lg slim-scrollbar">
+          <div className="absolute left-0 right-0 top-full z-20 mt-2 block w-full max-h-72 overflow-y-auto rounded-md border border-gray-300 bg-white p-3 text-[10px] text-gray-800 shadow-lg slim-scrollbar">
             <DiagnosisAddRows
               add={add}
               text={text}
@@ -1111,7 +1111,7 @@ const DiagnosisScoreList: React.FC<{
             />
 
             {filtered.length === 0 && addTargets.length === 0 && (
-              <p className="text-sm text-gray-400">
+              <p className="text-[10px] text-gray-400">
                 {loading
                   ? "Loading..."
                   : options.length === 0
@@ -1122,13 +1122,13 @@ const DiagnosisScoreList: React.FC<{
 
             {Array.from(groups.entries()).map(([cancerType, systems]) => (
               <div key={cancerType} className="mb-3 last:mb-0">
-                <div className="mb-1.5 border-b border-gray-100 pb-1 text-[11px] font-bold uppercase tracking-wide text-[#1d4ed8]">
+                <div className="mb-1.5 border-b border-gray-100 pb-1 text-[10px] font-bold uppercase tracking-wide text-[#1d4ed8]">
                   {cancerType}
                 </div>
 
                 {Array.from(systems.entries()).map(([system, list]) => (
                   <div key={system} className="mb-2 last:mb-0">
-                    <div className="mb-1 text-xs font-semibold text-gray-500">
+                    <div className="mb-1 text-[10px] font-bold text-gray-900">
                       {system}
                     </div>
                     <div className="flex flex-wrap gap-x-4 gap-y-1.5">
@@ -1137,7 +1137,7 @@ const DiagnosisScoreList: React.FC<{
                         return (
                           <label
                             key={qualified}
-                            className="flex cursor-pointer items-center gap-1.5 text-sm text-gray-700"
+                            className="flex cursor-pointer items-center gap-1.5 text-[10px] text-gray-700"
                           >
                             <input
                               type="checkbox"
@@ -1602,7 +1602,7 @@ const investigationFlag = (
 };
 
 const INVESTIGATION_INPUT_CLASS =
-  "block w-full rounded-md border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-800 shadow-sm focus:border-[#1d4ed8] focus:outline-none focus:ring-[#1d4ed8]";
+  "block w-full rounded-md border border-gray-300 bg-white px-3 py-2.5 text-[10px] text-gray-800 shadow-sm focus:border-[#1d4ed8] focus:outline-none focus:ring-[#1d4ed8]";
 
 /* Master rows tagged with the cancer type they were loaded for, so the
    dropdowns can group them per selected cancer type like T/N/M. */
@@ -2883,12 +2883,12 @@ const Diagnosis: React.FC<{
     return (
       <div key={parameter.parameter_id}>
         <div className="mb-1.5 flex items-baseline justify-between gap-2">
-          <label htmlFor={id} className="text-sm font-semibold text-gray-600">
+          <label htmlFor={id} className="text-[10px] font-bold text-gray-900">
             {parameter.parameter_name}
             {parameter.unit ? ` (${parameter.unit})` : ""}
           </label>
           {parameter.range_label && (
-            <span className="shrink-0 text-xs text-gray-400">
+            <span className="shrink-0 text-[10px] text-gray-400">
               Normal {parameter.range_label}
             </span>
           )}
@@ -2940,7 +2940,7 @@ const Diagnosis: React.FC<{
               }`}
             />
             {flag && (
-              <span className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-600 ring-1 ring-inset ring-red-200">
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-600 ring-1 ring-inset ring-red-200">
                 {flag}
               </span>
             )}
@@ -3608,7 +3608,7 @@ const Diagnosis: React.FC<{
 
   const content = (
     <section className="flex w-full flex-1 flex-col">
-      <h2 className="mb-8 text-2xl font-bold text-[#334155]">
+      <h2 className="mb-8 text-[10px] font-bold text-[#334155]">
         Diagnosis
       </h2>
 
@@ -3671,7 +3671,7 @@ const Diagnosis: React.FC<{
           <div>
             <label
               htmlFor="preDiagnosis"
-              className="mb-2 block text-sm font-semibold text-gray-600"
+              className="mb-2 block text-[10px] font-bold text-gray-900"
             >
               Pre Diagnosis
             </label>
@@ -3684,7 +3684,7 @@ const Diagnosis: React.FC<{
                 value={formData.preDiagnosis}
                 onChange={handleChange}
                 placeholder="Type the pre diagnosis..."
-                className="block w-full rounded-md border-gray-300 bg-white py-3 pl-4 pr-10 text-sm text-gray-800 focus:border-[#1d4ed8] focus:outline-none focus:ring-[#1d4ed8]"
+                className="block w-full rounded-md border-gray-300 bg-white py-3 pl-4 pr-10 text-[10px] text-gray-800 focus:border-[#1d4ed8] focus:outline-none focus:ring-[#1d4ed8]"
               />
             </div>
           </div>
@@ -3715,7 +3715,7 @@ const Diagnosis: React.FC<{
 
           {/* Cancer Type */}
           <div>
-            <label className="mb-2 block text-sm font-semibold text-gray-600">
+            <label className="mb-2 block text-[10px] font-bold text-gray-900">
               Cancer Type
             </label>
 
@@ -3773,7 +3773,7 @@ const Diagnosis: React.FC<{
           <div>
             <label
               htmlFor="histomorphology"
-              className="mb-2 block text-sm font-semibold text-gray-600"
+              className="mb-2 block text-[10px] font-bold text-gray-900"
             >
               Histomorphology
             </label>
@@ -3784,7 +3784,7 @@ const Diagnosis: React.FC<{
                 name="histomorphology"
                 value={formData.histomorphology}
                 onChange={handleChange}
-                className="block w-full appearance-none rounded-md border-gray-300 bg-white py-3 pl-4 pr-10 text-sm text-gray-800 focus:border-[#1d4ed8] focus:outline-none focus:ring-[#1d4ed8]"
+                className="block w-full appearance-none rounded-md border-gray-300 bg-white py-3 pl-4 pr-10 text-[10px] text-gray-800 focus:border-[#1d4ed8] focus:outline-none focus:ring-[#1d4ed8]"
               >
               </select>
 
@@ -3876,7 +3876,7 @@ const Diagnosis: React.FC<{
             labelOf("mStage", stage).trim().toUpperCase().startsWith("M1")
           ) && (
             <div className="col-span-full">
-              <label className="mb-2 block text-sm font-semibold text-gray-600">
+              <label className="mb-2 block text-[10px] font-bold text-gray-900">
                 Metastasis Sites
               </label>
               <MultiSelectDropdown
@@ -3896,7 +3896,7 @@ const Diagnosis: React.FC<{
           <div>
             <label
               htmlFor="icdCode"
-              className="mb-2 block text-sm font-semibold text-gray-600"
+              className="mb-2 block text-[10px] font-bold text-gray-900"
             >
               ICD Code
             </label>
@@ -3912,18 +3912,18 @@ const Diagnosis: React.FC<{
                   ? "Loading diagnosis"
                   : "Enter ICD code"
               }
-              className="block w-full rounded-md border-gray-300 px-4 py-3 text-sm text-gray-800 shadow-sm focus:border-[#1d4ed8] focus:ring-[#1d4ed8]"
+              className="block w-full rounded-md border-gray-300 px-4 py-3 text-[10px] text-gray-800 shadow-sm focus:border-[#1d4ed8] focus:ring-[#1d4ed8]"
             />
           </div>
 
           {/* Survivor */}
           <div>
-            <label className="mb-2 block text-sm font-semibold text-gray-600">
+            <label className="mb-2 block text-[10px] font-bold text-gray-900">
               Survivor
             </label>
 
             <div className="flex items-center gap-4">
-              <label className="flex items-center gap-1.5 text-sm text-gray-700">
+              <label className="flex items-center gap-1.5 text-[10px] text-gray-700">
                 <input
                   type="checkbox"
                   name="survivor"
@@ -3938,7 +3938,7 @@ const Diagnosis: React.FC<{
                 />
                 Yes
               </label>
-              <label className="flex items-center gap-1.5 text-sm text-gray-700">
+              <label className="flex items-center gap-1.5 text-[10px] text-gray-700">
                 <input
                   type="checkbox"
                   name="survivor"
@@ -3959,7 +3959,7 @@ const Diagnosis: React.FC<{
 
         {/* Diagnosis API Error */}
         {diagnosisError && (
-          <div className="text-sm font-medium text-red-600">
+          <div className="text-[10px] font-medium text-red-600">
             {diagnosisError}
           </div>
         )}
@@ -3968,7 +3968,7 @@ const Diagnosis: React.FC<{
         <div className="pt-2">
           <label
             htmlFor="notes"
-            className="mb-2 block text-sm font-semibold text-gray-600"
+            className="mb-2 block text-[10px] font-bold text-gray-900"
           >
             Notes
           </label>
@@ -3987,10 +3987,10 @@ const Diagnosis: React.FC<{
         <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
           <div className="mb-5 flex flex-wrap items-end justify-between gap-4 border-b border-gray-100 pb-4">
             <div>
-              <h3 className="text-base font-semibold text-gray-800">
+              <h3 className="text-[10px] font-semibold text-gray-800">
                 Investigation Results
               </h3>
-              <p className="mt-1 text-sm text-gray-500">
+              <p className="mt-1 text-[10px] text-gray-500">
                 Test report values for this visit, per selected cancer type.
                 Values outside the normal range are flagged.
               </p>
@@ -4011,7 +4011,7 @@ const Diagnosis: React.FC<{
           </div>
 
           {investigationPanels.length === 0 ? (
-            <p className="rounded-md border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
+            <p className="rounded-md border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center text-[10px] text-gray-500">
               Select a cancer type to enter its investigation results.
             </p>
           ) : (
@@ -4022,23 +4022,23 @@ const Diagnosis: React.FC<{
                   className="flex flex-col rounded-lg border border-gray-200 bg-slate-50/60"
                 >
                   <div className="flex items-center gap-2 border-b border-gray-200 px-4 py-3">
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#1d4ed8] text-xs font-bold text-white">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#1d4ed8] text-[10px] font-bold text-white">
                       {panel.number}
                     </span>
-                    <span className="text-sm font-semibold text-gray-800">
+                    <span className="text-[10px] font-semibold text-gray-800">
                       {panel.cancerType}
                     </span>
                   </div>
 
                   <div className="flex-1 space-y-5 p-4">
                     {panel.charts.length === 0 ? (
-                      <p className="text-sm text-gray-500">
+                      <p className="text-[10px] text-gray-500">
                         No investigation tests are defined for {panel.cancerType}.
                       </p>
                     ) : (
                       panel.charts.map((chart) => (
                         <div key={chart.name}>
-                          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-gray-900">
                             {chart.name}
                           </p>
                           <div className="space-y-3">
@@ -4051,11 +4051,11 @@ const Diagnosis: React.FC<{
 
                   {panel.history.length > 0 && (
                     <div className="border-t border-gray-200 px-4 py-3">
-                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-gray-900">
                         Previous results
                       </p>
                       <div className="overflow-x-auto">
-                        <table className="w-full text-left text-xs">
+                        <table className="w-full text-left text-[10px]">
                           <thead>
                             <tr className="text-gray-500">
                               <th className="whitespace-nowrap py-1 pr-3 font-semibold">
@@ -4114,7 +4114,7 @@ const Diagnosis: React.FC<{
           <button
             type="submit"
             disabled={savingDiagnosis}
-            className="inline-flex items-center justify-center rounded-md border border-transparent bg-[#1d4ed8] px-6 py-3 text-base font-medium text-white shadow-sm transition-colors hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center justify-center rounded-md border border-transparent bg-[#1d4ed8] px-6 py-3 text-[10px] font-medium text-white shadow-sm transition-colors hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <DoubleArrowIcon />
             <span className="ml-2">{savingDiagnosis ? "Saving..." : "Next"}</span>
@@ -4145,7 +4145,7 @@ const Diagnosis: React.FC<{
               <BackIcon />
             </button>
 
-            <h1 className="text-xl font-bold text-gray-800">
+            <h1 className="text-[10px] font-bold text-gray-800">
               Patients
             </h1>
           </div>
@@ -4177,7 +4177,7 @@ const Diagnosis: React.FC<{
                   <CheckIcon className="h-4 w-4 text-white" />
                 </div>
 
-                <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-800 sm:text-xs sm:tracking-widest">
+                <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-800 sm:text-[10px] sm:tracking-widest">
                   Consultation
                 </span>
               </div>
@@ -4188,9 +4188,6 @@ const Diagnosis: React.FC<{
                   <CheckIcon className="h-4 w-4 text-white" />
                 </div>
 
-                <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-800 sm:text-xs sm:tracking-widest">
-                  Lab Report Review
-                </span>
               </div>
 
               {/* Diagnosis */}
@@ -4199,9 +4196,6 @@ const Diagnosis: React.FC<{
                   <CheckIcon className="h-4 w-4 text-white" />
                 </div>
 
-                <span className="mb-4 text-[10px] font-bold uppercase tracking-[0.18em] text-gray-800 sm:text-xs sm:tracking-widest">
-                  Diagnosis
-                </span>
 
                 {/* Active Indicator */}
                 <div className="absolute bottom-0 h-1.5 w-full translate-y-2 rounded-full bg-[#22c55e]" />

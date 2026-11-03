@@ -22,6 +22,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import DoctorLayout from "@/components/layout/DoctorLayout";
 import { PermissionProvider } from "@/context/PermissionContext";
 import { NotificationProvider } from "@/context/NotificationContext";
+import { FollowUpAlertProvider } from "@/context/FollowUpAlertContext";
 import { LabNotificationProvider } from "@/context/LabNotificationContext";
 import { getToken, getUser } from "@/utils/token";
 
@@ -538,6 +539,7 @@ const App = () => (
 
         <PermissionProvider>
           <NotificationProvider employeeId={getUser()?.employee_id ?? null}>
+          <FollowUpAlertProvider>
 
             <RememberMeCheck />
 
@@ -789,6 +791,7 @@ const App = () => (
 
           </Routes>
 
+          </FollowUpAlertProvider>
         </NotificationProvider>
       </PermissionProvider>
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import API, { getActiveBranchId } from "../../../api/axios";
 import { getUser } from "../../../utils/token";
 import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
@@ -911,7 +911,7 @@ export function InlineBranchPicker() {
       value={hasSelection ? selectedBranchId : ""}
       disabled={loading}
       onChange={(event) => selectBranch(event.target.value)}
-      className="ml-2 rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-semibold text-[#1e293b] focus:outline-none"
+      className="ml-2 rounded-md border border-amber-300 bg-white px-2 py-1 text-[10px] font-semibold text-[#1e293b] focus:outline-none"
     >
       {!hasSelection && <option value="">Select branch…</option>}
       {branches.map((branch) => (

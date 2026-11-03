@@ -65,6 +65,33 @@ describe("summarizeCycles", () => {
     expect(s.nextCycleDate).toBe("2026-01-26T00:00:00.000Z");
   });
 
+  it("reads the day being administered when no day is still ORDERED", () => {
+    const s = summarizeCycles(
+      plan({
+        treatment_status: "ACTIVE",
+        plan_orders: [
+          { plan_order_id: "PO1", chemotherapy_plan_id: "CP0001", chemotherapy_cycle_id: "CC1", cycle_number: 1, cycle_day: 1, order_status: "COMPLETED", hydration_saved: false },
+          { plan_order_id: "PO2", chemotherapy_plan_id: "CP0001", chemotherapy_cycle_id: "CC1", cycle_number: 1, cycle_day: 2, order_status: "IN_ADMINISTRATION", hydration_saved: false },
+        ],
+      })
+    );
+    expect(s.cycleLabel).toBe("Cycle 1 / Day 2");
+    expect(s.currentCycleId).toBe("CC1");
+  });
+
+  it("prefers a day still being ORDERED over one being administered", () => {
+    const s = summarizeCycles(
+      plan({
+        treatment_status: "ACTIVE",
+        plan_orders: [
+          { plan_order_id: "PO1", chemotherapy_plan_id: "CP0001", chemotherapy_cycle_id: "CC1", cycle_number: 1, cycle_day: 1, order_status: "IN_ADMINISTRATION", hydration_saved: false },
+          { plan_order_id: "PO2", chemotherapy_plan_id: "CP0001", chemotherapy_cycle_id: "CC1", cycle_number: 1, cycle_day: 2, order_status: "ORDERED", hydration_saved: false },
+        ],
+      })
+    );
+    expect(s.cycleLabel).toBe("Cycle 1 / Day 2");
+  });
+
   it("falls back to the backend's current_order when no day is still ORDERED", () => {
     const s = summarizeCycles(
       plan({

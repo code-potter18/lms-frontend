@@ -254,7 +254,17 @@ const Consultation: React.FC = () => {
   const [labTestsError, setLabTestsError] = useState("");
 
   const [showLabReview, setShowLabReview] = useState(false);
-  const [activeStep, setActiveStep] = useState("CONSULTATION");
+  // The inpatient entry ("Open consultation") can open straight on a
+  // directly-accessible step; anything else starts at CONSULTATION.
+  const entryState = useLocation().state as ConsultationState | null;
+  const [activeStep, setActiveStep] = useState(() =>
+    entryState?.initialStep &&
+    ["DISCHARGE MEDICATION", "CHEMOTHERAPY ORDER", "FOLLOW UP", "DIAGNOSIS"].includes(
+      entryState.initialStep
+    )
+      ? entryState.initialStep
+      : "CONSULTATION"
+  );
   const [tabsHovered, setTabsHovered] = useState(false);
   const tabsScrollRef = useRef<HTMLDivElement>(null);
 
@@ -386,11 +396,22 @@ const Consultation: React.FC = () => {
     }
     let cancelled = false;
     setEncounterError("");
-    findActiveEncounter(
-      patientId,
-      consultationState?.appointmentId,
-      consultationState?.branchId,
-    )
+    // Inpatient entry passes the admission's own encounter -- use exactly
+    // that one; the appointment-based entry resolves as before.
+    const explicitEncounterNo = consultationState?.encounterNo;
+    const encounterLookup = explicitEncounterNo
+      ? encounterApi.getByNumber(explicitEncounterNo).then((response) => {
+          const found = response.data?.data ?? null;
+          return found && found.patient_id === patientId
+            ? { encounter: found, scopeError: undefined }
+            : { encounter: null, scopeError: "This admission's encounter does not belong to this patient." };
+        })
+      : findActiveEncounter(
+          patientId,
+          consultationState?.appointmentId,
+          consultationState?.branchId,
+        );
+    encounterLookup
       .then(({ encounter: current, scopeError }) => {
         if (cancelled) return;
         setEncounter(current);
@@ -493,6 +514,18 @@ const Consultation: React.FC = () => {
   const patientAgeSex = patient
     ? `${patient.patient_age ?? ""} Y / ${patient.patient_gender ?? ""}`
     : "";
+
+  const patientDob = (() => {
+    const dob = patient?.patient_dob;
+    if (!dob) return "—";
+    const d = new Date(dob);
+    if (isNaN(d.getTime())) return "—";
+    const today = new Date();
+    let age = today.getFullYear() - d.getFullYear();
+    const m = today.getMonth() - d.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age--;
+    return `${age}`;
+  })();
 
   const patientDisplayId = patient?.patient_id || "";
 
@@ -781,7 +814,7 @@ const Consultation: React.FC = () => {
 
                   <section className="flex w-full flex-col gap-5 bg-white p-5">
 
-                    <div className="flex w-full items-center justify-between gap-4">
+                    <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-4 lg:flex-nowrap">
 
                       <div className="relative shrink-0">
                         <img
@@ -798,27 +831,27 @@ const Consultation: React.FC = () => {
 
                         <div className="mb-1 flex min-w-0 items-center space-x-2">
 
-                          <h2 className="truncate text-xl font-bold leading-7 text-[#1e293b]">
+                          <h2 className="text-xs font-bold leading-5 text-[#1e293b]">
                             {patientName}
                           </h2>
                           {patientCriticalInfo.isCritical && (
                             <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-red-500 animate-pulse" />
                           )}
 
-                          <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-[#64748b]">
+                          <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-[10px] font-semibold text-[#64748b]">
                             {patientDisplayId}
                           </span>
 
                         </div>
 
-                        <div className="flex min-w-0 items-center space-x-2 text-sm leading-5 text-[#64748b]">
+                        <div className="flex min-w-0 items-center space-x-2 text-[10px] leading-4 text-[#64748b]">
 
                           <span className="truncate">{patientAgeSex}</span>
 
                           <span className="h-1 w-1 shrink-0 rounded-full bg-slate-300" />
 
-                          <span className="shrink-0 font-semibold text-[#1d4ed8]">
-                            —
+                          <span className="shrink-0">
+                            <span className="text-[#64748b]">Age:</span> <span className="font-semibold text-[#1e293b]">{patientDob}</span>
                           </span>
 
                         </div>
@@ -843,11 +876,11 @@ const Consultation: React.FC = () => {
 
                         <div className="flex flex-col">
 
-                          <div className="text-[10px] font-bold leading-[15px] tracking-[0.5px] text-slate-400">
+                          <div className="text-[9px] font-bold leading-[14px] tracking-[0.5px] text-slate-400">
                             PHONE
                           </div>
 
-                          <div className="whitespace-nowrap text-sm font-medium leading-5 text-slate-700">
+                          <div className="whitespace-nowrap text-[10px] font-medium leading-4 text-slate-700">
                             {patientPhone}
                           </div>
 
@@ -879,11 +912,11 @@ const Consultation: React.FC = () => {
 
                         <div className="flex flex-col">
 
-                          <div className="text-[10px] font-bold leading-[15px] tracking-[0.5px] text-slate-400">
+                          <div className="text-[9px] font-bold leading-[14px] tracking-[0.5px] text-slate-400">
                             EMAIL
                           </div>
 
-              <div className="whitespace-normal break-all text-sm font-medium leading-5 text-slate-700">
+              <div className="whitespace-normal break-all text-[10px] font-medium leading-4 text-slate-700">
                           {patientEmail}
                         </div>
 
@@ -897,7 +930,7 @@ const Consultation: React.FC = () => {
                           Same tile style as the admin-side PatientVitalsPanel:
                           pastel circular icon, muted label, bold reading. */}
 
-                      <div className="grid grid-cols-5 gap-x-6 gap-y-4">
+                      <div className="grid w-full grid-cols-3 gap-x-4 gap-y-4 lg:w-auto lg:grid-cols-5 lg:gap-x-6">
 
                         {measurementTiles.map((tile) => {
                           const Icon = tile.icon;
@@ -913,11 +946,11 @@ const Consultation: React.FC = () => {
                                 <Icon className="h-4 w-4" />
                               </div>
                               <div className="min-w-0">
-                                <p className="mb-1 text-xs text-slate-500">
+                                <p className="mb-1 text-[10px] text-slate-500">
                                   {tile.label}
                                 </p>
                                 <p
-                                  className={`truncate text-sm font-semibold ${
+                                  className={`truncate text-[10px] font-semibold ${
                                     tile.severity
                                       ? SEVERITY_TEXT[tile.severity]
                                       : "text-slate-900"
@@ -944,7 +977,7 @@ const Consultation: React.FC = () => {
                             state: { patientId: pid },
                           });
                         }}
-                        className="h-9 rounded-md border border-blue-600 bg-white px-4 text-sm font-semibold leading-5 text-blue-600 transition hover:bg-blue-50"
+                        className="h-9 rounded-md border border-blue-600 bg-white px-4 text-[10px] font-semibold leading-5 text-blue-600 transition hover:bg-blue-50"
                       >
                         View Full Profile
                       </button>
@@ -998,7 +1031,7 @@ const Consultation: React.FC = () => {
 
                       {/* LABEL */}
 
-                      <div className="absolute left-1/2 top-[47px] -translate-x-1/2 whitespace-nowrap text-[11px] font-bold uppercase leading-[16.5px] tracking-[1.1px] text-gray-800">
+                      <div className="absolute left-1/2 top-[47px] -translate-x-1/2 whitespace-nowrap text-[10px] font-bold uppercase leading-[16.5px] tracking-[1.1px] text-gray-800">
 
                         {step.name}
 
@@ -1107,6 +1140,8 @@ const Consultation: React.FC = () => {
                   <TreatmentPlan
                     embedded
                     patientId={patientDisplayId}
+                    appointmentId={consultationState?.appointmentId}
+                    encounterNo={encounter?.encounter_no}
                     measurements={measurements}
                     onNext={() => { selectStep("CHEMOTHERAPY ORDER", markStepCompleted("TREATMENT PLAN")); }}
                   />
@@ -1114,6 +1149,7 @@ const Consultation: React.FC = () => {
                   <ChemotherapyOrder
                     embedded
                     patientId={patientDisplayId}
+                    encounterNo={encounter?.encounter_no}
                     measurements={measurements}
                     gender={patient?.patient_gender ?? ""}
                     age={patient?.patient_age ?? null}
@@ -1133,6 +1169,7 @@ const Consultation: React.FC = () => {
                   <FollowUp
                     embedded
                     patientId={patientDisplayId}
+                    encounterNo={encounter?.encounter_no}
                     measurements={measurements}
                     onNext={() => { selectStep("SUMMARY", markStepCompleted("FOLLOW UP")); }}
                   />

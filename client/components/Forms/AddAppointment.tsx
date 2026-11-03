@@ -335,6 +335,8 @@ export default function AddAppointment() {
   // into the Inpatient admission-request flow (ward/bed section included)
   // instead of defaulting to an OPD consultation.
   const defaultPatientType = (location.state as { defaultPatientType?: string } | null)?.defaultPatientType;
+  /* An OPD visit type to preset, e.g. "Follow-up" from a follow-up due alert. */
+  const defaultVisitType = (location.state as { defaultVisitType?: string } | null)?.defaultVisitType;
 
   // Arriving from the Day/Week View grids' "New slot available" click carries
   // the exact doctor/branch/department/date (and the Day View's hour) that
@@ -395,6 +397,11 @@ export default function AddAppointment() {
         patientType: "Inpatient (IPD)",
         patientVisitType: "Admission",
       };
+    } else if (
+      defaultVisitType &&
+      VISIT_TYPES_BY_PATIENT_TYPE["Outpatient (OPD)"].includes(defaultVisitType)
+    ) {
+      base = { ...base, patientType: "Outpatient (OPD)", patientVisitType: defaultVisitType };
     }
     return base;
   });

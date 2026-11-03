@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+﻿import React, { useEffect, useRef, useState } from "react";
 import API from "../../../api/axios";
 import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
 import { chemoPlanCurrentItems, chemoPlanItemName } from "../../../api/chemotherapy.api";
@@ -390,7 +390,7 @@ const WordPdfContent: React.FC<{ doc: PatientDocumentItem }> = ({ doc }) => {
   if (loading) {
     return (
       <div className="mx-auto bg-white" style={{ ...PAGE_BOX_STYLE, alignItems: "center", justifyContent: "center" }}>
-        <i className="fa-solid fa-spinner fa-spin text-2xl text-blue-400" />
+        <i className="fa-solid fa-spinner fa-spin text-[10px] text-blue-400" />
         <p style={{ color: "#94A3B8", marginTop: 12, fontSize: 13 }}>Rendering PDF pages…</p>
       </div>
     );
@@ -501,17 +501,17 @@ const WordImagesView: React.FC<{
         {/* Word title bar */}
         <div className="flex flex-shrink-0 items-center justify-between gap-3 px-4 py-2" style={{ background: "#2B579A" }}>
           <div className="flex min-w-0 items-center gap-2">
-            <i className="fa-solid fa-file-word flex-shrink-0 text-lg text-white" />
-            <span className="truncate text-sm font-semibold text-white">{title}</span>
+            <i className="fa-solid fa-file-word flex-shrink-0 text-[10px] text-white" />
+            <span className="truncate text-[10px] font-semibold text-white">{title}</span>
           </div>
           <button type="button" onClick={onClose} title="Close"
             className="rounded px-2 py-1 text-white/70 hover:bg-white/20 hover:text-white">
-            <i className="fa-solid fa-xmark text-base" />
+            <i className="fa-solid fa-xmark text-[10px]" />
           </button>
         </div>
         {/* Ribbon */}
         <div className="flex flex-shrink-0 items-center border-b border-slate-200 bg-[#f3f3f3] px-4 py-1">
-          <span className="select-none text-[11px] text-slate-500">
+          <span className="select-none text-[10px] text-slate-500">
             {docs.length} page{docs.length !== 1 ? "s" : ""} · 1 file per page
           </span>
         </div>
@@ -1084,7 +1084,7 @@ const NotesDocumentsTab: React.FC<{
                   key={tab}
                   type="button"
                   onClick={() => setActiveTab(tab)}
-                  className={`whitespace-nowrap border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
+                  className={`whitespace-nowrap border-b-2 px-1 py-4 text-[10px] font-medium transition-colors ${
                     isActive
                       ? "border-[#0052cc] font-semibold text-[#0052cc]"
                       : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700"
@@ -1116,14 +1116,14 @@ const NotesDocumentsTab: React.FC<{
             {/* Total Notes */}
             <div className="flex items-center rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mr-4 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-                <i className="fa-regular fa-file-lines text-lg" />
+                <i className="fa-regular fa-file-lines text-[10px]" />
               </div>
 
               <div>
-                <p className="text-sm text-slate-500">
+                <p className="text-[10px] text-slate-500">
                   Total Notes
                 </p>
-                <p className="text-xl font-bold text-slate-900">
+                <p className="text-[10px] font-bold text-slate-900">
                   {clinicalNotes.length}
                 </p>
               </div>
@@ -1132,14 +1132,14 @@ const NotesDocumentsTab: React.FC<{
             {/* Documents */}
             <div className="flex items-center rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mr-4 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-                <i className="fa-regular fa-folder-open text-lg" />
+                <i className="fa-regular fa-folder-open text-[10px]" />
               </div>
 
               <div>
-                <p className="text-sm text-slate-500">
+                <p className="text-[10px] text-slate-500">
                   Documents
                 </p>
-                <p className="text-xl font-bold text-slate-900">
+                <p className="text-[10px] font-bold text-slate-900">
                   {documents.length}
                 </p>
               </div>
@@ -1148,14 +1148,14 @@ const NotesDocumentsTab: React.FC<{
             {/* Reports */}
             <div className="flex items-center rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mr-4 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-green-50 text-green-600">
-                <i className="fa-solid fa-chart-simple text-lg" />
+                <i className="fa-solid fa-chart-simple text-[10px]" />
               </div>
 
               <div>
-                <p className="text-sm text-slate-500">
+                <p className="text-[10px] text-slate-500">
                   Reports
                 </p>
-                <p className="text-xl font-bold text-slate-900">
+                <p className="text-[10px] font-bold text-slate-900">
                   0
                 </p>
               </div>
@@ -1164,14 +1164,14 @@ const NotesDocumentsTab: React.FC<{
             {/* Prescriptions */}
             <div className="flex items-center rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mr-4 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-purple-50 text-purple-600">
-                <i className="fa-solid fa-prescription-bottle-medical text-lg" />
+                <i className="fa-solid fa-prescription-bottle-medical text-[10px]" />
               </div>
 
               <div>
-                <p className="text-sm text-slate-500">
+                <p className="text-[10px] text-slate-500">
                   Prescriptions
                 </p>
-                <p className="text-xl font-bold text-slate-900">
+                <p className="text-[10px] font-bold text-slate-900">
                   {prescriptionsCount}
                 </p>
               </div>
@@ -1186,10 +1186,10 @@ const NotesDocumentsTab: React.FC<{
             {/* Header */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-5">
               <div className="flex items-center gap-3">
-                <h3 className="text-lg font-semibold text-slate-900">
+                <h3 className="text-[10px] font-semibold text-slate-900">
                   Recent Clinical Notes
                 </h3>
-                <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-[#0052cc]">
+                <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-semibold text-[#0052cc]">
                   {clinicalNotes.length} {clinicalNotes.length === 1 ? "Note" : "Notes"}
                 </span>
               </div>
@@ -1204,9 +1204,9 @@ const NotesDocumentsTab: React.FC<{
                       className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-white text-slate-700 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                       title="Previous note (newer visit)"
                     >
-                      <i className="fa-solid fa-chevron-left text-xs" />
+                      <i className="fa-solid fa-chevron-left text-[10px]" />
                     </button>
-                    <span className="px-2 text-xs font-semibold text-slate-600">
+                    <span className="px-2 text-[10px] font-bold text-slate-800">
                       {safeNoteIndex + 1} / {clinicalNotes.length}
                     </span>
                     <button
@@ -1216,7 +1216,7 @@ const NotesDocumentsTab: React.FC<{
                       className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-white text-slate-700 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                       title="Next note (older visit)"
                     >
-                      <i className="fa-solid fa-chevron-right text-xs" />
+                      <i className="fa-solid fa-chevron-right text-[10px]" />
                     </button>
                   </div>
                 )}
@@ -1225,7 +1225,7 @@ const NotesDocumentsTab: React.FC<{
                   <button
                     type="button"
                     onClick={() => handleEditNote(activeNote)}
-                    className="flex items-center rounded-md bg-[#0052cc] px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-700 shadow-sm"
+                    className="flex items-center rounded-md bg-[#0052cc] px-3.5 py-1.5 text-[10px] font-semibold text-white transition-colors hover:bg-blue-700 shadow-sm"
                   >
                     <i className="fa-solid fa-pen-to-square mr-1.5" />
                     Edit Note
@@ -1236,9 +1236,9 @@ const NotesDocumentsTab: React.FC<{
 
             {/* Edit Success Notification */}
             {editSuccessMsg && (
-              <div className="mx-6 mt-3 flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-semibold text-emerald-800 animate-in fade-in">
+              <div className="mx-6 mt-3 flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-[10px] font-semibold text-emerald-800 animate-in fade-in">
                 <div className="flex items-center gap-2">
-                  <i className="fa-solid fa-circle-check text-emerald-600 text-sm" />
+                  <i className="fa-solid fa-circle-check text-emerald-600 text-[10px]" />
                   <span>{editSuccessMsg}</span>
                 </div>
                 <button
@@ -1246,7 +1246,7 @@ const NotesDocumentsTab: React.FC<{
                   onClick={() => setEditSuccessMsg(null)}
                   className="text-emerald-600 hover:text-emerald-800"
                 >
-                  <i className="fa-solid fa-xmark text-xs" />
+                  <i className="fa-solid fa-xmark text-[10px]" />
                 </button>
               </div>
             )}
@@ -1257,7 +1257,7 @@ const NotesDocumentsTab: React.FC<{
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   {/* Left: Quick jump visit pills */}
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-800">
                       Visits:
                     </span>
                     <div className="flex items-center gap-1.5 overflow-x-auto hide-scrollbar py-0.5 max-w-[500px] [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
@@ -1268,7 +1268,7 @@ const NotesDocumentsTab: React.FC<{
                             key={n.id || idx}
                             type="button"
                             onClick={() => setCurrentNoteIndex(idx)}
-                            className={`group flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                            className={`group flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-[10px] font-medium transition-all ${
                               isSelected
                                 ? "bg-[#0052cc] text-white shadow-sm ring-2 ring-[#0052cc]/30"
                                 : "border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-100"
@@ -1288,7 +1288,7 @@ const NotesDocumentsTab: React.FC<{
                               </span>
                             )}
                             <span
-                              className={`text-[11px] ${
+                              className={`text-[10px] ${
                                 isSelected ? "text-blue-100" : "text-slate-400 group-hover:text-slate-500"
                               }`}
                             >
@@ -1306,19 +1306,19 @@ const NotesDocumentsTab: React.FC<{
                       type="button"
                       disabled={safeNoteIndex === 0}
                       onClick={() => setCurrentNoteIndex((prev) => Math.max(0, prev - 1))}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[10px] font-bold text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      <i className="fa-solid fa-arrow-left text-[11px]" />
+                      <i className="fa-solid fa-arrow-left text-[10px]" />
                       Previous Note
                     </button>
                     <button
                       type="button"
                       disabled={safeNoteIndex === clinicalNotes.length - 1}
                       onClick={() => setCurrentNoteIndex((prev) => Math.min(clinicalNotes.length - 1, prev + 1))}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[10px] font-bold text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       Next Note
-                      <i className="fa-solid fa-arrow-right text-[11px]" />
+                      <i className="fa-solid fa-arrow-right text-[10px]" />
                     </button>
                   </div>
                 </div>
@@ -1329,16 +1329,16 @@ const NotesDocumentsTab: React.FC<{
             <div className="p-6">
               {isLoadingNotes ? (
                 <div className="flex flex-col items-center justify-center py-12 text-slate-500">
-                  <i className="fa-solid fa-circle-notch fa-spin mb-3 text-3xl text-[#0052cc]" />
-                  <p className="text-sm font-medium">Loading clinical notes for patient encounters...</p>
+                  <i className="fa-solid fa-circle-notch fa-spin mb-3 text-[10px] text-[#0052cc]" />
+                  <p className="text-[10px] font-medium">Loading clinical notes for patient encounters...</p>
                 </div>
               ) : clinicalNotes.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-                  <i className="fa-regular fa-file-lines mb-2 text-2xl text-slate-300" />
-                  <p className="text-sm font-medium text-slate-500">
+                  <i className="fa-regular fa-file-lines mb-2 text-[10px] text-slate-300" />
+                  <p className="text-[10px] font-medium text-slate-500">
                     No clinical notes recorded for this patient yet.
                   </p>
-                  <p className="mt-1 text-xs text-slate-400">
+                  <p className="mt-1 text-[10px] text-slate-400">
                     Notes added from consultations will appear here.
                   </p>
                 </div>
@@ -1352,11 +1352,11 @@ const NotesDocumentsTab: React.FC<{
                     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-gradient-to-r from-blue-50/60 via-slate-50 to-white px-5 py-3.5">
                       <div className="flex items-center gap-2.5">
                         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#0052cc] text-white shadow-sm">
-                          <i className="fa-solid fa-notes-medical text-sm" />
+                          <i className="fa-solid fa-notes-medical text-[10px]" />
                         </span>
                         <div>
                           <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold uppercase tracking-wider text-[#0052cc]">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-[#0052cc]">
                               {safeNoteIndex === 0 ? "RECENT CLINICAL NOTE" : "CLINICAL NOTE"}
                             </span>
                             {safeNoteIndex === 0 && (
@@ -1370,8 +1370,8 @@ const NotesDocumentsTab: React.FC<{
                               </span>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 text-xs text-slate-500">
-                            <span className="font-semibold text-slate-800">{activeNote.encounter}</span>
+                          <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                            <span className="font-bold text-slate-800">{activeNote.encounter}</span>
                             <span>•</span>
                             <span>{activeNote.dateTime}</span>
                           </div>
@@ -1379,14 +1379,14 @@ const NotesDocumentsTab: React.FC<{
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
+                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-700">
                           <i className="fa-solid fa-circle-check text-[10px]" />
                           {activeNote.status}
                         </span>
                         <button
                           type="button"
                           onClick={() => handleEditNote(activeNote)}
-                          className="inline-flex items-center gap-1.5 rounded-md border border-[#0052cc]/30 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-[#0052cc] transition-colors hover:bg-[#0052cc] hover:text-white"
+                          className="inline-flex items-center gap-1.5 rounded-md border border-[#0052cc]/30 bg-blue-50 px-2.5 py-1 text-[10px] font-semibold text-[#0052cc] transition-colors hover:bg-[#0052cc] hover:text-white"
                           title="Edit Clinical Note"
                         >
                           <i className="fa-solid fa-pen-to-square" />
@@ -1395,7 +1395,7 @@ const NotesDocumentsTab: React.FC<{
                         <button
                           type="button"
                           onClick={() => handlePrintNote(activeNote)}
-                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
                           title="Print Note"
                         >
                           <i className="fa-solid fa-print" />
@@ -1410,7 +1410,7 @@ const NotesDocumentsTab: React.FC<{
                             setCopiedNoteId(activeNote.id);
                             setTimeout(() => setCopiedNoteId(null), 2000);
                           }}
-                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
                           title="Copy Note Text"
                         >
                           <i className={`fa-solid ${copiedNoteId === activeNote.id ? "fa-check text-emerald-600" : "fa-copy"}`} />
@@ -1420,34 +1420,34 @@ const NotesDocumentsTab: React.FC<{
                     </div>
 
                     {/* Meta Grid */}
-                    <div className="grid grid-cols-2 gap-3 border-b border-slate-100 bg-slate-50/70 px-5 py-3 sm:grid-cols-3 lg:grid-cols-5 text-xs">
+                    <div className="grid grid-cols-2 gap-3 border-b border-slate-100 bg-slate-50/70 px-5 py-3 sm:grid-cols-3 lg:grid-cols-5 text-[10px]">
                       <div>
-                        <p className="text-[11px] font-medium text-slate-500">Date & Time</p>
-                        <p className="mt-0.5 font-semibold text-slate-800">{activeNote.dateTime}</p>
+                        <p className="text-[10px] font-medium text-slate-500">Date & Time</p>
+                        <p className="mt-0.5 font-bold text-slate-800">{activeNote.dateTime}</p>
                       </div>
                       <div>
-                        <p className="text-[11px] font-medium text-slate-500">Encounter</p>
-                        <p className="mt-0.5 font-semibold text-slate-800">{activeNote.encounter}</p>
+                        <p className="text-[10px] font-medium text-slate-500">Encounter</p>
+                        <p className="mt-0.5 font-bold text-slate-800">{activeNote.encounter}</p>
                       </div>
                       <div>
-                        <p className="text-[11px] font-medium text-slate-500">Doctor</p>
-                        <p className="mt-0.5 font-semibold text-slate-800">{activeNote.doctor}</p>
+                        <p className="text-[10px] font-medium text-slate-500">Doctor</p>
+                        <p className="mt-0.5 font-bold text-slate-800">{activeNote.doctor}</p>
                       </div>
                       <div>
-                        <p className="text-[11px] font-medium text-slate-500">Department</p>
-                        <p className="mt-0.5 font-semibold text-slate-800">{activeNote.department}</p>
+                        <p className="text-[10px] font-medium text-slate-500">Department</p>
+                        <p className="mt-0.5 font-bold text-slate-800">{activeNote.department}</p>
                       </div>
                       <div>
-                        <p className="text-[11px] font-medium text-slate-500">Branch</p>
-                        <p className="mt-0.5 font-semibold text-slate-800">{activeNote.branch}</p>
+                        <p className="text-[10px] font-medium text-slate-500">Branch</p>
+                        <p className="mt-0.5 font-bold text-slate-800">{activeNote.branch}</p>
                       </div>
                     </div>
 
                     {/* Note Content Sections */}
-                    <div className="space-y-4 p-5 text-sm">
+                    <div className="space-y-4 p-5 text-[10px]">
                       {/* Chief Complaint */}
                       <div>
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-800">
                           Chief Complaint
                         </h4>
                         <p className="mt-1 font-medium text-slate-800">
@@ -1458,7 +1458,7 @@ const NotesDocumentsTab: React.FC<{
                       {/* Clinical Assessment & Examination */}
                       <div className="grid gap-4 md:grid-cols-2 rounded-lg bg-slate-50/60 p-3.5 border border-slate-100">
                         <div>
-                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-800">
                             Clinical Assessment
                           </h4>
                           <div className="mt-1 space-y-1 text-slate-700">
@@ -1469,7 +1469,7 @@ const NotesDocumentsTab: React.FC<{
                         </div>
 
                         <div>
-                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-800">
                             Examination
                           </h4>
                           <div className="mt-1 space-y-1 text-slate-700">
@@ -1482,7 +1482,7 @@ const NotesDocumentsTab: React.FC<{
 
                       {/* Diagnosis */}
                       <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-[#0052cc]">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#0052cc]">
                           Diagnosis
                         </h4>
                         <p className="mt-1 font-semibold text-slate-900">
@@ -1492,7 +1492,7 @@ const NotesDocumentsTab: React.FC<{
 
                       {/* Treatment / Plan */}
                       <div className="rounded-lg border border-slate-200 bg-white p-3.5">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-600">
                           Treatment / Plan
                         </h4>
                         <ul className="mt-1.5 space-y-1 text-slate-700">
@@ -1508,7 +1508,7 @@ const NotesDocumentsTab: React.FC<{
                       {/* Medications & Investigations */}
                       <div className="grid gap-4 md:grid-cols-2">
                         <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3.5">
-                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-800">
                             Medications
                           </h4>
                           <p className="mt-1 font-semibold text-slate-900">
@@ -1517,7 +1517,7 @@ const NotesDocumentsTab: React.FC<{
                         </div>
 
                         <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3.5">
-                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-800">
                             Investigations
                           </h4>
                           <div className="mt-1 space-y-1 text-slate-700">
@@ -1530,7 +1530,7 @@ const NotesDocumentsTab: React.FC<{
 
                       {/* Follow-up */}
                       <div className="rounded-lg border border-emerald-100 bg-emerald-50/30 p-3">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-800">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">
                           Follow-up
                         </h4>
                         <p className="mt-1 font-medium text-slate-800">
@@ -1540,10 +1540,10 @@ const NotesDocumentsTab: React.FC<{
                     </div>
 
                     {/* Card Footer: Status & Created By */}
-                    <div className="flex flex-wrap items-center justify-between border-t border-slate-100 bg-slate-50 px-5 py-3 text-xs text-slate-500">
+                    <div className="flex flex-wrap items-center justify-between border-t border-slate-100 bg-slate-50 px-5 py-3 text-[10px] text-slate-500">
                       <div className="flex items-center gap-2">
-                        <span className="font-semibold text-slate-700">Status:</span>
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                        <span className="font-bold text-slate-800">Status:</span>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-800">
                           <i className="fa-solid fa-check text-[10px]" />
                           {activeNote.status}
                         </span>
@@ -1562,7 +1562,7 @@ const NotesDocumentsTab: React.FC<{
 
                   {/* Bottom Navigation Bar */}
                   {clinicalNotes.length > 1 && (
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-[10px]">
                       <button
                         type="button"
                         disabled={safeNoteIndex === 0}
@@ -1624,11 +1624,11 @@ const NotesDocumentsTab: React.FC<{
           <section className="mb-8">
 
             <div className="mb-4">
-              <h3 className="text-lg font-semibold text-slate-900">Document Library</h3>
+              <h3 className="text-[10px] font-semibold text-slate-900">Document Library</h3>
             </div>
 
             {documents.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-400">
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-[10px] text-slate-400">
                 No documents uploaded for this patient yet. Use the upload panel to add files.
               </div>
             ) : (() => {
@@ -1645,10 +1645,10 @@ const NotesDocumentsTab: React.FC<{
                       <div key={batchIndex} className="group relative rounded-xl border border-blue-100 bg-white p-4 shadow-sm transition-all hover:shadow-md">
                         <div className="mb-3 flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2">
-                            <span className="text-2xl text-blue-600">
+                            <span className="text-[10px] text-blue-600">
                               <i className="fa-solid fa-file-word" />
                             </span>
-                            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-bold text-slate-600">
+                            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-bold text-slate-600">
                               {batchDocs.length} file{batchDocs.length !== 1 ? "s" : ""}
                             </span>
                           </div>
@@ -1656,22 +1656,22 @@ const NotesDocumentsTab: React.FC<{
                             <button
                               type="button"
                               onClick={() => { setAddingToBatchIndex(batchIndex); fileInputRef.current?.click(); }}
-                              className="flex items-center gap-1 rounded-md border border-blue-300 bg-white px-2.5 py-1 text-xs font-semibold text-blue-600 transition-colors hover:bg-blue-50"
+                              className="flex items-center gap-1 rounded-md border border-blue-300 bg-white px-2.5 py-1 text-[10px] font-semibold text-blue-600 transition-colors hover:bg-blue-50"
                             >
-                              <i className="fa-solid fa-plus text-xs" />
+                              <i className="fa-solid fa-plus text-[10px]" />
                               Add
                             </button>
                             <button
                               type="button"
                               onClick={() => setDeletingBatchIndex(batchIndex)}
-                              className="flex items-center gap-1 rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-500 transition-colors hover:bg-red-50"
+                              className="flex items-center gap-1 rounded-md border border-red-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-red-500 transition-colors hover:bg-red-50"
                             >
-                              <i className="fa-solid fa-trash-can text-xs" />
+                              <i className="fa-solid fa-trash-can text-[10px]" />
                               Delete
                             </button>
                           </div>
                         </div>
-                        <h4 className="mb-1 text-sm font-bold text-slate-900">
+                        <h4 className="mb-1 text-[10px] font-bold text-slate-900">
                           {displayTitle}
                         </h4>
                         <div className="mb-3 max-h-[4.5rem] space-y-1 overflow-y-auto pr-1">
@@ -1681,7 +1681,7 @@ const NotesDocumentsTab: React.FC<{
                               {renamingDocId === batchDoc.id ? (
                                 <input
                                   autoFocus
-                                  className="min-w-0 flex-1 rounded border border-blue-300 px-1 py-0.5 text-xs text-slate-800 outline-none focus:ring-1 focus:ring-blue-400"
+                                  className="min-w-0 flex-1 rounded border border-blue-300 px-1 py-0.5 text-[10px] text-slate-800 outline-none focus:ring-1 focus:ring-blue-400"
                                   value={renameValue}
                                   onChange={e => setRenameValue(e.target.value)}
                                   onBlur={() => handleRenameDoc(batchDoc.id, renameValue)}
@@ -1692,7 +1692,7 @@ const NotesDocumentsTab: React.FC<{
                                 />
                               ) : (
                                 <span
-                                  className="min-w-0 flex-1 cursor-text truncate text-xs text-slate-700 hover:text-blue-600"
+                                  className="min-w-0 flex-1 cursor-text truncate text-[10px] text-slate-700 hover:text-blue-600"
                                   title={`Click to rename: ${batchDoc.name}`}
                                   onClick={() => { setRenamingDocId(batchDoc.id); setRenameValue(batchDoc.name); }}
                                 >
@@ -1702,20 +1702,20 @@ const NotesDocumentsTab: React.FC<{
                               <button type="button" onClick={() => handleDeleteDoc(batchDoc.id, batchDoc.name)}
                                 className="flex-shrink-0 text-slate-300 transition-colors hover:text-red-500"
                                 title={`Delete ${batchDoc.name}`}>
-                                <i className="fa-solid fa-trash-can text-xs" />
+                                <i className="fa-solid fa-trash-can text-[10px]" />
                               </button>
                             </div>
                           ))}
                         </div>
                         <div className="flex gap-2">
                           <button type="button" onClick={() => setWordView({ docs: batchDocs, label: batchLabel })}
-                            className="flex flex-1 items-center justify-center gap-1.5 rounded bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100">
-                            <i className="fa-regular fa-eye text-xs" />
+                            className="flex flex-1 items-center justify-center gap-1.5 rounded bg-blue-50 px-3 py-1.5 text-[10px] font-semibold text-blue-700 transition-colors hover:bg-blue-100">
+                            <i className="fa-regular fa-eye text-[10px]" />
                             View in Word
                           </button>
                           <button type="button" onClick={() => downloadPatientDocumentsDocx(batchDocs, { patientId: patientId || undefined })}
-                            className="flex flex-1 items-center justify-center gap-1.5 rounded border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50">
-                            <i className="fa-solid fa-download text-xs" />
+                            className="flex flex-1 items-center justify-center gap-1.5 rounded border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-bold text-slate-800 transition-colors hover:bg-slate-50">
+                            <i className="fa-solid fa-download text-[10px]" />
                             Download
                           </button>
                         </div>
@@ -1738,22 +1738,22 @@ const NotesDocumentsTab: React.FC<{
             {showDeleteAllConfirm && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
                 <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
-                  <h4 className="mb-2 text-base font-bold text-slate-900">Delete All Documents?</h4>
-                  <p className="mb-5 text-sm text-slate-500">
+                  <h4 className="mb-2 text-[10px] font-bold text-slate-900">Delete All Documents?</h4>
+                  <p className="mb-5 text-[10px] text-slate-500">
                     This will permanently remove all {documents.length} document{documents.length !== 1 ? "s" : ""} from the library. This cannot be undone.
                   </p>
                   <div className="flex gap-3">
                     <button
                       type="button"
                       onClick={() => setShowDeleteAllConfirm(false)}
-                      className="flex-1 rounded-md border border-slate-200 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                      className="flex-1 rounded-md border border-slate-200 py-2 text-[10px] font-medium text-slate-600 transition-colors hover:bg-slate-50"
                     >
                       Cancel
                     </button>
                     <button
                       type="button"
                       onClick={handleDeleteAll}
-                      className="flex-1 rounded-md bg-red-600 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
+                      className="flex-1 rounded-md bg-red-600 py-2 text-[10px] font-medium text-white transition-colors hover:bg-red-700"
                     >
                       Delete All
                     </button>
@@ -1765,22 +1765,22 @@ const NotesDocumentsTab: React.FC<{
             {deletingBatchIndex !== null && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
                 <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
-                  <h4 className="mb-2 text-base font-bold text-slate-900">Delete this batch?</h4>
-                  <p className="mb-5 text-sm text-slate-500">
+                  <h4 className="mb-2 text-[10px] font-bold text-slate-900">Delete this batch?</h4>
+                  <p className="mb-5 text-[10px] text-slate-500">
                     This will permanently remove all {imageBatchGroups[deletingBatchIndex]?.ids.length ?? 0} file{(imageBatchGroups[deletingBatchIndex]?.ids.length ?? 0) !== 1 ? "s" : ""} in this batch. This cannot be undone.
                   </p>
                   <div className="flex gap-3">
                     <button
                       type="button"
                       onClick={() => setDeletingBatchIndex(null)}
-                      className="flex-1 rounded-md border border-slate-200 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                      className="flex-1 rounded-md border border-slate-200 py-2 text-[10px] font-medium text-slate-600 transition-colors hover:bg-slate-50"
                     >
                       Cancel
                     </button>
                     <button
                       type="button"
                       onClick={handleDeleteBatch}
-                      className="flex-1 rounded-md bg-red-600 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
+                      className="flex-1 rounded-md bg-red-600 py-2 text-[10px] font-medium text-white transition-colors hover:bg-red-700"
                     >
                       Delete
                     </button>
@@ -1797,7 +1797,7 @@ const NotesDocumentsTab: React.FC<{
 
             {/* Header */}
             <div className="flex flex-col justify-between gap-4 border-b border-slate-200 p-5 md:flex-row md:items-center">
-              <h3 className="text-lg font-semibold text-slate-900">
+              <h3 className="text-[10px] font-semibold text-slate-900">
                 Lab & Diagnostic Reports
               </h3>
 
@@ -1810,7 +1810,7 @@ const NotesDocumentsTab: React.FC<{
                       key={tab}
                       type="button"
                       onClick={() => setLabTab(tab)}
-                      className={`rounded-md px-3 py-1 text-sm font-medium transition-all ${
+                      className={`rounded-md px-3 py-1 text-[10px] font-medium transition-all ${
                         active
                           ? "bg-white text-blue-600 shadow-sm"
                           : "text-slate-600 hover:bg-white hover:shadow-sm"
@@ -1827,7 +1827,7 @@ const NotesDocumentsTab: React.FC<{
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-left">
                 <thead>
-                  <tr className="border-b border-slate-200 bg-white text-sm text-slate-500">
+                  <tr className="border-b border-slate-200 bg-white text-[10px] text-slate-500">
                     <th className="w-1/4 p-4 pl-6 font-medium">
                       Test Name
                     </th>
@@ -1850,11 +1850,11 @@ const NotesDocumentsTab: React.FC<{
                   </tr>
                 </thead>
 
-                <tbody className="divide-y divide-slate-100 text-sm text-slate-700">
+                <tbody className="divide-y divide-slate-100 text-[10px] text-slate-700">
                   <tr>
                     <td
                       colSpan={5}
-                      className="p-6 pl-6 text-center text-xs text-slate-400"
+                      className="p-6 pl-6 text-center text-[10px] text-slate-400"
                     >
                       No lab or diagnostic reports available for this patient
                       yet.
@@ -1877,25 +1877,25 @@ const NotesDocumentsTab: React.FC<{
           {stagedFiles.length > 0 ? (
             /* ── Staging panel: rename files before uploading ── */
             <div className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
-              <h4 className="mb-3 text-sm font-bold text-slate-900">
+              <h4 className="mb-3 text-[10px] font-bold text-slate-900">
                 {stagedFiles.length} file{stagedFiles.length !== 1 ? "s" : ""} selected
               </h4>
               <div className="mb-3">
-                <label className="mb-1 block text-xs font-medium text-slate-600">Word document name</label>
+                <label className="mb-1 block text-[10px] font-medium text-slate-600">Word document name</label>
                 <input
-                  className="w-full rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
+                  className="w-full rounded border border-slate-200 px-2 py-1.5 text-[10px] text-slate-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
                   placeholder="e.g. Scan Reports"
                   value={stagedBatchLabel}
                   onChange={e => setStagedBatchLabel(e.target.value)}
                 />
               </div>
-              <p className="mb-2 text-xs text-slate-400">Rename individual files if needed:</p>
+              <p className="mb-2 text-[10px] text-slate-400">Rename individual files if needed:</p>
               <div className="mb-4 space-y-2">
                 {stagedFiles.map((sf, i) => (
                   <div key={i} className="flex items-center gap-2">
-                    <i className="fa-solid fa-file flex-shrink-0 text-sm text-slate-400" />
+                    <i className="fa-solid fa-file flex-shrink-0 text-[10px] text-slate-400" />
                     <input
-                      className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1.5 text-sm text-slate-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
+                      className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1.5 text-[10px] text-slate-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300"
                       value={sf.name}
                       onChange={e => setStagedFiles(prev => prev.map((f, j) => j === i ? { ...f, name: e.target.value } : f))}
                     />
@@ -1905,7 +1905,7 @@ const NotesDocumentsTab: React.FC<{
                       className="flex-shrink-0 text-slate-300 hover:text-red-500"
                       title="Remove this file"
                     >
-                      <i className="fa-solid fa-xmark text-sm" />
+                      <i className="fa-solid fa-xmark text-[10px]" />
                     </button>
                   </div>
                 ))}
@@ -1914,7 +1914,7 @@ const NotesDocumentsTab: React.FC<{
                 <button
                   type="button"
                   onClick={() => { setStagedFiles([]); setStagedBatchLabel(""); }}
-                  className="flex-1 rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                  className="flex-1 rounded-md border border-slate-200 px-4 py-2 text-[10px] font-medium text-slate-600 transition-colors hover:bg-slate-50"
                 >
                   Cancel
                 </button>
@@ -1922,7 +1922,7 @@ const NotesDocumentsTab: React.FC<{
                   type="button"
                   onClick={handleSubmitUpload}
                   disabled={isUploadingDoc}
-                  className="flex-1 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+                  className="flex-1 rounded-md bg-blue-600 px-4 py-2 text-[10px] font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
                 >
                   {isUploadingDoc ? (
                     <><i className="fa-solid fa-spinner fa-spin mr-1" />Uploading…</>
@@ -1930,7 +1930,7 @@ const NotesDocumentsTab: React.FC<{
                 </button>
               </div>
               {docSuccessMsg && (
-                <p className="mt-3 rounded bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
+                <p className="mt-3 rounded bg-emerald-50 px-3 py-1.5 text-[10px] font-semibold text-emerald-700 border border-emerald-200">
                   <i className="fa-solid fa-circle-check mr-1.5" />
                   {docSuccessMsg}
                 </p>
@@ -1950,25 +1950,25 @@ const NotesDocumentsTab: React.FC<{
               }`}
             >
               <div
-                className={`mb-3 flex h-12 w-12 items-center justify-center rounded-full text-xl transition-transform ${
+                className={`mb-3 flex h-12 w-12 items-center justify-center rounded-full text-[10px] transition-transform ${
                   isDraggingFile ? "scale-110 bg-blue-600 text-white" : "bg-blue-100 text-blue-600"
                 }`}
               >
                 <i className="fa-solid fa-file-arrow-up" />
               </div>
-              <h4 className="mb-1 text-base font-bold text-slate-900">Upload Document</h4>
-              <p className="mb-4 px-4 text-xs text-slate-500">
+              <h4 className="mb-1 text-[10px] font-bold text-slate-900">Upload Document</h4>
+              <p className="mb-4 px-4 text-[10px] text-slate-500">
                 Drag & Drop or click to browse files (PDF, JPG, PNG, DOCX)
               </p>
               <button
                 type="button"
                 onClick={e => { e.stopPropagation(); handleSelectFiles(); }}
-                className="rounded-md border border-blue-600 bg-white px-6 py-2 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-50"
+                className="rounded-md border border-blue-600 bg-white px-6 py-2 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50"
               >
                 Select Files
               </button>
               {docSuccessMsg && (
-                <p className="mt-3 max-w-full rounded bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
+                <p className="mt-3 max-w-full rounded bg-emerald-50 px-3 py-1.5 text-[10px] font-semibold text-emerald-700 border border-emerald-200">
                   <i className="fa-solid fa-circle-check mr-1.5" />
                   {docSuccessMsg}
                 </p>
@@ -1989,7 +1989,7 @@ const NotesDocumentsTab: React.FC<{
               RECENT ACTIVITY
           ================================================== */}
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="mb-4 text-base font-semibold text-slate-900">
+            <h3 className="mb-4 text-[10px] font-semibold text-slate-900">
               Recent Activity
             </h3>
 
@@ -1999,7 +1999,7 @@ const NotesDocumentsTab: React.FC<{
 
               <div className="space-y-6">
                 {activities.length === 0 ? (
-                  <p className="py-2 text-xs text-slate-400">
+                  <p className="py-2 text-[10px] text-slate-400">
                     No recent activity recorded for this patient yet.
                   </p>
                 ) : (
@@ -2014,11 +2014,11 @@ const NotesDocumentsTab: React.FC<{
                     />
 
                     <div className="pl-4">
-                      <h4 className="text-sm font-semibold text-slate-900">
+                      <h4 className="text-[10px] font-semibold text-slate-900">
                         {activity.title}
                       </h4>
 
-                      <p className="mt-0.5 text-xs text-slate-600">
+                      <p className="mt-0.5 text-[10px] text-slate-600">
                         {activity.description}
                       </p>
 
@@ -2038,7 +2038,7 @@ const NotesDocumentsTab: React.FC<{
           ================================================== */}
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-900">
+              <h3 className="text-[10px] font-semibold text-slate-900">
                 Important Flags
               </h3>
 
@@ -2047,7 +2047,7 @@ const NotesDocumentsTab: React.FC<{
 
             <div className="space-y-3">
               {notesAllergies.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-xs text-slate-400">
+                <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-[10px] text-slate-400">
                   No allergy alerts recorded for this patient.
                 </p>
               ) : (
@@ -2067,7 +2067,7 @@ const NotesDocumentsTab: React.FC<{
                       }`}
                     >
                       <h4
-                        className={`mb-1 text-sm font-bold ${
+                        className={`mb-1 text-[10px] font-bold ${
                           severe ? "text-red-800" : "text-orange-800"
                         }`}
                       >
@@ -2075,7 +2075,7 @@ const NotesDocumentsTab: React.FC<{
                       </h4>
 
                       <p
-                        className={`text-xs leading-snug ${
+                        className={`text-[10px] leading-snug ${
                           severe ? "text-red-700" : "text-orange-700"
                         }`}
                       >
@@ -2112,13 +2112,13 @@ const NotesDocumentsTab: React.FC<{
             <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-6 py-4">
               <div className="flex items-center gap-2.5">
                 <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#0052cc] text-white shadow-sm">
-                  <i className="fa-solid fa-pen-to-square text-sm" />
+                  <i className="fa-solid fa-pen-to-square text-[10px]" />
                 </span>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">
+                  <h3 className="text-[10px] font-bold text-slate-900">
                     Edit Clinical Note
                   </h3>
-                  <p className="text-[11px] text-slate-500">
+                  <p className="text-[10px] text-slate-500">
                     {editingNote.encounterNo ? `#${editingNote.encounterNo} • ` : ""}{editingNote.encounter} • {editingNote.dateTime}
                   </p>
                 </div>
@@ -2132,32 +2132,32 @@ const NotesDocumentsTab: React.FC<{
                 }}
                 className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors disabled:opacity-50"
               >
-                <i className="fa-solid fa-xmark text-lg" />
+                <i className="fa-solid fa-xmark text-[10px]" />
               </button>
             </div>
 
             {/* Modal Form */}
-            <form onSubmit={handleSaveEditedNote} className="flex flex-1 flex-col overflow-y-auto hide-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden p-6 space-y-4 text-xs">
+            <form onSubmit={handleSaveEditedNote} className="flex flex-1 flex-col overflow-y-auto hide-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden p-6 space-y-4 text-[10px]">
               {/* Meta information row */}
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
                 <div>
                   <label className="mb-0.5 block text-[10px] font-bold uppercase text-slate-500">Encounter</label>
-                  <p className="font-semibold text-slate-800 text-xs truncate" title={editingNote.encounter}>{editingNote.encounter}</p>
+                  <p className="font-semibold text-slate-800 text-[10px] truncate" title={editingNote.encounter}>{editingNote.encounter}</p>
                 </div>
                 <div>
                   <label className="mb-0.5 block text-[10px] font-bold uppercase text-slate-500">Doctor</label>
-                  <p className="font-semibold text-slate-800 text-xs truncate" title={editingNote.doctor}>{editingNote.doctor}</p>
+                  <p className="font-semibold text-slate-800 text-[10px] truncate" title={editingNote.doctor}>{editingNote.doctor}</p>
                 </div>
                 <div>
                   <label className="mb-0.5 block text-[10px] font-bold uppercase text-slate-500">Department</label>
-                  <p className="font-semibold text-slate-800 text-xs truncate" title={editingNote.department}>{editingNote.department}</p>
+                  <p className="font-semibold text-slate-800 text-[10px] truncate" title={editingNote.department}>{editingNote.department}</p>
                 </div>
                 <div>
                   <label className="mb-1 block text-[10px] font-bold uppercase text-slate-500">Status</label>
                   <select
                     value={editingNote.status}
                     onChange={(e) => setEditingNote({ ...editingNote, status: e.target.value as any })}
-                    className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:border-[#0052cc] focus:outline-none bg-white font-medium"
+                    className="w-full rounded border border-slate-300 px-2 py-1 text-[10px] focus:border-[#0052cc] focus:outline-none bg-white font-medium"
                   >
                     <option value="Completed">Completed</option>
                     <option value="In Progress">In Progress</option>
@@ -2167,92 +2167,92 @@ const NotesDocumentsTab: React.FC<{
               </div>
 
               <div>
-                <label className="mb-1 block font-semibold text-slate-700">Chief Complaint</label>
+                <label className="mb-1 block font-bold text-slate-800">Chief Complaint</label>
                 <input
                   type="text"
                   required
                   value={editingNote.chiefComplaint}
                   onChange={(e) => setEditingNote({ ...editingNote, chiefComplaint: e.target.value })}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-[#0052cc] focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-[10px] focus:border-[#0052cc] focus:outline-none"
                   placeholder="Chief complaint"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block font-semibold text-slate-700">Clinical Assessment (1 per line)</label>
+                  <label className="mb-1 block font-bold text-slate-800">Clinical Assessment (1 per line)</label>
                   <textarea
                     rows={3}
                     value={editingNote.clinicalAssessment}
                     onChange={(e) => setEditingNote({ ...editingNote, clinicalAssessment: e.target.value })}
-                    className="w-full rounded-lg border border-slate-300 p-2 text-xs focus:border-[#0052cc] focus:outline-none"
+                    className="w-full rounded-lg border border-slate-300 p-2 text-[10px] focus:border-[#0052cc] focus:outline-none"
                     placeholder="Clinical assessment items"
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block font-semibold text-slate-700">Examination (1 per line)</label>
+                  <label className="mb-1 block font-bold text-slate-800">Examination (1 per line)</label>
                   <textarea
                     rows={3}
                     value={editingNote.examination}
                     onChange={(e) => setEditingNote({ ...editingNote, examination: e.target.value })}
-                    className="w-full rounded-lg border border-slate-300 p-2 text-xs focus:border-[#0052cc] focus:outline-none"
+                    className="w-full rounded-lg border border-slate-300 p-2 text-[10px] focus:border-[#0052cc] focus:outline-none"
                     placeholder="Physical examination notes"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="mb-1 block font-semibold text-slate-700">Diagnosis</label>
+                <label className="mb-1 block font-bold text-slate-800">Diagnosis</label>
                 <input
                   type="text"
                   value={editingNote.diagnosis}
                   onChange={(e) => setEditingNote({ ...editingNote, diagnosis: e.target.value })}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-[#0052cc] focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-[10px] focus:border-[#0052cc] focus:outline-none"
                   placeholder="Primary clinical diagnosis"
                 />
               </div>
 
               <div>
-                <label className="mb-1 block font-semibold text-slate-700">Treatment / Plan (1 item per line)</label>
+                <label className="mb-1 block font-bold text-slate-800">Treatment / Plan (1 item per line)</label>
                 <textarea
                   rows={3}
                   value={editingNote.treatmentPlan}
                   onChange={(e) => setEditingNote({ ...editingNote, treatmentPlan: e.target.value })}
-                  className="w-full rounded-lg border border-slate-300 p-2 text-xs focus:border-[#0052cc] focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 p-2 text-[10px] focus:border-[#0052cc] focus:outline-none"
                   placeholder="Treatment plan items"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block font-semibold text-slate-700">Medications</label>
+                  <label className="mb-1 block font-bold text-slate-800">Medications</label>
                   <input
                     type="text"
                     value={editingNote.medications}
                     onChange={(e) => setEditingNote({ ...editingNote, medications: e.target.value })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-[#0052cc] focus:outline-none"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-[10px] focus:border-[#0052cc] focus:outline-none"
                     placeholder="Prescribed medications"
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block font-semibold text-slate-700">Investigations (1 per line)</label>
+                  <label className="mb-1 block font-bold text-slate-800">Investigations (1 per line)</label>
                   <input
                     type="text"
                     value={editingNote.investigations}
                     onChange={(e) => setEditingNote({ ...editingNote, investigations: e.target.value })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-[#0052cc] focus:outline-none"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-[10px] focus:border-[#0052cc] focus:outline-none"
                     placeholder="Lab tests and investigations"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="mb-1 block font-semibold text-slate-700">Follow-up</label>
+                <label className="mb-1 block font-bold text-slate-800">Follow-up</label>
                 <input
                   type="text"
                   value={editingNote.followUp}
                   onChange={(e) => setEditingNote({ ...editingNote, followUp: e.target.value })}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-[#0052cc] focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-[10px] focus:border-[#0052cc] focus:outline-none"
                   placeholder="Follow-up instructions"
                 />
               </div>
@@ -2266,18 +2266,18 @@ const NotesDocumentsTab: React.FC<{
                     setIsEditNoteModalOpen(false);
                     setEditingNote(null);
                   }}
-                  className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-[10px] font-bold text-slate-800 transition-colors hover:bg-slate-100 disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSavingNote}
-                  className="flex items-center gap-1.5 rounded-lg bg-[#0052cc] px-5 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-700 shadow-sm disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-lg bg-[#0052cc] px-5 py-2 text-[10px] font-semibold text-white transition-colors hover:bg-blue-700 shadow-sm disabled:opacity-50"
                 >
                   {isSavingNote ? (
                     <>
-                      <i className="fa-solid fa-circle-notch fa-spin text-xs" />
+                      <i className="fa-solid fa-circle-notch fa-spin text-[10px]" />
                       Saving...
                     </>
                   ) : (
@@ -2326,7 +2326,7 @@ const NotesDocumentsTab: React.FC<{
             <BellNotificationButton size="md" />
 
             {/* HMS */}
-            <span className="rounded bg-blue-50 px-2 py-1 text-sm font-medium text-blue-600">
+            <span className="rounded bg-blue-50 px-2 py-1 text-[10px] font-medium text-blue-600">
               HMS
             </span>
 
@@ -2353,7 +2353,7 @@ const NotesDocumentsTab: React.FC<{
         ======================================================== */}
         <div className="absolute bottom-0 left-0 right-0 z-20 flex h-16 flex-shrink-0 items-center justify-between border-t border-slate-200 bg-white px-6 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
 
-          <div className="text-sm text-slate-500">
+          <div className="text-[10px] text-slate-500">
             Showing {documents.length} of {documents.length} total records
           </div>
 
@@ -2364,7 +2364,7 @@ const NotesDocumentsTab: React.FC<{
               type="button"
               onClick={handleExportDocuments}
               disabled={documents.length === 0 || isExportingDocs}
-              className="flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-[10px] font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <i className="fa-solid fa-file-export mr-2" />
               {isExportingDocs ? "Exporting…" : "Export Documents"}

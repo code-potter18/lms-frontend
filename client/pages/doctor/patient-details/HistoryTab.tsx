@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import API, { getActiveBranchId } from "../../../api/axios";
 import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
 import { getUser } from "../../../utils/token";
@@ -19,6 +19,7 @@ import type {
   SummaryPlan,
   StagingDetailRecord,
   ChemoCycleDetail,
+  ChemoAdverseEventEntry,
 } from "./types";
 import {
   loadLatestChemoPlan,
@@ -28,6 +29,7 @@ import {
 } from "./api";
 import { useLatestPatientVitals } from "./hooks";
 import { consultationNotesOf } from "../consultation/helpers";
+import { CTCAE_GRADES } from "./adminFormat";
 
 /* ============================================================
    HISTORY TAB
@@ -187,12 +189,12 @@ const formatTrendDate = (date: Date) =>
 function TrendStatusChip({ status, hasRange }: { status: TrendPoint["status"]; hasRange: boolean }) {
   if (!hasRange) return null;
   return status ? (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700 ring-1 ring-inset ring-red-200">
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700 ring-1 ring-inset ring-red-200">
       <i className={`fa-solid ${status === "High" ? "fa-arrow-up" : "fa-arrow-down"} text-[10px]`} />
       {status === "High" ? "Above normal" : "Below normal"}
     </span>
   ) : (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
       <i className="fa-solid fa-check text-[10px]" />
       Within range
     </span>
@@ -233,8 +235,8 @@ function TrendChartCard({ chart }: { chart: TrendChart }) {
     <div className="flex flex-col rounded-xl border border-gray-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h4 className="truncate text-sm font-bold text-gray-900">{chart.name} Trend</h4>
-          <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-gray-500">
+          <h4 className="truncate text-[10px] font-bold text-gray-900">{chart.name} Trend</h4>
+          <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-gray-500">
             {rangeText && (
               <>
                 {/* Key for the shaded normal band in the chart. */}
@@ -253,14 +255,14 @@ function TrendChartCard({ chart }: { chart: TrendChart }) {
       </div>
 
       <div className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className="text-2xl font-semibold text-gray-900">{formatTrendValue(latest.value)}</span>
-        {chart.unit && <span className="text-sm font-medium text-gray-500">{chart.unit}</span>}
+        <span className="text-[10px] font-semibold text-gray-900">{formatTrendValue(latest.value)}</span>
+        {chart.unit && <span className="text-[10px] font-medium text-gray-500">{chart.unit}</span>}
         {delta !== null && previous && (
-          <span className="inline-flex items-center gap-1 text-xs font-medium text-gray-500">
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-gray-500">
             <i
               className={`fa-solid ${
                 delta > 0 ? "fa-arrow-trend-up" : delta < 0 ? "fa-arrow-trend-down" : "fa-minus"
-              } text-[11px]`}
+              } text-[10px]`}
             />
             {delta > 0 ? "+" : ""}
             {formatTrendValue(delta)} since {formatTrendDate(previous.date)}
@@ -303,7 +305,7 @@ function TrendChartCard({ chart }: { chart: TrendChart }) {
           />
         </LineChart>
         {chart.points.length === 1 && (
-          <p className="text-center text-xs text-gray-400">The trend line appears after the next reading.</p>
+          <p className="text-center text-[10px] text-gray-400">The trend line appears after the next reading.</p>
         )}
       </div>
 
@@ -311,17 +313,17 @@ function TrendChartCard({ chart }: { chart: TrendChart }) {
         type="button"
         onClick={() => setShowValues((open) => !open)}
         aria-expanded={showValues}
-        className="mt-2 self-start text-xs font-semibold text-[#004785] hover:underline focus:outline-none focus-visible:underline"
+        className="mt-2 self-start text-[10px] font-semibold text-[#004785] hover:underline focus:outline-none focus-visible:underline"
       >
         {showValues ? "Hide values" : `Show values (${chart.points.length})`}
       </button>
       {showValues && (
-        <table className="mt-2 w-full text-left text-xs">
+        <table className="mt-2 w-full text-left text-[10px]">
           <thead>
             <tr className="border-b border-gray-100 text-gray-500">
-              <th className="py-1.5 pr-3 font-semibold">Report date</th>
-              <th className="py-1.5 pr-3 text-right font-semibold">Value</th>
-              <th className="py-1.5 font-semibold">Status</th>
+              <th className="py-1.5 pr-3 font-bold text-gray-900">Report date</th>
+              <th className="py-1.5 pr-3 text-right font-bold text-gray-900">Value</th>
+              <th className="py-1.5 font-bold text-gray-900">Status</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -830,10 +832,10 @@ const HistoryTab: React.FC<{
   ) => (
     <div className="flex items-start">
       <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mr-3 ${tone}`}>
-        <i className={`${icon} text-sm`} />
+        <i className={`${icon} text-[10px]`} />
       </div>
       <div className="min-w-0">
-        <p className="text-[11px] uppercase tracking-wide text-gray-400 font-semibold">
+        <p className="text-[10px] uppercase tracking-wide text-gray-900 font-bold">
           {label}
         </p>
         <p className={strong ? "font-semibold text-gray-800" : "text-gray-700 line-clamp-3 whitespace-pre-line"}>
@@ -846,7 +848,7 @@ const HistoryTab: React.FC<{
   /* A labelled line of a visit in the history popup. */
   const renderVisitField = (label: string, value: string, strong = false) => (
     <div className="flex">
-      <span className="w-36 shrink-0 text-[11px] uppercase tracking-wide text-gray-400 font-semibold pt-0.5">
+      <span className="w-36 shrink-0 text-[10px] uppercase tracking-wide text-gray-900 font-bold pt-0.5">
         {label}
       </span>
       <span className={strong ? "font-semibold text-gray-800" : "text-gray-700 whitespace-pre-line"}>
@@ -1011,8 +1013,15 @@ const HistoryTab: React.FC<{
   interface AdverseEventRow {
     id: string;
     date: string;
+    /* The raw event timestamp, for sorting. */
+    sortKey: string;
+    /* "Cycle 2 · Day 1" (just "Cycle 2" for events recorded before the
+       day was stored). */
+    cycleDay: string;
     event: string;
     grade: string;
+    /* The CTCAE grade (1-5) when recorded, for the coloured pill. */
+    gradeValue: string;
     action: string;
     outcome: string;
   }
@@ -1025,7 +1034,15 @@ const HistoryTab: React.FC<{
       adverseEventRows.push({
         id: event.adverse_event_id ?? `${cycle.chemotherapy_cycle_id}-${idx}`,
         date: fmtHistoryDate(event.event_date),
+        sortKey: event.event_date ?? "",
+        cycleDay: [
+          cycle.cycle_number != null ? `Cycle ${cycle.cycle_number}` : null,
+          event.cycle_day != null ? `Day ${event.cycle_day}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
         event: event.adverse_event_name || "—",
+        gradeValue: event.ctcae_grade != null ? String(event.ctcae_grade) : "",
         grade:
           String(
             event.ctcae_grade || event.reaction_grade || event.severity || "—"
@@ -1040,7 +1057,9 @@ const HistoryTab: React.FC<{
             : event.treatment_interrupted
             ? "Treatment interrupted"
             : "None recorded"),
-        outcome: event.treatment_stopped
+        outcome: event.resolved
+          ? "RESOLVED"
+          : event.treatment_stopped
           ? "STOPPED"
           : event.hospitalization_required
           ? "HOSPITALIZED"
@@ -1048,7 +1067,10 @@ const HistoryTab: React.FC<{
       });
     });
   });
-  adverseEventRows.sort((a, b) => b.date.localeCompare(a.date));
+  /* Newest first, by the real timestamp (the shown date is DD-MM-YYYY). */
+  adverseEventRows.sort(
+    (a, b) => (Date.parse(b.sortKey) || 0) - (Date.parse(a.sortKey) || 0)
+  );
 
   /* One bar per calendar day — group encounter weights by date, last recorded value per day wins. */
   const weightTrend = (() => {
@@ -1321,7 +1343,10 @@ const HistoryTab: React.FC<{
           const dayAdmin = (detail?.chemotherapy_administration ?? existing?.chemotherapy_administration ?? []).find(
             (adm: any) => Number(adm.administration_day) === dNum
           );
-          if (dayAdmin && (dayAdmin.administration_status === "Completed" || dayAdmin.infusion_completed)) {
+          if (
+            dayAdmin &&
+            (["Completed", "GIVEN"].includes(dayAdmin.administration_status) || dayAdmin.infusion_completed)
+          ) {
             dayCategory = "COMPLETED";
           } else if (currentCycleInfo?.day != null && hasManyDays) {
             if (dNum < currentCycleInfo.day) {
@@ -1421,11 +1446,16 @@ const HistoryTab: React.FC<{
         }
 
         if (!description) {
-          const adverseEvents =
-            specificDetail?.chemotherapy_adverse_event ??
-            detail?.chemotherapy_adverse_event ??
-            existing?.chemotherapy_adverse_event ??
-            [];
+          /* A multi-day cycle's day card lists only that day's events
+             (events recorded before the day was stored stay on every day). */
+          const adverseEvents = (
+            (specificDetail?.chemotherapy_adverse_event ??
+              detail?.chemotherapy_adverse_event ??
+              existing?.chemotherapy_adverse_event ??
+              []) as ChemoAdverseEventEntry[]
+          ).filter(
+            (ae) => !hasManyDays || ae.cycle_day == null || ae.cycle_day === dNum
+          );
           if (adverseEvents.length > 0) {
             const names = adverseEvents
               .map((ae) => {
@@ -1496,6 +1526,33 @@ const HistoryTab: React.FC<{
   const [investigationResults, setInvestigationResults] = useState<InvestigationResultRow[]>([]);
   const [investigationLoading, setInvestigationLoading] = useState(false);
 
+  const handlePrintAnnualReport = () => {
+    const rows = encounterReports.map((row) => `
+      <tr>
+        <td>${fmtHistoryDate(row.report_completed_date ?? "") || "—"}</td>
+        <td>${row.lab_test_master?.test_name || "—"}</td>
+        <td>${row.result || "—"}</td>
+        <td>${row.impression || "—"}</td>
+      </tr>`).join("");
+    const html = `<!DOCTYPE html><html><head><title>Annual Report</title>
+      <style>
+        body { font-family: Inter, sans-serif; font-size: 11px; color: #1e293b; padding: 24px; }
+        h2 { font-size: 14px; font-weight: 700; margin-bottom: 16px; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #f8fafc; text-align: left; padding: 8px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; border-bottom: 2px solid #e2e8f0; }
+        td { padding: 8px 12px; border-bottom: 1px solid #f1f5f9; font-size: 11px; }
+        tr:hover td { background: #f8fafc; }
+      </style></head><body>
+      <h2>Annual Report History</h2>
+      <table><thead><tr>
+        <th>Completed Date</th><th>Test Name</th><th>Result</th><th>Impression</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+      <script>window.onload = () => { window.print(); window.onafterprint = () => window.close(); }<\/script>
+      </body></html>`;
+    const win = window.open("", "_blank");
+    if (win) { win.document.write(html); win.document.close(); }
+  };
+
   useEffect(() => {
     if (!patientId) return;
     let cancelled = false;
@@ -1544,6 +1601,33 @@ const HistoryTab: React.FC<{
     0
   );
 
+  const handlePrintTreatmentTrend = () => {
+    const groupRows = treatmentTrends.map((group) =>
+      `<tr><td colspan="4" style="background:#f0f4f8;font-weight:700;padding:8px 12px;font-size:11px;">${group.cancerType}</td></tr>` +
+      group.charts.map((chart) =>
+        chart.points.map((pt) =>
+          `<tr><td>${chart.name}${chart.unit ? ` (${chart.unit})` : ""}</td><td>${pt.date instanceof Date ? pt.date.toLocaleDateString() : String(pt.date)}</td><td>${pt.value}</td><td>${pt.status ?? "—"}</td></tr>`
+        ).join("")
+      ).join("")
+    ).join("");
+    const html = `<!DOCTYPE html><html><head><title>Treatment Trend</title>
+      <style>
+        body { font-family: Inter, sans-serif; font-size: 11px; color: #1e293b; padding: 24px; }
+        h2 { font-size: 14px; font-weight: 700; margin-bottom: 16px; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #f8fafc; text-align: left; padding: 8px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; border-bottom: 2px solid #e2e8f0; }
+        td { padding: 8px 12px; border-bottom: 1px solid #f1f5f9; font-size: 11px; }
+      </style></head><body>
+      <h2>Treatment Trend — ${trendTestCount} test${trendTestCount === 1 ? "" : "s"} · ${trendReadingCount} reading${trendReadingCount === 1 ? "" : "s"}</h2>
+      <table><thead><tr>
+        <th>Test</th><th>Date</th><th>Value</th><th>Status</th>
+      </tr></thead><tbody>${groupRows}</tbody></table>
+      <script>window.onload = () => { window.print(); window.onafterprint = () => window.close(); }<\/script>
+      </body></html>`;
+    const win = window.open("", "_blank");
+    if (win) { win.document.write(html); win.document.close(); }
+  };
+
   /* =========================================================
      CONTENT (PATIENT HEADER + HISTORY SECTIONS + ACTIONS)
   ========================================================= */
@@ -1554,13 +1638,13 @@ const HistoryTab: React.FC<{
       {(historyLoading || historyError) && (
         <div className="p-6 pb-0">
           {historyLoading && (
-            <div className="flex items-center rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+            <div className="flex items-center rounded-lg border border-slate-200 bg-white px-4 py-3 text-[10px] text-slate-500">
               <i className="fa-solid fa-circle-notch fa-spin mr-2" /> Loading
               treatment history…
             </div>
           )}
           {!historyLoading && historyError && (
-            <div className="flex items-center rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+            <div className="flex items-center rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[10px] text-amber-700">
               <i className="fa-solid fa-triangle-exclamation mr-2" />{" "}
               {historyError}
             </div>
@@ -1577,12 +1661,12 @@ const HistoryTab: React.FC<{
               <div className="flex items-center gap-2">
                 <i className="fa-solid fa-chart-line text-blue-600" />
 
-                <h2 className="text-lg font-bold text-gray-900">
+                <h2 className="text-[10px] font-bold text-gray-900">
                   Treatment Timeline
                 </h2>
               </div>
 
-              <span className="text-sm font-medium text-gray-500">
+              <span className="text-[10px] font-medium text-gray-500">
                 {historyTimelineRange || "No treatment dates recorded"}
               </span>
             </div>
@@ -1597,7 +1681,7 @@ const HistoryTab: React.FC<{
               )}
 
               {timelineItems.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-sm text-gray-500">
+                <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-[10px] text-gray-500">
                   No chemotherapy cycles found for this patient yet. Save a
                   Treatment Plan and record cycles to build the timeline.
                 </div>
@@ -1625,7 +1709,7 @@ const HistoryTab: React.FC<{
                         {isCompleted ? (
                           <i className="fa-solid fa-check text-white text-[10px]" />
                         ) : isCurrent ? (
-                          <i className="fa-solid fa-play text-white text-[9px] ml-0.5" />
+                          <i className="fa-solid fa-play text-white text-[10px] ml-0.5" />
                         ) : (
                           <i className="fa-regular fa-calendar text-slate-600 text-[10px]" />
                         )}
@@ -1644,7 +1728,7 @@ const HistoryTab: React.FC<{
                         <div className="flex justify-between items-center mb-1.5 flex-wrap gap-2">
                           <div className="flex items-center gap-2">
                             <h3
-                              className={`font-bold text-sm ${
+                              className={`font-bold text-[10px] ${
                                 isCompleted
                                   ? "text-emerald-900"
                                   : isCurrent
@@ -1673,7 +1757,7 @@ const HistoryTab: React.FC<{
                           </div>
 
                           <span
-                            className={`text-xs sm:text-sm font-medium ${
+                            className={`text-[10px] sm:text-[10px] font-medium ${
                               isCurrent
                                 ? "text-blue-600 font-semibold"
                                 : isCompleted
@@ -1686,7 +1770,7 @@ const HistoryTab: React.FC<{
                         </div>
 
                         <p
-                          className={`text-xs sm:text-sm leading-relaxed ${
+                          className={`text-[10px] sm:text-[10px] leading-relaxed ${
                             isCompleted
                               ? "text-gray-600"
                               : isCurrent
@@ -1708,26 +1792,36 @@ const HistoryTab: React.FC<{
           {encounterReports.length > 0 && (
             <div className="mt-6 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
               <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-                <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                <h2 className="text-[10px] font-bold text-gray-900 flex items-center gap-2">
                   <i className="fa-solid fa-file-medical text-[#004785]" />
                   Annual Report
                 </h2>
-                <button
-                  type="button"
-                  onClick={() => { setReportPage(0); setLabReportModalOpen(true); }}
-                  className="px-4 py-1.5 rounded-lg bg-[#004785] hover:bg-[#003A6B] active:scale-[0.98] text-white text-xs font-semibold transition-all"
-                >
-                  View Report
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handlePrintAnnualReport}
+                    className="px-4 py-1.5 rounded-lg border border-[#004785] text-[#004785] hover:bg-[#004785]/10 active:scale-[0.98] text-[10px] font-semibold transition-all flex items-center gap-1.5"
+                  >
+                    <i className="fa-solid fa-print text-[10px]" />
+                    Print
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setReportPage(0); setLabReportModalOpen(true); }}
+                    className="px-4 py-1.5 rounded-lg bg-[#004785] hover:bg-[#003A6B] active:scale-[0.98] text-white text-[10px] font-semibold transition-all"
+                  >
+                    View Report
+                  </button>
+                </div>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-[10px]">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100">
-                      <th className="px-4 py-2.5 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Completed Date</th>
-                      <th className="px-4 py-2.5 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Test Name</th>
-                      <th className="px-4 py-2.5 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Result</th>
-                      <th className="px-4 py-2.5 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Impression</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] uppercase tracking-wide text-gray-900 font-bold">Completed Date</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] uppercase tracking-wide text-gray-900 font-bold">Test Name</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] uppercase tracking-wide text-gray-900 font-bold">Result</th>
+                      <th className="px-4 py-2.5 text-left text-[10px] uppercase tracking-wide text-gray-900 font-bold">Impression</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -1750,18 +1844,18 @@ const HistoryTab: React.FC<{
         <div className="space-y-6">
           {/* PATIENT 360 */}
           <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-            <h2 className="text-base font-bold text-gray-900 mb-4">
+            <h2 className="text-[10px] font-bold text-gray-900 mb-4">
               Patient 360
             </h2>
 
             {stagingDetailsLoading ? (
-              <div className="flex items-center text-sm text-gray-500">
+              <div className="flex items-center text-[10px] text-gray-500">
                 <i className="fa-solid fa-circle-notch fa-spin mr-2" />
                 Loading visit history...
               </div>
             ) : latestVisit ? (
               <>
-                <div className="space-y-3 text-sm">
+                <div className="space-y-3 text-[10px]">
                   {renderPatient360Row(
                     "fa-regular fa-calendar",
                     "bg-blue-50 text-blue-600",
@@ -1826,13 +1920,13 @@ const HistoryTab: React.FC<{
                 <button
                   type="button"
                   onClick={() => setStagingHistoryOpen(true)}
-                  className="mt-4 w-full py-2.5 rounded-lg bg-[#004785] hover:bg-[#003A6B] active:scale-[0.98] text-white text-sm font-semibold transition-all shadow-sm"
+                  className="mt-4 w-full py-2.5 rounded-lg bg-[#004785] hover:bg-[#003A6B] active:scale-[0.98] text-white text-[10px] font-semibold transition-all shadow-sm"
                 >
                   View History
                 </button>
               </>
             ) : (
-              <p className="text-sm text-gray-500">
+              <p className="text-[10px] text-gray-500">
                 No visits recorded for this patient yet.
               </p>
             )}
@@ -1840,7 +1934,7 @@ const HistoryTab: React.FC<{
 
           {/* VITAL TREND */}
           <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-            <h2 className="text-base font-bold text-gray-900 mb-4">
+            <h2 className="text-[10px] font-bold text-gray-900 mb-4">
               Vitals Trend History
             </h2>
 
@@ -1856,7 +1950,7 @@ const HistoryTab: React.FC<{
                   key={chart.key}
                   type="button"
                   onClick={() => setActiveVitalChart(chart.key)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
+                  className={`px-3 py-1.5 rounded-full text-[10px] font-semibold border transition-all ${
                     activeVitalChart === chart.key
                       ? "bg-[#004785] border-[#004785] text-white shadow-sm"
                       : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-[#004785]"
@@ -1869,7 +1963,7 @@ const HistoryTab: React.FC<{
 
             {activeVitalChart === "weight" && (
             <div className="mb-4">
-              <div className="flex justify-between text-xs text-gray-500 uppercase font-semibold mb-2">
+              <div className="flex justify-between text-[10px] text-gray-900 uppercase font-bold mb-2">
                 <span>WEIGHT (KG)</span>
                 <span>
                   {weightTrendAvg != null
@@ -1880,7 +1974,7 @@ const HistoryTab: React.FC<{
 
               <div className="flex items-end h-16 gap-1.5">
                 {weightTrend.length === 0 ? (
-                  <p className="text-xs text-gray-400">
+                  <p className="text-[10px] text-gray-400">
                     No weight recorded for any visit yet.
                   </p>
                 ) : (
@@ -1915,7 +2009,7 @@ const HistoryTab: React.FC<{
                 {/* Blood Pressure */}
                 {activeVitalChart === "bp" && (
                 <div>
-                  <div className="flex justify-between text-xs text-gray-500 uppercase font-semibold mb-2">
+                  <div className="flex justify-between text-[10px] text-gray-900 uppercase font-bold mb-2">
                     <span>Blood Pressure (mmHg)</span>
                     {bpTrend.length > 0 && (
                       <span>
@@ -1925,7 +2019,7 @@ const HistoryTab: React.FC<{
                     )}
                   </div>
                   {bpTrend.length === 0 ? (
-                    <p className="text-xs text-gray-400">No BP recorded yet.</p>
+                    <p className="text-[10px] text-gray-400">No BP recorded yet.</p>
                   ) : (
                     <>
                       <div className="flex items-end h-20 gap-2">
@@ -1965,14 +2059,14 @@ const HistoryTab: React.FC<{
                 {/* Pulse */}
                 {activeVitalChart === "pulse" && (
                 <div>
-                  <div className="flex justify-between text-xs text-gray-500 uppercase font-semibold mb-2">
+                  <div className="flex justify-between text-[10px] text-gray-900 uppercase font-bold mb-2">
                     <span>Pulse (bpm)</span>
                     {pulseTrend.length > 0 && (
                       <span>Avg {Math.round(pulseTrend.reduce((s, e) => s + e.value, 0) / pulseTrend.length)}</span>
                     )}
                   </div>
                   {pulseTrend.length === 0 ? (
-                    <p className="text-xs text-gray-400">No pulse recorded yet.</p>
+                    <p className="text-[10px] text-gray-400">No pulse recorded yet.</p>
                   ) : (
                     <div className="flex items-end h-16 gap-1.5">
                       {(() => {
@@ -1999,14 +2093,14 @@ const HistoryTab: React.FC<{
                 {/* Temperature */}
                 {activeVitalChart === "temp" && (
                 <div>
-                  <div className="flex justify-between text-xs text-gray-500 uppercase font-semibold mb-2">
+                  <div className="flex justify-between text-[10px] text-gray-900 uppercase font-bold mb-2">
                     <span>Temperature (°C)</span>
                     {tempTrend.length > 0 && (
                       <span>Avg {(tempTrend.reduce((s, e) => s + e.value, 0) / tempTrend.length).toFixed(1)}</span>
                     )}
                   </div>
                   {tempTrend.length === 0 ? (
-                    <p className="text-xs text-gray-400">No temperature recorded yet.</p>
+                    <p className="text-[10px] text-gray-400">No temperature recorded yet.</p>
                   ) : (
                     <div className="flex items-end h-16 gap-1.5">
                       {(() => {
@@ -2033,14 +2127,14 @@ const HistoryTab: React.FC<{
                 {/* Pain Score */}
                 {activeVitalChart === "painscore" && (
                 <div>
-                  <div className="flex justify-between text-xs text-gray-500 uppercase font-semibold mb-2">
+                  <div className="flex justify-between text-[10px] text-gray-900 uppercase font-bold mb-2">
                     <span>Pain Score (0-10)</span>
                     {painTrend.length > 0 && (
                       <span>Avg {(painTrend.reduce((s, e) => s + e.value, 0) / painTrend.length).toFixed(1)}</span>
                     )}
                   </div>
                   {painTrend.length === 0 ? (
-                    <p className="text-xs text-gray-400">No pain score recorded yet.</p>
+                    <p className="text-[10px] text-gray-400">No pain score recorded yet.</p>
                   ) : (
                     <div className="flex items-end h-16 gap-1.5">
                       {(() => {
@@ -2070,7 +2164,7 @@ const HistoryTab: React.FC<{
 
             {barTooltip && (
               <div
-                className="fixed z-50 pointer-events-none bg-gray-900 text-white text-xs font-medium rounded px-2.5 py-1 whitespace-nowrap shadow-lg"
+                className="fixed z-50 pointer-events-none bg-gray-900 text-white text-[10px] font-medium rounded px-2.5 py-1 whitespace-nowrap shadow-lg"
                 style={{ left: barTooltip.x, top: barTooltip.y - 8, transform: "translate(-50%, -100%)" }}
               >
                 {barTooltip.text}
@@ -2081,17 +2175,17 @@ const HistoryTab: React.FC<{
           {/* DOCUMENT HISTORY */}
           <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-base font-bold text-gray-900">
+              <h2 className="text-[10px] font-bold text-gray-900">
                 Document History
               </h2>
             </div>
 
             {prescriptionsLoading ? (
-              <div className="text-xs text-gray-500">Loading prescriptions…</div>
+              <div className="text-[10px] text-gray-500">Loading prescriptions…</div>
             ) : prescriptionsError ? (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">{prescriptionsError}</div>
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-[10px] text-red-700">{prescriptionsError}</div>
             ) : prescriptions.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/50 p-4 text-center text-xs text-gray-400">
+              <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/50 p-4 text-center text-[10px] text-gray-400">
                 No prescriptions found for this patient yet.
               </div>
             ) : (
@@ -2101,12 +2195,12 @@ const HistoryTab: React.FC<{
                     <div className="rounded-lg border border-gray-200 bg-white p-4">
                       <div className="flex items-start justify-between mb-2">
                             <div>
-                              <div className="text-base font-bold text-red-800">{selectedPrescription.diagnosis?.diagnosis_name || '—'}</div>
+                              <div className="text-[10px] font-bold text-red-800">{selectedPrescription.diagnosis?.diagnosis_name || '—'}</div>
                               {selectedPrescription.chief_complaint && (
-                                <div className="text-xs text-red-700 mt-1">{selectedPrescription.chief_complaint}</div>
+                                <div className="text-[10px] text-red-700 mt-1">{selectedPrescription.chief_complaint}</div>
                               )}
                             </div>
-                            <div className="text-xs text-red-600">
+                            <div className="text-[10px] text-red-600">
                               {selectedPrescription.prescription_date ? new Date(selectedPrescription.prescription_date).toLocaleDateString() : '—'}
                             </div>
                           </div>
@@ -2115,13 +2209,13 @@ const HistoryTab: React.FC<{
                             href={pdfUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-xs px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700"
+                            className="text-[10px] px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700"
                           >
                             View
                           </a>
                           <button
                             type="button"
-                            className="text-xs px-3 py-1.5 rounded border border-red-300 text-red-700 hover:bg-red-50"
+                            className="text-[10px] px-3 py-1.5 rounded border border-red-300 text-red-700 hover:bg-red-50"
                             onClick={async () => {
                               try {
                                 const data = buildPrescriptionData(selectedPrescription);
@@ -2187,31 +2281,41 @@ const HistoryTab: React.FC<{
             <div>
               <div className="flex items-center gap-2">
                 <i className="fa-solid fa-chart-line text-[#004785]" />
-                <h2 className="text-lg font-bold text-gray-900">Treatment Trend</h2>
+                <h2 className="text-[10px] font-bold text-gray-900">Treatment Trend</h2>
               </div>
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-[10px] text-gray-500">
                 Investigation Results from the Diagnosis tab, per cancer type, oldest to newest visit.
               </p>
             </div>
             {trendReadingCount > 0 && (
-              <span className="text-xs font-semibold text-[#004785] bg-blue-50 border border-blue-100 px-2.5 py-1 rounded-full">
-                {trendTestCount} test{trendTestCount === 1 ? "" : "s"} · {trendReadingCount} reading
-                {trendReadingCount === 1 ? "" : "s"}
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handlePrintTreatmentTrend}
+                  className="px-4 py-1.5 rounded-lg border border-[#004785] text-[#004785] hover:bg-[#004785]/10 active:scale-[0.98] text-[10px] font-semibold transition-all flex items-center gap-1.5"
+                >
+                  <i className="fa-solid fa-print text-[10px]" />
+                  Print
+                </button>
+                <span className="text-[10px] font-semibold text-[#004785] bg-blue-50 border border-blue-100 px-2.5 py-1 rounded-full">
+                  {trendTestCount} test{trendTestCount === 1 ? "" : "s"} · {trendReadingCount} reading
+                  {trendReadingCount === 1 ? "" : "s"}
+                </span>
+              </div>
             )}
           </div>
 
           <div className={`space-y-7 p-5 transition-opacity ${investigationLoading && treatmentTrends.length > 0 ? "opacity-60" : ""}`}>
             {investigationLoading && treatmentTrends.length === 0 ? (
-              <div className="flex items-center justify-center py-10 text-sm text-gray-500">
+              <div className="flex items-center justify-center py-10 text-[10px] text-gray-500">
                 <i className="fa-solid fa-circle-notch fa-spin mr-2" />
                 Loading investigation results...
               </div>
             ) : treatmentTrends.length === 0 ? (
               <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-gray-300 bg-gray-50/60 px-6 py-10 text-center">
-                <i className="fa-solid fa-chart-line mb-3 text-2xl text-gray-300" />
-                <p className="text-sm font-semibold text-gray-700">No investigation results yet</p>
-                <p className="mt-1 max-w-md text-xs text-gray-500">
+                <i className="fa-solid fa-chart-line mb-3 text-[10px] text-gray-300" />
+                <p className="text-[10px] font-semibold text-gray-700">No investigation results yet</p>
+                <p className="mt-1 max-w-md text-[10px] text-gray-500">
                   Values entered in the Diagnosis tab's Investigation Results (PSA, CEA, CA-125 and
                   others) appear here as a trend for each test.
                 </p>
@@ -2220,11 +2324,11 @@ const HistoryTab: React.FC<{
               treatmentTrends.map((group, index) => (
                 <div key={group.cancerTypeId}>
                   <div className="mb-3 flex items-center gap-2">
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#004785] text-xs font-bold text-white">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#004785] text-[10px] font-bold text-white">
                       {index + 1}
                     </span>
-                    <h3 className="text-sm font-bold text-gray-900">{group.cancerType}</h3>
-                    <span className="text-xs text-gray-400">
+                    <h3 className="text-[10px] font-bold text-gray-900">{group.cancerType}</h3>
+                    <span className="text-[10px] text-gray-400">
                       {group.charts.length} test{group.charts.length === 1 ? "" : "s"}
                     </span>
                   </div>
@@ -2244,7 +2348,7 @@ const HistoryTab: React.FC<{
       <section id="chemotherapy-cycle-history" className="px-6 pb-6">
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
           <div className="flex justify-between items-center p-5 border-b border-gray-200 bg-gray-50/50">
-            <h2 className="text-lg font-bold text-gray-900">
+            <h2 className="text-[10px] font-bold text-gray-900">
               Chemotherapy Cycle History
             </h2>
 
@@ -2253,15 +2357,15 @@ const HistoryTab: React.FC<{
               onClick={() => {
                 document.getElementById("treatment-timeline-section")?.scrollIntoView({ behavior: "smooth" });
               }}
-              className="text-sm text-blue-600 font-bold hover:underline"
+              className="text-[10px] text-blue-600 font-bold hover:underline"
             >
               View Protocol Details
             </button>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
+            <table className="w-full text-[10px] text-left">
+              <thead className="text-[10px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 font-semibold">
                     Cycle
@@ -2294,7 +2398,7 @@ const HistoryTab: React.FC<{
                   <tr>
                     <td
                       colSpan={6}
-                      className="px-6 py-6 text-center text-xs text-gray-400"
+                      className="px-6 py-6 text-center text-[10px] text-gray-400"
                     >
                       No chemotherapy cycles recorded for this patient yet.
                     </td>
@@ -2327,7 +2431,7 @@ const HistoryTab: React.FC<{
 
                       <td className="px-6 py-4 text-right">
                         <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
                             row.status === "COMPLETED"
                               ? "bg-green-100 text-green-800"
                               : row.status === "IN_PROGRESS" ||
@@ -2354,14 +2458,14 @@ const HistoryTab: React.FC<{
       <section className="px-6 pb-6">
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
           <div className="flex justify-between items-center p-5 border-b border-gray-200 bg-gray-50/50">
-            <h2 className="text-lg font-bold text-gray-900">
+            <h2 className="text-[10px] font-bold text-gray-900">
               Medication History
             </h2>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
+            <table className="w-full text-[10px] text-left">
+              <thead className="text-[10px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 font-semibold">
                     Medication
@@ -2394,7 +2498,7 @@ const HistoryTab: React.FC<{
                   <tr>
                     <td
                       colSpan={6}
-                      className="px-6 py-6 text-center text-xs text-gray-400"
+                      className="px-6 py-6 text-center text-[10px] text-gray-400"
                     >
                       No medications prescribed for this patient yet.
                     </td>
@@ -2427,11 +2531,11 @@ const HistoryTab: React.FC<{
 
                       <td className="px-6 py-4 text-right">
                         {medication.active ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800">
                             ACTIVE
                           </span>
                         ) : (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-800">
                             COMPLETED
                           </span>
                         )}
@@ -2449,17 +2553,21 @@ const HistoryTab: React.FC<{
       <section className="px-6 pb-6">
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
           <div className="flex justify-between items-center p-5 border-b border-gray-200 bg-gray-50/50">
-            <h2 className="text-lg font-bold text-gray-900">
+            <h2 className="text-[10px] font-bold text-gray-900">
               Adverse Events History
             </h2>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
+            <table className="w-full text-[10px] text-left">
+              <thead className="text-[10px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 font-semibold">
                     Date
+                  </th>
+
+                  <th className="px-6 py-3 font-semibold whitespace-nowrap">
+                    Cycle / Day
                   </th>
 
                   <th className="px-6 py-3 font-semibold">
@@ -2484,8 +2592,8 @@ const HistoryTab: React.FC<{
                 {adverseEventRows.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={5}
-                      className="px-6 py-6 text-center text-xs text-gray-400"
+                      colSpan={6}
+                      className="px-6 py-6 text-center text-[10px] text-gray-400"
                     >
                       No adverse events recorded for this patient yet.
                     </td>
@@ -2493,8 +2601,12 @@ const HistoryTab: React.FC<{
                 ) : (
                   adverseEventRows.map((event) => (
                     <tr key={event.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 text-gray-500">
+                      <td className="px-6 py-4 text-gray-500 whitespace-nowrap">
                         {event.date || "—"}
+                      </td>
+
+                      <td className="px-6 py-4 text-gray-700 whitespace-nowrap">
+                        {event.cycleDay || "—"}
                       </td>
 
                       <td className="px-6 py-4 font-medium text-gray-900">
@@ -2502,7 +2614,21 @@ const HistoryTab: React.FC<{
                       </td>
 
                       <td className="px-6 py-4 text-gray-700">
-                        {event.grade}
+                        {(() => {
+                          const grade = CTCAE_GRADES.find(
+                            (g) => g.value === event.gradeValue
+                          );
+                          return grade ? (
+                            <span
+                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${grade.badge}`}
+                              title={`CTCAE Grade ${grade.value} - ${grade.severity}`}
+                            >
+                              G{grade.value}
+                            </span>
+                          ) : (
+                            event.grade
+                          );
+                        })()}
                       </td>
 
                       <td className="px-6 py-4 text-gray-700">
@@ -2511,8 +2637,10 @@ const HistoryTab: React.FC<{
 
                       <td className="px-6 py-4 text-right">
                         <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                            event.outcome === "ONGOING"
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
+                            event.outcome === "RESOLVED"
+                              ? "bg-green-100 text-green-800"
+                              : event.outcome === "ONGOING"
                               ? "bg-yellow-100 text-yellow-800"
                               : "bg-red-100 text-red-800"
                           }`}
@@ -2533,21 +2661,21 @@ const HistoryTab: React.FC<{
       <div className="px-6 pb-8 flex justify-end gap-4">
         <button
           type="button"
-          className="px-6 py-2.5 border border-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-colors text-sm"
+          className="px-6 py-2.5 border border-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-colors text-[10px]"
         >
           Save &amp; Exit
         </button>
 
         <button
           type="button"
-          className="px-6 py-2.5 border border-blue-600 text-blue-600 font-semibold rounded-lg hover:bg-blue-50 transition-colors text-sm"
+          className="px-6 py-2.5 border border-blue-600 text-blue-600 font-semibold rounded-lg hover:bg-blue-50 transition-colors text-[10px]"
         >
           Generate Report
         </button>
 
         <button
           type="button"
-          className="px-6 py-2.5 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors shadow-sm text-sm"
+          className="px-6 py-2.5 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors shadow-sm text-[10px]"
         >
           Submit Review
         </button>
@@ -2575,8 +2703,8 @@ const HistoryTab: React.FC<{
                     <i className="fa-solid fa-file-medical" />
                   </div>
                   <div>
-                    <h3 className="text-base font-bold text-gray-900">Annual Report History</h3>
-                    <p className="text-xs text-gray-500">
+                    <h3 className="text-[10px] font-bold text-gray-900">Annual Report History</h3>
+                    <p className="text-[10px] text-gray-500">
                       {encounterReports.length} report{encounterReports.length === 1 ? "" : "s"}
                     </p>
                   </div>
@@ -2594,17 +2722,17 @@ const HistoryTab: React.FC<{
               {/* Table */}
               <div className="overflow-x-auto">
                 {encounterReports.length === 0 ? (
-                  <p className="text-sm text-gray-500 py-8 text-center">
+                  <p className="text-[10px] text-gray-500 py-8 text-center">
                     No lab reports recorded for this patient yet.
                   </p>
                 ) : (
-                  <table className="w-full text-sm">
+                  <table className="w-full text-[10px]">
                     <thead className="sticky top-0 z-10">
                       <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="px-5 py-3 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold whitespace-nowrap">Completed Date</th>
-                        <th className="px-5 py-3 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold whitespace-nowrap">Test Name</th>
-                        <th className="px-5 py-3 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold whitespace-nowrap">Result</th>
-                        <th className="px-5 py-3 text-left text-[11px] uppercase tracking-wide text-gray-500 font-semibold">Impression</th>
+                        <th className="px-5 py-3 text-left text-[10px] uppercase tracking-wide text-gray-900 font-bold whitespace-nowrap">Completed Date</th>
+                        <th className="px-5 py-3 text-left text-[10px] uppercase tracking-wide text-gray-900 font-bold whitespace-nowrap">Test Name</th>
+                        <th className="px-5 py-3 text-left text-[10px] uppercase tracking-wide text-gray-900 font-bold whitespace-nowrap">Result</th>
+                        <th className="px-5 py-3 text-left text-[10px] uppercase tracking-wide text-gray-900 font-bold">Impression</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -2638,7 +2766,7 @@ const HistoryTab: React.FC<{
                       onClick={() => setReportPage((p) => p - 1)}
                       className="w-7 h-7 rounded-full border border-gray-200 bg-white hover:bg-gray-50 text-[#004785] flex items-center justify-center transition-colors shadow-sm"
                     >
-                      <i className="fa-solid fa-chevron-up text-[11px]" />
+                      <i className="fa-solid fa-chevron-up text-[10px]" />
                     </button>
                   )}
                   {(reportPage + 1) * 5 < encounterReports.length && (
@@ -2647,7 +2775,7 @@ const HistoryTab: React.FC<{
                       onClick={() => setReportPage((p) => p + 1)}
                       className="w-7 h-7 rounded-full border border-gray-200 bg-white hover:bg-gray-50 text-[#004785] flex items-center justify-center transition-colors shadow-sm"
                     >
-                      <i className="fa-solid fa-chevron-down text-[11px]" />
+                      <i className="fa-solid fa-chevron-down text-[10px]" />
                     </button>
                   )}
                 </div>
@@ -2658,7 +2786,7 @@ const HistoryTab: React.FC<{
                 <button
                   type="button"
                   onClick={() => setLabReportModalOpen(false)}
-                  className="px-4 py-1.5 rounded-lg border border-gray-300 text-gray-700 font-semibold hover:bg-gray-100 transition-colors text-sm"
+                  className="px-4 py-1.5 rounded-lg border border-gray-300 text-gray-700 font-semibold hover:bg-gray-100 transition-colors text-[10px]"
                 >
                   Close
                 </button>
@@ -2688,10 +2816,10 @@ const HistoryTab: React.FC<{
                     <i className="fa-solid fa-user" />
                   </div>
                   <div>
-                    <h3 className="text-base font-bold text-gray-900">
+                    <h3 className="text-[10px] font-bold text-gray-900">
                       Patient 360 Visit History
                     </h3>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-[10px] text-gray-500">
                       {patient360Visits.length} visit
                       {patient360Visits.length === 1 ? "" : "s"} · oldest
                       first
@@ -2716,7 +2844,7 @@ const HistoryTab: React.FC<{
                 style={{ scrollbarWidth: "thin" }}
               >
                 {patient360Visits.length === 0 ? (
-                  <p className="text-sm text-gray-500 py-6 text-center">
+                  <p className="text-[10px] text-gray-500 py-6 text-center">
                     No visits recorded for this patient yet.
                   </p>
                 ) : (
@@ -2734,7 +2862,7 @@ const HistoryTab: React.FC<{
                         <div className="flex items-center justify-between gap-2 mb-3">
                           <div className="flex items-center gap-2">
                             <div
-                              className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs ${
+                              className={`w-7 h-7 rounded-lg flex items-center justify-center text-[10px] ${
                                 isLatest
                                   ? "bg-[#004785] text-white"
                                   : "bg-[#D6E3FF] text-[#00488D]"
@@ -2742,7 +2870,7 @@ const HistoryTab: React.FC<{
                             >
                               <i className="fa-regular fa-calendar" />
                             </div>
-                            <span className="text-sm font-bold text-gray-900">
+                            <span className="text-[10px] font-bold text-gray-900">
                               {fmtHistoryDate(visit.date) || "—"}
                             </span>
                             <span
@@ -2762,7 +2890,7 @@ const HistoryTab: React.FC<{
                           )}
                         </div>
 
-                        <div className="space-y-2 text-sm">
+                        <div className="space-y-2 text-[10px]">
                           {visit.staging ? (
                             <>
                               {renderVisitField("Diagnosis name", stagingDiagnosisName(visit.staging), true)}
@@ -2785,7 +2913,7 @@ const HistoryTab: React.FC<{
               </div>
 
               {/* Footer */}
-              <div className="px-5 py-3 border-t border-gray-100 bg-[#F7F9FB] flex items-center justify-between text-xs text-gray-500">
+              <div className="px-5 py-3 border-t border-gray-100 bg-[#F7F9FB] flex items-center justify-between text-[10px] text-gray-500">
                 <span>
                   <i className="fa-solid fa-arrow-up mr-1" />
                   Scroll up to see older visits
@@ -2837,12 +2965,12 @@ const HistoryTab: React.FC<{
           <div className="flex items-center gap-6">
             <BellNotificationButton size="md" />
 
-            <span className="text-blue-600 font-semibold text-sm">
+            <span className="text-blue-600 font-semibold text-[10px]">
               HMS
             </span>
 
             <div className="w-8 h-8 rounded-full bg-slate-800 border-2 border-slate-300 flex items-center justify-center overflow-hidden">
-              <i className="fa-solid fa-user text-white text-xs" />
+              <i className="fa-solid fa-user text-white text-[10px]" />
             </div>
           </div>
         </header>
@@ -2854,7 +2982,7 @@ const HistoryTab: React.FC<{
 
         {/* FOOTER */}
         <footer className="bg-white border-t border-gray-200 mt-auto">
-          <div className="max-w-[1400px] mx-auto px-6 py-6 flex flex-col md:flex-row justify-between items-center text-sm text-gray-500">
+          <div className="max-w-[1400px] mx-auto px-6 py-6 flex flex-col md:flex-row justify-between items-center text-[10px] text-gray-500">
             <div className="mb-4 md:mb-0">
               © 2026 Hospital Management System. All rights reserved.
             </div>

@@ -905,6 +905,14 @@ const AppointmentDetails: React.FC = () => {
           </section>
         </div>
 
+        {/* Vitals Section -- right after the provider / patient cards (Reusing PatientVitalsPanel from patientProfile.tsx) */}
+        <section className="space-y-2">
+          <PatientVitalsPanel
+            patientId={appointment.patient_id}
+            appointmentId={appointment.appointment_id}
+          />
+        </section>
+
         {/* 4. Full Width Visit Details (Diagnosis at top, Chief Complaint below) */}
         <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm w-full space-y-6">
           <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100">
@@ -989,11 +997,6 @@ const AppointmentDetails: React.FC = () => {
               </div>
             </div>
           </div>
-        </section>
-
-        {/* 5. Vitals Section (Reusing PatientVitalsPanel from patientProfile.tsx) */}
-        <section className="space-y-2">
-          <PatientVitalsPanel patientId={appointment.patient_id} />
         </section>
 
         {/* 6. MEDICATIONS Instructions Section */}

@@ -5,7 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import {
   employeeApi,
@@ -24,6 +24,8 @@ import {
   getAccountActivity,
   type AccountActivity,
 } from "@/utils/accountActivity";
+import { useFollowUpAlerts } from "@/context/FollowUpAlertContext";
+import { FollowUpAlertSection } from "@/components/hms/FollowUpAlertList";
 
 const DISMISSED_NOTIFICATIONS_KEY =
   "hms_dismissed_notifications";
@@ -1189,6 +1191,10 @@ function accountActivityToNotification(
 
 export default function Notifications() {
   const navigate = useNavigate();
+  const location = useLocation();
+  /* Follow-ups due head the list (doctor portal links on /doctor/...). */
+  const followUps = useFollowUpAlerts();
+  const hasFollowUps = followUps.enabled && followUps.alerts.length > 0;
   const [
     notifications,
     setNotifications,
@@ -2543,9 +2549,14 @@ export default function Notifications() {
             </p>
           )}
 
+        <FollowUpAlertSection
+          portal={location.pathname.startsWith("/doctor/") ? "doctor" : "admin"}
+        />
+
         {!isLoading &&
           !error &&
-          !hasAny && (
+          !hasAny &&
+          !hasFollowUps && (
             <p className="text-center text-xs text-[#434656]">
               No notifications yet.
             </p>

@@ -1,6 +1,8 @@
 import React, { useRef, useState, useEffect } from "react";
 import { Bell, X, Check } from "lucide-react";
 import { useNotifications } from "@/context/NotificationContext";
+import { useFollowUpAlerts } from "@/context/FollowUpAlertContext";
+import { FollowUpAlertSection } from "@/components/hms/FollowUpAlertList";
 import { cn } from "@/lib/utils";
 
 function timeAgo(timestamp: number) {
@@ -20,8 +22,12 @@ interface BellNotificationButtonProps {
 }
 
 export function BellNotificationButton({ className = "", size = "md" }: BellNotificationButtonProps) {
-  const { notifications, unreadCount, isLoading, error, markAllAsRead, clearAll, removeNotification, refetch } =
+  const { notifications, unreadCount: activityUnread, isLoading, error, markAllAsRead, clearAll, removeNotification, refetch } =
     useNotifications();
+  /* Follow-ups due are part of this list (and of its count). */
+  const followUps = useFollowUpAlerts();
+  const hasFollowUps = followUps.enabled && followUps.alerts.length > 0;
+  const unreadCount = activityUnread + (followUps.enabled ? followUps.unreadCount : 0);
   const [isOpen, setIsOpen] = useState(false);
   const [tick, setTick] = useState(0);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -246,6 +252,8 @@ export function BellNotificationButton({ className = "", size = "md" }: BellNoti
           </header>
 
           <main className="flex max-h-[420px] w-full flex-col gap-6 overflow-y-auto bg-[#f8fafc] p-4">
+            <FollowUpAlertSection portal="doctor" onNavigate={() => setIsOpen(false)} />
+
             {isLoading && (
               <p className="text-center text-xs text-[#434656]">Loading notifications...</p>
             )}
@@ -254,7 +262,7 @@ export function BellNotificationButton({ className = "", size = "md" }: BellNoti
               <p className="text-center text-xs text-[#93000a]">{error}</p>
             )}
 
-            {!isLoading && !error && notifications.length === 0 && (
+            {!isLoading && !error && notifications.length === 0 && !hasFollowUps && (
               <p className="py-6 text-center text-xs text-[#434656]">No new notifications</p>
             )}
 

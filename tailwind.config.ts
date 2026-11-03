@@ -92,10 +92,18 @@ export default {
             height: "0",
           },
         },
+        /* Marquee text that travels left -> right across its (relative,
+           overflow-hidden) track: enters fully hidden on the left, leaves
+           fully hidden on the right, whatever the text / track widths. */
+        "admin-marquee": {
+          from: { left: "0%", transform: "translateX(-100%)" },
+          to: { left: "100%", transform: "translateX(0%)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "admin-marquee": "admin-marquee 16s linear infinite",
       },
     },
   },

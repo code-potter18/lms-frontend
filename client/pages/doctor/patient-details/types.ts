@@ -282,6 +282,12 @@ export interface ChemoVitalsEntry extends ChemotherapyVitalsRecord {
 
 export interface ChemoAdverseEventEntry extends ChemotherapyAdverseEventRecord {
   adverse_event_id?: string;
+  chemotherapy_cycle_id?: string;
+  /* The cycle day it was recorded against (null for older events). */
+  plan_order_id?: string | null;
+  cycle_day?: number | null;
+  resolved?: boolean | null;
+  resolution_date?: string | null;
   reaction_grade?: string | null;
   severity?: string | null;
   doctor_action?: string | null;

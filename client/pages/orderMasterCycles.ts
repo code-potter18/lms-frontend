@@ -58,8 +58,9 @@ export interface CycleSummary {
  *   - chemotherapy_cycle[]  one row per cycle number (1..planned_cycles),
  *                           created up front by the backend
  *   - plan_orders[]         one row per saved cycle + day order
- *   - current_order         the backend's own "day being worked on"
- *                           (first still-ORDERED day, else latest COMPLETED)
+ *   - current_order         the backend's own "day being worked on" (first
+ *                           still-ORDERED day, else latest IN_ADMINISTRATION,
+ *                           else latest COMPLETED)
  *
  * chemotherapy_cycle.cycle_day is deliberately NOT used: it only records the
  * day last ordered, so it is null on a fresh plan and stale afterwards.
@@ -73,8 +74,11 @@ export function summarizeCycles(plan: ChemoPlan): CycleSummary {
   const planned = plan.planned_cycles ?? 0;
   const completed = plan.completed_cycles ?? 0;
 
+  const statusOf = (order: { order_status?: string | null }) =>
+    String(order.order_status ?? "").toUpperCase();
   const currentOrder =
-    orders.find((order) => String(order.order_status ?? "").toUpperCase() === "ORDERED") ??
+    orders.find((order) => statusOf(order) === "ORDERED") ??
+    [...orders].reverse().find((order) => statusOf(order) === "IN_ADMINISTRATION") ??
     plan.current_order ??
     null;
 

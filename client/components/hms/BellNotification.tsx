@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Bell, Check, Trash2 } from "lucide-react";
 import { useNotifications } from "@/context/NotificationContext";
+import { useFollowUpAlerts } from "@/context/FollowUpAlertContext";
+import { FollowUpAlertSection } from "@/components/hms/FollowUpAlertList";
 import { cn } from "@/lib/utils";
 
 const ACTION_COLORS: Record<string, string> = {
@@ -38,7 +40,11 @@ function timeAgo(timestamp: number) {
 }
 
 export function BellNotification() {
-  const { unreadCount, notifications, markAllAsRead, removeNotification } = useNotifications();
+  const { unreadCount: activityUnread, notifications, markAllAsRead, removeNotification } = useNotifications();
+  /* Follow-ups due are part of this list (and of its count). */
+  const followUps = useFollowUpAlerts();
+  const hasFollowUps = followUps.enabled && followUps.alerts.length > 0;
+  const unreadCount = activityUnread + (followUps.enabled ? followUps.unreadCount : 0);
   const [open, setOpen] = useState(false);
   const [tick, setTick] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
@@ -115,7 +121,12 @@ export function BellNotification() {
 
           {/* List */}
           <div className="max-h-[480px] overflow-y-auto">
-            {items.length === 0 ? (
+            {hasFollowUps && (
+              <div className="border-b border-[#E5E7EB] bg-[#f8fafc] p-3">
+                <FollowUpAlertSection portal="admin" onNavigate={() => setOpen(false)} />
+              </div>
+            )}
+            {items.length === 0 && hasFollowUps ? null : items.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-[#94A3B8]">
                 <Bell className="w-8 h-8 mb-2 opacity-40" />
                 <p className="text-xs font-medium">No notifications yet</p>
@@ -176,7 +187,7 @@ export function BellNotification() {
           </div>
 
           {/* Footer */}
-          {items.length > 0 && (
+          {(items.length > 0 || hasFollowUps) && (
             <div className="px-4 py-2.5 border-t border-[#E5E7EB] bg-[#F8F9FF]">
               <button
                 type="button"

@@ -10,6 +10,7 @@ import {
 } from "../../api/doctorDashboard.api";
 import { activeBranches } from "../../lib/utils";
 import { encounterApi } from "../../api/encounter.api";
+import { ipdApi } from "../../api/ipd.api";
 import { getUser } from "../../utils/token";
 import { useToast } from "@/hooks/use-toast";
 import { BellNotificationButton } from "@/components/hms/BellNotificationButton";
@@ -17,7 +18,7 @@ import { BellNotificationButton } from "@/components/hms/BellNotificationButton"
 import { useCriticalPatients } from "@/hooks/useCriticalPatients";
 import { CriticalDot, CriticalCorner, CriticalWrapper } from "@/components/hms/CriticalPatientIndicator";
 
-type AppointmentStatus = "Check Out" | "Check In" | "Cancelled";
+type AppointmentStatus = "Check Out" | "Check In" | "Cancelled" | "Admitted";
 
 interface Appointment {
   patientId: string;
@@ -32,6 +33,9 @@ interface Appointment {
   originalStatus: string;
   visit_type: string;
   hasEncounter: boolean;
+  /* Set only for an inpatient row: the admission's own encounter, which the
+     consultation opens on directly (no appointment involved). */
+  encounterNo?: string;
 }
 
 const fallbackHospital = "HMS Main Hospital";
@@ -449,7 +453,42 @@ export default function DoctorDashboard() {
         })
       );
 
-      setDashboardAppointments(appointmentsWithEncounters);
+      /* Inpatients assigned to this doctor show in the same table. They have
+         no appointment -- the admission's encounter is the link -- so
+         Proceed opens the consultation on that encounter directly. */
+      let inpatientRows: Appointment[] = [];
+      try {
+        const admissionsResponse = await ipdApi.getAll({
+          branchId: branchId || undefined,
+          status: "ADMITTED",
+          limit: 100,
+        });
+        inpatientRows = (admissionsResponse.data?.data?.admissions ?? [])
+          .filter((a) => a.employee_id === employeeId && a.encounter_no)
+          .map((a) => ({
+            patientId: a.patient_id,
+            patient:
+              [a.patient_bio_data?.patient_first_name, a.patient_bio_data?.patient_last_name]
+                .filter(Boolean)
+                .join(" ") || "Unknown Patient",
+            image: "",
+            dateTime: `IP ${a.ip_number} - ${a.ward_master?.ward_name ?? ""} ${a.bed_master?.bed_number ?? ""}`.trim(),
+            appointmentDate: a.admission_date,
+            appointmentTime: "",
+            phone: a.patient_bio_data?.patient_primary_mobile || "-",
+            status: "Admitted" as AppointmentStatus,
+            appointmentId: "",
+            originalStatus: "ADMITTED",
+            visit_type: "Inpatient",
+            hasEncounter: true,
+            encounterNo: a.encounter_no ?? undefined,
+          }));
+      } catch (admissionsError) {
+        // Non-fatal: the appointment list still shows.
+        console.warn("Failed to load inpatients for dashboard:", admissionsError);
+      }
+
+      setDashboardAppointments([...appointmentsWithEncounters, ...inpatientRows]);
     } catch (error: any) {
       console.error("Failed to load doctor dashboard:", error);
       setDashboardError(
@@ -936,7 +975,11 @@ export default function DoctorDashboard() {
                             appointmentDate: appointment.appointmentDate,
                             appointmentTime: appointment.appointmentTime,
                             consultedBy: doctorName,
-                            visit_type:appointment.visit_type
+                            visit_type:appointment.visit_type,
+                            // Inpatient row: open on the admission's encounter.
+                            ...(appointment.encounterNo
+                              ? { appointmentId: undefined, encounterNo: appointment.encounterNo }
+                              : {}),
                           },
                         })
                       }

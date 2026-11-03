@@ -180,19 +180,19 @@ const PatientDischargeMedication: React.FC = () => {
             />
           </div>
 
-          <h2 className="mb-2 text-[22px] font-bold text-gray-900">
+          <h2 className="mb-2 text-xs font-bold text-gray-900">
             Vijaya Nallusamy
           </h2>
 
-          <p className="mb-4 text-[15px] text-gray-500">
+          <p className="mb-4 text-[10px] text-gray-500">
             51 Y / Female
           </p>
 
-          <span className="mb-6 rounded-full bg-gray-100 px-4 py-1.5 text-xs font-semibold text-gray-600">
+          <span className="mb-6 rounded-full bg-gray-100 px-4 py-1.5 text-[10px] font-semibold text-gray-600">
             ONC-2026-10025
           </span>
 
-          <p className="text-center text-sm font-bold tracking-wide text-blue-700">
+          <p className="text-center text-[10px] font-bold tracking-wide text-blue-700">
             DUCTAL CARCINOMA STAGE II
           </p>
         </div>
@@ -203,11 +203,11 @@ const PatientDischargeMedication: React.FC = () => {
             <PhoneIcon />
 
             <div>
-              <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">
                 Phone
               </p>
 
-              <p className="text-[15px] font-medium text-gray-700">
+              <p className="text-[10px] font-medium text-gray-700">
                 +91 98765 43210
               </p>
             </div>
@@ -217,11 +217,11 @@ const PatientDischargeMedication: React.FC = () => {
             <MailIcon />
 
             <div>
-              <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">
                 Email
               </p>
 
-              <p className="text-[15px] font-medium text-gray-700">
+              <p className="text-[10px] font-medium text-gray-700">
                 vijaya.n@example.com
               </p>
             </div>
@@ -232,41 +232,41 @@ const PatientDischargeMedication: React.FC = () => {
         <div className="flex-grow space-y-8 p-8">
           <div className="grid grid-cols-2 gap-x-4 gap-y-6">
             <div>
-              <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">
                 Height
               </p>
 
-              <p className="text-[15px] font-bold text-gray-900">
+              <p className="text-[10px] font-bold text-gray-900">
                 154 cm
               </p>
             </div>
 
             <div>
-              <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">
                 Weight
               </p>
 
-              <p className="text-[15px] font-bold text-gray-900">
+              <p className="text-[10px] font-bold text-gray-900">
                 52 kg
               </p>
             </div>
 
             <div>
-              <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">
                 BSA
               </p>
 
-              <p className="text-[15px] font-bold text-gray-900">
+              <p className="text-[10px] font-bold text-gray-900">
                 1.49 m²
               </p>
             </div>
 
             <div>
-              <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">
                 BMI
               </p>
 
-              <p className="text-[15px] font-bold text-gray-900">
+              <p className="text-[10px] font-bold text-gray-900">
                 21.93
               </p>
             </div>
@@ -275,7 +275,7 @@ const PatientDischargeMedication: React.FC = () => {
           <button
             type="button"
             onClick={handleViewProfile}
-            className="mt-8 w-full rounded-md border border-blue-600 px-4 py-2.5 font-semibold text-blue-600 transition-colors duration-200 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            className="mt-8 w-full rounded-md border border-blue-600 px-4 py-2.5 text-[10px] font-semibold text-blue-600 transition-colors duration-200 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             View Full Profile
           </button>
@@ -350,7 +350,7 @@ const PatientDischargeMedication: React.FC = () => {
                 </div>
 
                 <span
-                  className={`text-center text-[11px] font-bold uppercase tracking-widest ${
+                  className={`text-center text-[10px] font-bold uppercase tracking-widest ${
                     activeStep === 1
                       ? "text-gray-900"
                       : "text-gray-600"
@@ -377,7 +377,7 @@ const PatientDischargeMedication: React.FC = () => {
                 </div>
 
                 <span
-                  className={`text-center text-[11px] font-bold uppercase tracking-widest ${
+                  className={`text-center text-[10px] font-bold uppercase tracking-widest ${
                     activeStep === 2
                       ? "text-gray-900"
                       : "text-gray-600"
@@ -404,7 +404,7 @@ const PatientDischargeMedication: React.FC = () => {
                 </div>
 
                 <span
-                  className={`text-center text-[11px] font-bold uppercase tracking-widest ${
+                  className={`text-center text-[10px] font-bold uppercase tracking-widest ${
                     activeStep === 3
                       ? "text-gray-900"
                       : "text-gray-600"
@@ -429,23 +429,23 @@ const PatientDischargeMedication: React.FC = () => {
               <table className="w-full min-w-[850px] border-collapse text-left">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className="w-1/4 px-8 py-5 text-[11px] font-bold uppercase tracking-wider text-gray-600">
+                    <th className="w-1/4 px-8 py-5 text-[10px] font-bold uppercase tracking-wider text-gray-600">
                       Drug Name
                     </th>
 
-                    <th className="w-1/6 px-8 py-5 text-[11px] font-bold uppercase tracking-wider text-gray-600">
+                    <th className="w-1/6 px-8 py-5 text-[10px] font-bold uppercase tracking-wider text-gray-600">
                       Dosage
                     </th>
 
-                    <th className="w-1/6 px-8 py-5 text-[11px] font-bold uppercase tracking-wider text-gray-600">
+                    <th className="w-1/6 px-8 py-5 text-[10px] font-bold uppercase tracking-wider text-gray-600">
                       Frequency
                     </th>
 
-                    <th className="w-1/4 px-8 py-5 text-[11px] font-bold uppercase tracking-wider text-gray-600">
+                    <th className="w-1/4 px-8 py-5 text-[10px] font-bold uppercase tracking-wider text-gray-600">
                       Instruction
                     </th>
 
-                    <th className="w-1/6 px-8 py-5 text-[11px] font-bold uppercase tracking-wider text-gray-600">
+                    <th className="w-1/6 px-8 py-5 text-[10px] font-bold uppercase tracking-wider text-gray-600">
                       Duration
                     </th>
                   </tr>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import API from "../../../api/axios";
 import { getUser } from "../../../utils/token";
@@ -20,8 +20,11 @@ import {
   computeProtocolNextVisitDate,
   findActiveEncounter,
   formatPickedDate,
+  dmyToIsoStrict,
   parsePickedDate,
   resolveEffectiveStartDate,
+  fetchScheduledDate,
+  dateOnlyDMY,
 } from "./helpers";
 import {
   ArrowLeftIcon,
@@ -49,22 +52,52 @@ const FollowUp: React.FC<{
   patientId?: string;
   measurements?: MeasurementValues;
   onNext?: () => void;
+  /* The consultation's encounter - the follow-up is saved in it. */
+  encounterNo?: string;
 }> = ({
   embedded = false,
   patientId,
   measurements,
   onNext,
+  encounterNo,
 }) => {
   const location = useLocation();
   const statePatientId = (
     (location.state as ConsultationState | null)?.patientId ?? ""
   );
   const resolvedPatientId = patientId || statePatientId;
+  // Set when opened on an inpatient's admission encounter (doctor dashboard).
+  const stateEncounterNo = (location.state as ConsultationState | null)?.encounterNo ?? "";
   const [userAvatarUrl, setUserAvatarUrl] = useState<string>(() => localStorage.getItem("user_photo") || "");
   const [avatarLoading, setAvatarLoading] = useState<boolean>(() => !localStorage.getItem("user_photo"));
 
   const [activeStep, setActiveStep] = useState<FollowUpStep>(1);
   const [nextVisitDate, setNextVisitDate] = useState("");
+  /* The follow-up date already saved on this visit's encounter (from the
+     Consultation's Advice or an earlier Follow Up save). It is the one
+     Next Visit Date: the protocol / schedule calculation never replaces it. */
+  const savedFollowUpRef = useRef("");
+
+  useEffect(() => {
+    const visitEncounterNo = encounterNo || stateEncounterNo;
+    if (!visitEncounterNo) return;
+    let cancelled = false;
+    encounterApi
+      .getByNumber(visitEncounterNo)
+      .then((response) => {
+        const saved = dateOnlyDMY(response.data?.data?.follow_up_date);
+        if (cancelled || !saved) return;
+        savedFollowUpRef.current = saved;
+        setNextVisitDate(saved);
+        if (resolvedPatientId) {
+          localStorage.setItem(`hms_next_cycle_date_${resolvedPatientId}`, saved);
+        }
+      })
+      .catch((error) => console.error("Failed to load the saved follow-up date:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [encounterNo, stateEncounterNo, resolvedPatientId]);
   const [nextCycle, setNextCycle] = useState("");
   const [cycleOptions, setCycleOptions] = useState<string[]>([]);
   const [plan, setPlan] = useState("");
@@ -188,18 +221,38 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
           statedStartDate,
           protocol.cycle_interval_days
         );
-        if (protocolNextVisit) {
+        if (protocolNextVisit && !savedFollowUpRef.current) {
           localStorage.setItem(
             `hms_next_cycle_date_${resolvedPatientId}`,
             protocolNextVisit
           );
           setNextVisitDate(protocolNextVisit);
         }
+        /* The plan's schedule wins: the next cycle/day's planned date. */
+        void applyScheduledVisitDate(normalizedCycle);
       })
       .catch((error) => {
         console.error("Failed to load follow-up protocol:", error);
       });
   }, [resolvedPatientId]);
+
+  /* The Next Visit Date of a cycle/day: its planned date in the plan's
+     schedule (kept for the Summary too). Nothing changes when the plan
+     has no schedule for it. */
+  const applyScheduledVisitDate = async (cycleLabel: string) => {
+    if (!resolvedPatientId || !cycleLabel) return;
+    const scheduled = await fetchScheduledDate(resolvedPatientId, cycleLabel);
+    if (scheduled && !savedFollowUpRef.current) {
+      localStorage.setItem(`hms_next_cycle_date_${resolvedPatientId}`, scheduled);
+      setNextVisitDate(scheduled);
+    }
+  };
+
+  /* Picking another next cycle/day shows that day's planned date. */
+  useEffect(() => {
+    void applyScheduledVisitDate(displayedValue);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayedValue, resolvedPatientId]);
 
   /* Keep the stored next cycle in sync with this selection so the Summary
      step (which reads localStorage on mount) shows the same value -
@@ -241,16 +294,23 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
     setSubmittingFollowUp(true);
 
     try {
-      const { encounter } = await findActiveEncounter(resolvedPatientId);
+      const visitEncounterNo = encounterNo || stateEncounterNo;
+      const encounter = visitEncounterNo
+        ? (await encounterApi.getByNumber(visitEncounterNo)).data?.data
+        : (await findActiveEncounter(resolvedPatientId)).encounter;
 
       if (encounter?.encounter_no) {
+        // Next Visit Date is the single source of the follow-up date. For an
+        // inpatient encounter the backend copies it onto the admission's
+        // review date, so the discharge details show the same date.
+        const hasReviewDate = nextVisitDate.trim();
+
         const followUpLines: string[] = [];
-        if (nextVisitDate.trim()) followUpLines.push(`Next Visit: ${nextVisitDate}`);
+        if (hasReviewDate) followUpLines.push(`Next Visit: ${nextVisitDate}`);
         if (nextCycle) followUpLines.push(`Next Cycle: ${nextCycle}`);
         if (plan.trim()) followUpLines.push(`Plan: ${plan}`);
         if (notes.trim()) followUpLines.push(`Notes: ${notes}`);
 
-        const payload: { advice?: string } = {};
         const existingAdvice = encounter.advice ?? "";
         const cleanedAdvice = existingAdvice
           .replace(/\n*\[Follow Up\][\s\S]*$/, "")
@@ -259,7 +319,18 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
         if (followUpLines.length > 0) {
           parts.push("[Follow Up]", ...followUpLines);
         }
-        payload.advice = parts.filter(Boolean).join("\n\n").trim();
+
+        const payload: { advice?: string; follow_up_date?: string } = {
+          advice: parts.filter(Boolean).join("\n\n").trim(),
+        };
+        // The real structured column (previously unused -- this text line
+        // above was the only record of it).
+        // The picker holds DD-MM-YYYY; the API takes YYYY-MM-DD.
+        if (hasReviewDate) {
+          const isoDate = dmyToIsoStrict(nextVisitDate) ?? (/^\d{4}-\d{2}-\d{2}$/.test(nextVisitDate.trim()) ? nextVisitDate.trim() : undefined);
+          if (!isoDate) throw new Error("Enter the Next Visit Date as DD-MM-YYYY");
+          payload.follow_up_date = isoDate;
+        }
 
         await encounterApi.update(encounter.encounter_no, payload);
       }
@@ -446,7 +517,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
             <div>
               <label
                 htmlFor="nextVisitDate"
-                className="mb-2 block text-sm font-semibold text-gray-800"
+                className="mb-2 block text-[10px] font-semibold text-gray-800"
               >
                 Next Visit Date
               </label>
@@ -461,7 +532,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
                       onChange={(event) =>
                         setNextVisitDate(event.target.value)
                       }
-                      className="block w-full rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-base text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                      className="block w-full rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-[10px] text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                     />
 
                     <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
@@ -487,7 +558,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
             <div>
               <label
                 htmlFor="nextCycle"
-                className="mb-2 block text-sm font-semibold text-gray-800"
+                className="mb-2 block text-[10px] font-semibold text-gray-800"
               >
                 Next Cycle
               </label>
@@ -499,7 +570,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
             onChange={(event) =>
               setNextCycle(event.target.value)
             }
-            className="block w-full cursor-pointer appearance-none rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-base text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            className="block w-full cursor-pointer appearance-none rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-[10px] text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
           >
             {displayedOptions.length === 0 ? (
               <option value="">Select Next Cycle</option>
@@ -522,7 +593,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
             <div className="w-full md:pr-4">
               <label
                 htmlFor="plan"
-                className="mb-2 block text-sm font-semibold text-gray-800"
+                className="mb-2 block text-[10px] font-semibold text-gray-800"
               >
                 Plan
               </label>
@@ -534,7 +605,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
                   onChange={(event) =>
                     setPlan(event.target.value)
                   }
-                  className="block w-full cursor-pointer appearance-none rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-base text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                  className="block w-full cursor-pointer appearance-none rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-[10px] text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                 >
                   <option>Continue Treatment</option>
                   <option>Complete Treatment</option>
@@ -552,7 +623,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
               <div className="w-full md:pl-4">
                 <label
                   htmlFor="newVisit"
-                  className="mb-2 block text-sm font-semibold text-gray-800"
+                  className="mb-2 block text-[10px] font-semibold text-gray-800"
                 >
                   New Visit
                 </label>
@@ -563,7 +634,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
                     onChange={(event) =>
                       setNewVisit(event.target.value)
                     }
-                    className="block w-full cursor-pointer appearance-none rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-base text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                    className="block w-full cursor-pointer appearance-none rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-[10px] text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                   >
                     <option value="">Select Visit Type</option>
                     <option>New visit</option>
@@ -585,7 +656,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
           <div>
             <label
               htmlFor="notes"
-              className="mb-2 block text-sm font-semibold text-gray-800"
+              className="mb-2 block text-[10px] font-semibold text-gray-800"
             >
               Notes
             </label>
@@ -602,7 +673,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
       {/* FORM ACTION */}
       <div className="flex flex-col items-end gap-2">
         {followUpError && (
-          <div className="text-sm font-medium text-red-600">
+          <div className="text-[10px] font-medium text-red-600">
             {followUpError}
           </div>
         )}
@@ -610,7 +681,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
           type="button"
           onClick={handleSubmit}
           disabled={submittingFollowUp}
-          className="inline-flex items-center justify-center rounded-lg border border-transparent bg-[#2557D6] px-8 py-3 text-base font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center justify-center rounded-lg border border-transparent bg-[#2557D6] px-8 py-3 text-[10px] font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <DoubleArrowIcon />
           {submittingFollowUp ? "Submitting" : "Submit"}
@@ -641,19 +712,19 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
             className="mb-4 h-[110px] w-[110px] rounded-full object-cover shadow-sm"
           />
 
-          <h2 className="mb-1 text-xl font-bold text-gray-900">
+          <h2 className="mb-1 text-[10px] font-bold text-gray-900">
             {""}
           </h2>
 
-          <p className="mb-3 text-sm text-gray-500">
+          <p className="mb-3 text-[10px] text-gray-500">
             {""}
           </p>
 
-          <span className="mb-4 rounded-md bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-700">
+          <span className="mb-4 rounded-md bg-gray-100 px-3 py-1 text-[10px] font-bold text-gray-900">
             {""}
           </span>
 
-          <h3 className="text-center text-sm font-bold uppercase tracking-wide text-blue-600">
+          <h3 className="text-center text-[10px] font-bold uppercase tracking-wide text-blue-600">
             {""}
           </h3>
         </div>
@@ -665,11 +736,11 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
             <PhoneIcon />
 
             <div className="ml-4">
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-gray-400">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-900">
                 Phone
               </p>
 
-              <p className="text-sm font-medium text-gray-800">
+              <p className="text-[10px] font-medium text-gray-800">
                 {""}
               </p>
             </div>
@@ -679,11 +750,11 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
             <EmailIcon />
 
             <div className="ml-4">
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-gray-400">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-900">
                 Email
               </p>
 
-              <p className="text-sm font-medium text-gray-800">
+              <p className="text-[10px] font-medium text-gray-800">
                 {""}
               </p>
             </div>
@@ -695,37 +766,37 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
         <div className="grid grid-cols-2 gap-y-6 border-b border-gray-100 p-6">
 
           <div>
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-gray-400">
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-900">
               Height
             </p>
-            <p className="text-sm font-bold text-gray-900">
+            <p className="text-[10px] font-bold text-gray-900">
               {measurements.height}
             </p>
           </div>
 
           <div>
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-gray-400">
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-900">
               Weight
             </p>
-            <p className="text-sm font-bold text-gray-900">
+            <p className="text-[10px] font-bold text-gray-900">
               {measurements.weight}
             </p>
           </div>
 
           <div>
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-gray-400">
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-900">
               BSA
             </p>
-            <p className="text-sm font-bold text-gray-900">
+            <p className="text-[10px] font-bold text-gray-900">
               {measurements.bsa}
             </p>
           </div>
 
           <div>
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-gray-400">
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-900">
               BMI
             </p>
-            <p className="text-sm font-bold text-gray-900">
+            <p className="text-[10px] font-bold text-gray-900">
               {measurements.bmi}
             </p>
           </div>
@@ -737,7 +808,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
           <button
             type="button"
             onClick={handleViewProfile}
-            className="w-full rounded-lg border border-blue-500 px-4 py-2.5 text-sm font-semibold text-blue-600 transition-colors hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            className="w-full rounded-lg border border-blue-500 px-4 py-2.5 text-[10px] font-semibold text-blue-600 transition-colors hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             View Full Profile
           </button>
@@ -768,7 +839,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
               <ArrowLeftIcon />
             </button>
 
-            <h1 className="text-xl font-bold text-gray-900">
+            <h1 className="text-[10px] font-bold text-gray-900">
               Patients
             </h1>
 
@@ -833,7 +904,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
                     <CheckIcon />
                   </div>
 
-                  <span className="text-xs font-bold uppercase tracking-wider text-gray-800">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-800">
                     Discharge Medication
                   </span>
                 </button>
@@ -865,7 +936,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
                     <CheckIcon />
                   </div>
 
-                  <span className="text-xs font-bold uppercase tracking-wider text-gray-800">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-800">
                     Follow Up
                   </span>
                 </button>
@@ -895,7 +966,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
                     <CheckIcon />
                   </div>
 
-                  <span className="text-xs font-bold uppercase tracking-wider text-gray-800">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-800">
                     Summary
                   </span>
                 </button>

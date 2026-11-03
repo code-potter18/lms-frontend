@@ -14,6 +14,12 @@ import LabNav from "./labnav";
 import { LabNotificationBell } from "@/components/hms/LabNotificationBell";
 import { UserProfileDropdown } from "@/components/ui/User_profile_dropdown";
 import { getDisplayBarcode } from "./reportgeneration";
+import {
+  downloadLabReportPdf,
+  resolveStandardParameterUnit,
+  resolveStandardParameterRefRange,
+  formatGenderReferenceRange,
+} from "@/utils/labReportPdf";
 import { labReportApi, LabReportRecord } from "@/api/labReport.api";
 import { labOrderApi, labOrderItemApi, LabOrderRecord, LabOrderItemRecord } from "@/api/labOrder.api";
 import { patientApi, PatientRecord } from "@/api/patient.api";
@@ -57,59 +63,129 @@ export interface TransferItem {
 
 const DEFAULT_CBC_PARAMETERS: DiagnosticParameter[] = [
   {
-    parameter: "WBC (White Blood Cells)",
-    result: "6.80",
-    unit: "10^3/µL",
-    referenceRange: "4.0 - 10.0",
-    status: "NORMAL",
-  },
-  {
-    parameter: "RBC (Red Blood Cells)",
-    result: "4.82",
-    unit: "10^6/µL",
-    referenceRange: "4.2 - 5.8",
-    status: "NORMAL",
-  },
-  {
-    parameter: "HGB (Hemoglobin)",
+    parameter: "Hemoglobin",
     result: "14.2",
     unit: "g/dL",
-    referenceRange: "13.0 - 17.0",
+    referenceRange: "13-17 g/dL",
     status: "NORMAL",
   },
   {
-    parameter: "HCT (Hematocrit)",
+    parameter: "Total WBC count (TC)",
+    result: "6800",
+    unit: "cells/µL",
+    referenceRange: "4000 - 11000",
+    status: "NORMAL",
+  },
+  {
+    parameter: "RBC count",
+    result: "4.82",
+    unit: "million/µL",
+    referenceRange: "4.5-5.5 million/µL",
+    status: "NORMAL",
+  },
+  {
+    parameter: "PCV / HCT",
     result: "43.1",
     unit: "%",
-    referenceRange: "40 - 50",
+    referenceRange: "40-50 %",
     status: "NORMAL",
   },
   {
-    parameter: "MCV (Mean Corpuscular Vol)",
+    parameter: "MCV",
     result: "87.6",
     unit: "fL",
-    referenceRange: "80 - 100",
+    referenceRange: "83 - 101",
     status: "NORMAL",
   },
   {
-    parameter: "MCH (Mean Corpuscular Hb)",
+    parameter: "MCH",
     result: "29.1",
     unit: "pg",
-    referenceRange: "27 - 34",
+    referenceRange: "27 - 32",
     status: "NORMAL",
   },
   {
-    parameter: "MCHC (MCH Concentration)",
+    parameter: "MCHC",
     result: "33.0",
     unit: "g/dL",
-    referenceRange: "32 - 36",
+    referenceRange: "31.5 - 34.5",
     status: "NORMAL",
   },
   {
-    parameter: "PLT (Platelet Count)",
-    result: "235",
-    unit: "10^3/µL",
-    referenceRange: "150 - 450",
+    parameter: "RDW-CV",
+    result: "12.8",
+    unit: "%",
+    referenceRange: "11.6 - 14",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Platelet count",
+    result: "235000",
+    unit: "cells/µL",
+    referenceRange: "150000 - 410000",
+    status: "NORMAL",
+  },
+  {
+    parameter: "MPV",
+    result: "9.2",
+    unit: "fL",
+    referenceRange: "7.5 - 11.5",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Neutrophils",
+    result: "58",
+    unit: "%",
+    referenceRange: "40 - 80",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Lymphocytes",
+    result: "32",
+    unit: "%",
+    referenceRange: "20 - 40",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Eosinophils",
+    result: "3",
+    unit: "%",
+    referenceRange: "1 - 6",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Monocytes",
+    result: "6",
+    unit: "%",
+    referenceRange: "2 - 10",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Basophils",
+    result: "1",
+    unit: "%",
+    referenceRange: "0 - 2",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Absolute Neutrophil Count (ANC)",
+    result: "3944",
+    unit: "cells/µL",
+    referenceRange: "2000 - 7000",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Absolute Lymphocyte Count",
+    result: "2176",
+    unit: "cells/µL",
+    referenceRange: "1000 - 3000",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Absolute Eosinophil Count",
+    result: "204",
+    unit: "cells/µL",
+    referenceRange: "20 - 500",
     status: "NORMAL",
   },
 ];
@@ -1057,10 +1133,10 @@ export default function ReportTransfer() {
                           {p.result}
                         </td>
                         <td className="py-2 px-4 text-center border border-black">
-                          {p.unit}
+                          {p.unit || resolveStandardParameterUnit(p.parameter, selectedTransfer.testProfile) || "—"}
                         </td>
                         <td className="py-2 px-4 text-center border border-black">
-                          {p.referenceRange}
+                          {p.referenceRange || resolveStandardParameterRefRange(p.parameter, selectedTransfer.patientAgeGender, selectedTransfer.testProfile) || "—"}
                         </td>
                         <td className="py-2 px-4 text-center font-bold text-black tracking-wide border border-black">
                           {p.status}
@@ -1162,27 +1238,78 @@ export default function ReportTransfer() {
                   </svg>
                   <span>Back</span>
                 </button>
-                {/* Print Report Button */}
-                <button
-                  onClick={() => window.print()}
-                  className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#4f46e5] hover:bg-[#4338ca] text-white font-semibold text-sm rounded shadow-sm transition cursor-pointer"
-                  type="button"
-                >
-                  <svg
-                    className="w-4 h-4 text-white"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    viewBox="0 0 24 24"
+                <div className="flex items-center gap-3">
+                  {/* Download PDF Button */}
+                  <button
+                    onClick={() => {
+                      if (!selectedTransfer) return;
+                      const certifiedParameters = (selectedTransfer.parameters || DEFAULT_CBC_PARAMETERS).map((p) => ({
+                        parameter: p.parameter,
+                        result: p.result,
+                        unit: p.unit || resolveStandardParameterUnit(p.parameter, selectedTransfer.testProfile),
+                        referenceRange: p.referenceRange || resolveStandardParameterRefRange(p.parameter, selectedTransfer.patientAgeGender, selectedTransfer.testProfile),
+                        status: p.status === "CRITICAL" ? "Critical" : p.status === "ABNORMAL" ? "Abnormal" : "Normal",
+                        approved: true,
+                      }));
+                      downloadLabReportPdf({
+                        reportId: selectedTransfer.reportId,
+                        requestId: selectedTransfer.id,
+                        barcode: selectedTransfer.barcode,
+                        sampleId: selectedTransfer.sampleId,
+                        patientName: selectedTransfer.patientName,
+                        patientId: selectedTransfer.patientId,
+                        patientPid: selectedTransfer.patientPid,
+                        patientAgeGender: selectedTransfer.patientAgeGender,
+                        patientAvatar: selectedTransfer.patientAvatar,
+                        patientEmail: selectedTransfer.patientEmail,
+                        doctorName: selectedTransfer.doctorName,
+                        doctorEmail: selectedTransfer.doctorEmail,
+                        testPanel: selectedTransfer.testProfile,
+                        collectedOn: selectedTransfer.collectedOn,
+                        reportedOn: selectedTransfer.reportedOn,
+                        targetDate: selectedTransfer.targetDate || "—",
+                        clinicalRemarks: selectedTransfer.clinicalRemarks,
+                        clinicalCorrelation: selectedTransfer.clinicalCorrelation,
+                        approverName: "Sarah Johnson",
+                        approverRole: "Senior Pathologist (MD, DNB)",
+                        overallDecision: "Approved",
+                        parameters: certifiedParameters,
+                      });
+                      toast({
+                        title: "PDF Report Downloaded",
+                        description: `Diagnostic report for ${selectedTransfer.patientName} saved as PDF.`,
+                      });
+                    }}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#0b457f] hover:bg-[#093a6b] text-white font-semibold text-sm rounded shadow-sm transition cursor-pointer"
+                    type="button"
                   >
-                    <path
-                      d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  <span>Print Report</span>
-                </button>
+                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    <span>Download PDF</span>
+                  </button>
+                  {/* Print Report Button */}
+                  <button
+                    onClick={() => window.print()}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#4f46e5] hover:bg-[#4338ca] text-white font-semibold text-sm rounded shadow-sm transition cursor-pointer"
+                    type="button"
+                  >
+                    <svg
+                      className="w-4 h-4 text-white"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    <span>Print Report</span>
+                  </button>
+                </div>
               </div>
               {/* END: ActionButtons */}
             </div>

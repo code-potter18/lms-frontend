@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Activity,
@@ -12,6 +12,9 @@ import {
 } from "lucide-react";
 import API from "../../api/axios";
 import { patientApi, type PatientRecord } from "../../api/patient.api";
+import { employeeApi } from "../../api/employee.api";
+import { getUser } from "../../utils/token";
+import { UserProfileDropdown } from "../../components/ui/User_profile_dropdown";
 import {
   ALL_BRANCHES_VALUE,
   BranchFilterProvider,
@@ -48,11 +51,16 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
   const [selectedCycle] = useState(1);
 
   const [savedPlan, setSavedPlan] = useState<SummaryPlan | null>(null);
+  /* Bumped when a tab changes the plan (e.g. a cycle day completed in
+     Administration) so the plan - and every tab reading it - reloads. */
+  const [planVersion, setPlanVersion] = useState(0);
   const [planNotice, setPlanNotice] = useState("");
   const [cycleMedicationsMap, setCycleMedicationsMap] = useState<Record<string, any[]>>({});
   const [patientAllergies, setPatientAllergies] = useState<
     PatientAllergyRecord[]
   >([]);
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string>(() => localStorage.getItem("user_photo") || "");
+  const [avatarLoading, setAvatarLoading] = useState<boolean>(() => !localStorage.getItem("user_photo"));
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -79,6 +87,19 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
   const { scopeHint } = latestVitals;
 
   const [patient, setPatient] = useState<PatientRecord | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    employeeApi.getMe().then((res) => {
+      if (!mounted) return;
+      const url = res.data?.data?.employee?.employee_photo_URL || "";
+      setUserAvatarUrl(url);
+      if (url) localStorage.setItem("user_photo", url);
+      else localStorage.removeItem("user_photo");
+      setAvatarLoading(false);
+    }).catch(() => { if (mounted) setAvatarLoading(false); });
+    return () => { mounted = false; };
+  }, []);
 
   useEffect(() => {
     const patientId = resolvedPatientId;
@@ -133,7 +154,7 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
     return () => {
       cancelled = true;
     };
-  }, [resolvedPatientId, activeTab, selectedBranchId]);
+  }, [resolvedPatientId, activeTab, selectedBranchId, planVersion]);
 
   // Pre-fetch doctor-described medications for all cycles
   useEffect(() => {
@@ -201,6 +222,18 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
     ? `${patient.patient_age ?? "—"}Y / ${patient.patient_gender ?? ""}`
     : "";
 
+  const patientDob = (() => {
+    const dob = patient?.patient_dob;
+    if (!dob) return "—";
+    const d = new Date(dob);
+    if (isNaN(d.getTime())) return "—";
+    const today = new Date();
+    let age = today.getFullYear() - d.getFullYear();
+    const m = today.getMonth() - d.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age--;
+    return `${age}`;
+  })();
+
   const patientDisplayId = patient?.patient_id || "";
 
   const recentDiagnosis =
@@ -234,13 +267,15 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
     <>
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
-      <div className="font-[Inter,sans-serif] text-[#1e293b] antialiased flex h-screen overflow-hidden bg-[#f8fafc]">
-
+      <div className="font-[Inter,sans-serif] text-[#1e293b] antialiased min-h-screen w-full bg-[#f8fafc]">
+      <div className="mx-auto w-full bg-[#f8fafc]">
+      <div className="relative flex w-full bg-[#f8fafc]">
 
 {/* BEGIN: Main Content */}
-<main className="flex-1 flex flex-col h-full overflow-hidden bg-[#f8fafc] relative">
+<main className="relative flex min-w-0 flex-1 flex-col bg-[#f8fafc]">
+<div className="sticky top-0 z-30 bg-white">
 {/* BEGIN: Top Header */}
-<header className="h-[72px] bg-[#f8fafc] border-b border-[#e2e8f0] flex items-center justify-between px-8 shrink-0 z-10">
+<header className="h-[72px] bg-white border-b border-[#e2e8f0] flex items-center justify-between px-6 shrink-0">
 <div className="flex items-center gap-4">
 {onBack && (
 <button type="button" aria-label="Go back" onClick={onBack} className="flex h-9 w-9 items-center justify-center rounded-full transition hover:bg-slate-100">
@@ -252,36 +287,40 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
 )}
 
 </div>
-<div className="flex items-center space-x-6">
+<div className="flex items-center space-x-4">
 <BellNotificationButton size="md" />
-<div className="flex items-center space-x-3 cursor-pointer pl-6 border-l border-[#e2e8f0]">
-<span className="text-sm font-bold text-[#1d4ed8]">HMS</span>
-<div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-white">
-<i className="fa-solid fa-user text-sm"></i>
-</div>
-</div>
+<UserProfileDropdown
+  userName={getUser()?.username || "Doctor"}
+  userSubtext={getUser()?.role || "Doctor"}
+  userAvatar={userAvatarUrl || undefined}
+  avatarLoading={avatarLoading}
+  onLogout={() => { localStorage.clear(); window.location.href = '/login'; }}
+  profilePath="/doctor/profile"
+  notificationsPath="/doctor/notifications"
+/>
 </div>
 </header>
 {/* END: Top Header */}
-<div className="flex-1 overflow-y-auto relative">
-<div className="p-8 max-w-[1400px] mx-auto pb-32">
-{/* BEGIN: Patient Header Card */}
-<div className="bg-white rounded-[16px] border border-[#e2e8f0] p-6 shadow-sm mb-6 flex justify-between items-center">
+{/* BEGIN: Patient Banner */}
+<section className="w-full bg-white border-b border-[#e2e8f0] px-5 py-4">
+<div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-4 lg:flex-nowrap">
 <div className="flex items-center">
 <img alt={patientName} className="w-20 h-20 rounded-full border-4 border-white shadow-sm object-cover" src={patientPhoto}/>
 <div className="ml-6">
 <div className="flex items-center space-x-3 mb-1">
-<h2 className="text-xl font-bold text-[#1e293b]">{patientName}</h2>
-<span className="bg-slate-100 text-[#64748b] px-3 py-1 rounded-full text-xs font-semibold">{patientDisplayId}</span>
+<h2 className="text-[10px] font-bold text-[#1e293b]">{patientName}</h2>
+<span className="bg-slate-100 text-[#64748b] px-3 py-1 rounded-full text-[10px] font-semibold">{patientDisplayId}</span>
 </div>
-<div className="text-sm text-[#64748b] flex items-center space-x-3">
+<div className="text-[10px] text-[#64748b] flex items-center space-x-3">
 <span>{patientAgeSex}</span>
+<span className="w-1 h-1 rounded-full bg-slate-300"></span>
+<span><span className="text-[#64748b]">Age:</span> <span className="text-[#1e293b] font-semibold">{patientDob}</span></span>
 <span className="w-1 h-1 rounded-full bg-slate-300"></span>
 <span className="text-[#1d4ed8] font-semibold">{recentDiagnosis}</span>
 </div>
 </div>
 </div>
-<div className="flex items-center gap-8">
+<div className="flex items-center gap-8 overflow-x-auto hide-scrollbar min-w-0">
 {(() => {
   const v = latestVitals.vitals;
   const TONE: Record<string, string> = {
@@ -331,7 +370,7 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
           </div>
           <div className="min-w-0">
             <p className="text-[10px] text-slate-500 mb-0.5">{t.label}</p>
-            <p className={`text-xs font-semibold truncate ${t.sev ? SEV_TEXT[t.sev] : "text-slate-900"}`}>{t.value}</p>
+            <p className={`text-[10px] font-semibold truncate ${t.sev ? SEV_TEXT[t.sev] : "text-slate-900"}`}>{t.value}</p>
           </div>
         </div>
       ))}
@@ -340,16 +379,17 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
 })()}
 <div className="bg-blue-50/50 border border-blue-100 rounded-[12px] p-4 w-[220px]">
 <div className="text-[10px] font-bold text-[#1d4ed8] uppercase tracking-wider mb-1.5">INTENT: {orderIntent || "—"}</div>
-<div className="text-[15px] font-bold text-[#1d4ed8] mb-2.5">{orderTherapy || "—"}</div>
-<div className="flex items-center text-xs text-[#64748b] font-medium">
+<div className="text-[10px] font-bold text-[#1d4ed8] mb-2.5">{orderTherapy || "—"}</div>
+<div className="flex items-center text-[10px] text-[#64748b] font-medium">
 <span className="w-2 h-2 rounded-full bg-[#10b981] mr-2"></span> Active Protocol
 </div>
 </div>
 </div>
 </div>
-{/* END: Patient Header Card */}
+</section>
+{/* END: Patient Banner */}
 {/* BEGIN: Alerts Banner */}
-<div className="flex items-center justify-between text-sm mb-8 border-b border-[#e2e8f0] pb-4">
+<div className="flex items-center text-[10px] border-b border-[#e2e8f0] px-5 py-2">
 <div className="flex items-center space-x-8">
 <div className="flex items-center">
 <i className="fa-solid fa-triangle-exclamation text-[#ef4444] mr-2"></i>
@@ -367,6 +407,20 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
 
 </div>
 {/* END: Alerts Banner */}
+{/* BEGIN: Tabs */}
+<div className="border-b border-[#e2e8f0] bg-white px-6">
+<nav className="flex space-x-8">
+{PATIENT_DETAIL_TABS.map((tab) => (
+<button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`px-1 py-3 border-b-2 text-[10px] font-medium transition-colors ${activeTab === tab ? "border-[#1d4ed8] text-[#1d4ed8] font-semibold" : "border-transparent text-[#64748b] hover:text-[#1e293b] hover:border-slate-300"}`}>
+{tab}
+</button>
+))}
+</nav>
+</div>
+{/* END: Tabs */}
+</div>
+{/* END: Sticky header */}
+<div className="p-6 max-w-[1400px] mx-auto pb-32 w-full overflow-x-hidden">
 {/* BEGIN: Branch scope hint */}
 {scopeHint && (
 <div className="mb-6 flex items-center rounded-[12px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
@@ -375,17 +429,6 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
 </div>
 )}
 {/* END: Branch scope hint */}
-{/* BEGIN: Tabs */}
-<div className="border-b border-[#e2e8f0] mb-6">
-<nav className="flex space-x-8">
-{PATIENT_DETAIL_TABS.map((tab) => (
-<button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`px-1 py-3 border-b-2 text-sm font-medium transition-colors ${activeTab === tab ? "border-[#1d4ed8] text-[#1d4ed8] font-semibold" : "border-transparent text-[#64748b] hover:text-[#1e293b] hover:border-slate-300"}`}>
-{tab}
-</button>
-))}
-</nav>
-</div>
-{/* END: Tabs */}
 {activeTab === "Order Summary" ? (
 <OrderSummaryTab
   patientId={resolvedPatientId}
@@ -401,7 +444,12 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
   cycleMedicationsMap={cycleMedicationsMap}
 />
 ) : activeTab === "Administration" ? (
-<AdministrationTab patientId={resolvedPatientId} plan={savedPlan} />
+<AdministrationTab
+  patientId={resolvedPatientId}
+  patient={patient}
+  plan={savedPlan}
+  onPlanChanged={() => setPlanVersion((version) => version + 1)}
+/>
 ) : activeTab === "Discharge" ? (
 <DischargeTab
   patientId={resolvedPatientId}
@@ -414,12 +462,11 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
 <NotesDocumentsTab embedded patientId={resolvedPatientId} />
 )}
 </div>
-</div>
 {/* BEGIN: Footer */}
-<footer className="absolute bottom-0 left-0 right-0 bg-white border-t border-[#e2e8f0] px-8 py-4 flex items-center justify-between z-20">
+<footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-[#e2e8f0] px-8 py-4 flex items-center justify-between z-20">
 <div>
-<div className="text-xs text-[#64748b]">Created by <span className="font-medium text-[#1e293b]">{[savedPlan?.employees?.first_name, savedPlan?.employees?.last_name].filter(Boolean).join(" ") || "—"}</span> on {fmtOrderDate(savedPlan?.created_at) || "—"}</div>
-<div className="text-xs text-[#64748b] mt-1">Last updated by <span className="font-medium text-[#1e293b]">{[savedPlan?.employees?.first_name, savedPlan?.employees?.last_name].filter(Boolean).join(" ") || "—"}</span> on {fmtOrderDate(savedPlan?.updated_at) || "—"}</div>
+<div className="text-[10px] text-[#64748b]">Created by <span className="font-medium text-[#1e293b]">{[savedPlan?.employees?.first_name, savedPlan?.employees?.last_name].filter(Boolean).join(" ") || "—"}</span> on {fmtOrderDate(savedPlan?.created_at) || "—"}</div>
+<div className="text-[10px] text-[#64748b] mt-1">Last updated by <span className="font-medium text-[#1e293b]">{[savedPlan?.employees?.first_name, savedPlan?.employees?.last_name].filter(Boolean).join(" ") || "—"}</span> on {fmtOrderDate(savedPlan?.updated_at) || "—"}</div>
 </div>
 <div className="flex items-center space-x-4">
 <button type="button" onClick={handlePrint} className="px-4 py-2 border border-[#e2e8f0] rounded-[8px] text-sm font-semibold text-[#1e293b] hover:bg-slate-50 transition-colors flex items-center">
@@ -439,6 +486,8 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
 {/* END: Footer */}
 </main>
 {/* END: Main Content */}
+      </div>
+      </div>
 
       </div>
     </>
@@ -463,7 +512,7 @@ function InlineBranchPicker() {
       value={hasSelection ? selectedBranchId : ""}
       disabled={loading}
       onChange={(event) => selectBranch(event.target.value)}
-      className="ml-2 rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-semibold text-[#1e293b] focus:outline-none"
+      className="ml-2 rounded-md border border-amber-300 bg-white px-2 py-1 text-[10px] font-semibold text-[#1e293b] focus:outline-none"
     >
       {!hasSelection && <option value="">Select branch…</option>}
       {branches.map((branch) => (

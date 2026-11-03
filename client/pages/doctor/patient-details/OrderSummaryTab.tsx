@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import API from "../../../api/axios";
 import { labOrderItemApi, type LabOrderItemRecord } from "../../../api/labOrder.api";
 import { useBranchFilter } from "../../../context/BranchFilterContext";
@@ -599,10 +599,10 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
     <div className="grid gap-x-8 gap-y-3 px-6 py-5 grid-cols-[auto_auto_auto]">
       {entries.map(([label, value]) => (
         <div key={label}>
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-[#64748b] mb-0.5">
+          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-800 mb-0.5">
             {label}
           </div>
-          <div className="text-sm font-medium text-[#1e293b] break-words">
+          <div className="text-[10px] font-medium text-[#1e293b] break-words">
             {value}
           </div>
         </div>
@@ -613,7 +613,7 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
   return (
 <>
 {planNotice && (
-<div className="mb-6 flex items-center rounded-[12px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+<div className="mb-6 flex items-center rounded-[12px] border border-amber-200 bg-amber-50 px-4 py-3 text-[10px] text-amber-700">
 <i className="fa-solid fa-triangle-exclamation mr-2"></i> {planNotice}
 </div>
 )}
@@ -631,8 +631,8 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
 {/* BEGIN: Treatment Timeline */}
 <div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-6 h-[200px]">
 <div className="flex items-center mb-8">
-<h3 className="text-lg font-bold text-[#1e293b]">Cycle {selectedCycle || displayCycleNumber || "—"}</h3>
-<div className="ml-3 text-sm text-[#64748b] flex items-center cursor-pointer hover:text-[#1e293b]">
+<h3 className="text-[10px] font-bold text-[#1e293b]">Cycle {selectedCycle || displayCycleNumber || "—"}</h3>
+<div className="ml-3 text-[10px] text-[#64748b] flex items-center cursor-pointer hover:text-[#1e293b]">
                   {orderIntent || savedPlan?.treatment_status || "—"} <i className="fa-solid fa-chevron-down text-[10px] ml-2"></i>
 </div>
 </div>
@@ -645,16 +645,16 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
 <div key={cycle.label} className="flex flex-col items-center" title={`${cycle.label} · starts ${cycle.date}`}>
 <div className={`w-10 h-10 rounded-full ${cycle.active || cycle.isCurrent ? "bg-[#1d4ed8] text-white ring-4 ring-[#1d4ed8]/20" : cycle.done ? "bg-emerald-500 text-white" : "bg-slate-100 text-slate-400"} flex items-center justify-center font-bold ring-[6px] ring-white`}>{cycle.num}</div>
 <div className="mt-3 text-center">
-<div className={`text-sm ${cycle.active || cycle.isCurrent ? "font-semibold text-[#1e293b]" : "font-medium text-[#64748b]"}`}>{cycle.label}</div>
-<div className={`text-[11px] mt-1 ${cycle.done ? "text-[#64748b]" : "text-slate-400"}`}>{cycle.date}</div>
+<div className={`text-[10px] ${cycle.active || cycle.isCurrent ? "font-semibold text-[#1e293b]" : "font-medium text-[#64748b]"}`}>{cycle.label}</div>
+<div className={`text-[10px] mt-1 ${cycle.done ? "text-[#64748b]" : "text-slate-400"}`}>{cycle.date}</div>
 </div>
 </div>
 ))}
 <div className="flex flex-col items-center">
 <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold ring-[6px] ring-white"><i className="fa-regular fa-map"></i></div>
 <div className="mt-3 text-center">
-<div className="text-sm font-medium text-[#64748b]">Follow-up</div>
-<div className="text-[11px] text-slate-400 mt-1">{timelineFollowUpDate || "—"}</div>
+<div className="text-[10px] font-medium text-[#64748b]">Follow-up</div>
+<div className="text-[10px] text-slate-400 mt-1">{timelineFollowUpDate || "—"}</div>
 </div>
 </div>
 </div>
@@ -668,16 +668,16 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
 <div key={num} className="flex flex-col items-center">
 <div className={`w-10 h-10 rounded-full ${num === "1" ? "bg-[#1d4ed8] text-white" : "bg-slate-100 text-slate-400"} flex items-center justify-center font-bold ring-[6px] ring-white`}>{num}</div>
 <div className="mt-3 text-center">
-<div className={`text-sm ${num === "1" ? "font-semibold text-[#1e293b]" : "font-medium text-[#64748b]"}`}>Day {num}</div>
-<div className="text-[11px] text-slate-400 mt-1">—</div>
+<div className={`text-[10px] ${num === "1" ? "font-semibold text-[#1e293b]" : "font-medium text-[#64748b]"}`}>Day {num}</div>
+<div className="text-[10px] text-slate-400 mt-1">—</div>
 </div>
 </div>
 ))}
 <div className="flex flex-col items-center">
 <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center font-bold ring-[6px] ring-white"><i className="fa-regular fa-map"></i></div>
 <div className="mt-3 text-center">
-<div className="text-sm font-medium text-[#64748b]">Follow-up</div>
-<div className="text-[11px] text-slate-400 mt-1">{timelineFollowUpDate || "—"}</div>
+<div className="text-[10px] font-medium text-[#64748b]">Follow-up</div>
+<div className="text-[10px] text-slate-400 mt-1">{timelineFollowUpDate || "—"}</div>
 </div>
 </div>
 </div>
@@ -687,165 +687,162 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
 {/* END: Treatment Timeline */}
 {/* BEGIN: Day Selector */}
 <div className="flex items-center">
-<span className="text-sm font-semibold text-[#1e293b] mr-4 shrink-0">Select Day</span>
+<span className="text-[10px] font-semibold text-[#1e293b] mr-4 shrink-0">Select Day</span>
 <div className="flex bg-white rounded-[12px] border border-[#e2e8f0] shadow-sm p-1 overflow-x-auto hide-scrollbar max-w-full">
 {timelineDays.map((day) => (
 <button key={day.label} type="button" onClick={() => setSelectedDay(day.label)} className={`px-6 py-2 rounded-[8px] shadow-sm text-center min-w-[100px] transition-colors ${selectedDay === day.label ? "bg-[#1d4ed8] text-white" : "text-[#1e293b] hover:bg-slate-50"}`}>
-<div className="text-sm font-semibold whitespace-nowrap">{day.label}</div>
+<div className="text-[10px] font-semibold whitespace-nowrap">{day.label}</div>
 </button>
 ))}
 </div>
 </div>
 {/* END: Day Selector */}
 </div>
-{/* Right Side (Cards) */}
-<div className="flex space-x-6">
-{/* BEGIN: Next Appointment */}
-<div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-6 w-[220px] h-[200px] flex flex-col justify-between">
+</div>
+{/* BEGIN: Bottom Grid */}
+<div className="space-y-6">
+{/* Row 1: Cycle & Schedule | Next Appointment | Treatment Progress */}
+<div className="grid grid-cols-3 gap-6">
+<div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-5">
+<h4 className="text-[10px] font-bold text-[#1e293b] mb-4">Cycle &amp; Schedule</h4>
+        <div className="grid gap-4 mb-5 grid-cols-[auto_auto_auto]">
+          <div>
+            <div className="text-[10px] text-slate-800 font-bold uppercase mb-1">CYCLE</div>
+            <div className="font-bold text-[10px]">{displayCycleNumber ? `${displayCycleNumber}${savedPlan?.planned_cycles ? ` / ${savedPlan.planned_cycles}` : ""}` : "—"}</div>
+          </div>
+          <div>
+            <div className="text-[10px] text-slate-800 font-bold uppercase mb-1">DAY</div>
+            <div className="font-bold text-[10px]">{displayCycleDay ?? "—"}</div>
+          </div>
+          <div>
+            <div className="text-[10px] text-slate-800 font-bold uppercase mb-1">TOTAL DAYS</div>
+            <div className="font-bold text-[10px]">{totalTreatmentDays ?? "—"}</div>
+          </div>
+        </div>
+        <div className="grid gap-4 grid-cols-[auto_auto_auto]">
 <div>
-<h4 className="text-sm font-bold text-[#1e293b] mb-5">Next Appointment</h4>
+<div className="text-[10px] text-slate-800 font-bold uppercase mb-1">START DATE</div>
+<div className="font-bold text-[10px]">{fmtOrderDate(savedPlan?.treatment_start_date) || "—"}<br/></div>
+</div>
+<div>
+<div className="text-[10px] text-slate-800 font-bold uppercase mb-1">END DATE</div>
+<div className="font-bold text-[10px]">{fmtOrderDate(savedPlan?.expected_end_date) || "—"}<br/></div>
+</div>
+<div>
+<div className="text-[10px] text-slate-800 font-bold uppercase mb-1">INTERVAL</div>
+<div className="font-bold text-[10px]">{savedPlan?.cycle_interval_days ? `${savedPlan.cycle_interval_days} days` : "—"}</div>
+</div>
+</div>
+</div>
+{/* BEGIN: Next Appointment */}
+<div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-6 flex flex-col justify-between">
+<div>
+<h4 className="text-[10px] font-bold text-[#1e293b] mb-5">Next Appointment</h4>
 <div className="flex items-start">
 <div className="w-10 h-10 rounded-[10px] bg-blue-50 flex items-center justify-center text-[#1d4ed8] shrink-0 mr-3">
-<i className="fa-regular fa-calendar text-lg"></i>
+<i className="fa-regular fa-calendar text-[10px]"></i>
 </div>
 <div>
-<div className="text-sm font-bold text-[#1e293b]">
+<div className="text-[10px] font-bold text-[#1e293b]">
   {nextAppointment?.date || "—"}
 </div>
-<div className="text-xs text-[#64748b] mt-1">
+<div className="text-[10px] text-[#64748b] mt-1">
   {nextAppointment?.detail || "—"}
 </div>
-<div className="text-xs text-[#64748b] mt-1">Chemotherapy session</div>
+<div className="text-[10px] text-[#64748b] mt-1">Chemotherapy session</div>
 </div>
 </div>
 </div>
-<button className="w-full py-2 border border-[#e2e8f0] rounded-[8px] text-sm font-semibold text-[#1e293b] hover:bg-slate-50 transition-colors">Reschedule</button>
+<button className="w-full py-2 border border-[#e2e8f0] rounded-[8px] text-[10px] font-semibold text-[#1e293b] hover:bg-slate-50 transition-colors">Reschedule</button>
 </div>
 {/* END: Next Appointment */}
 {/* BEGIN: Treatment Progress */}
-<div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-6 w-[220px] h-[200px] flex flex-col justify-between">
-<h4 className="text-sm font-bold text-[#1e293b] mb-2">Treatment Progress</h4>
+<div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-6 flex flex-col justify-between">
+<h4 className="text-[10px] font-bold text-[#1e293b] mb-2">Treatment Progress</h4>
 <div className="flex items-center justify-between">
 <div className="relative w-16 h-16 rounded-full bg-[conic-gradient(#e2e8f0_0%_100%)] flex items-center justify-center" style={progressPercent != null ? { backgroundImage: `conic-gradient(#1d4ed8 ${progressPercent}%, #e2e8f0 ${progressPercent}% 100%)` } : undefined}>
 <div className="absolute inset-[6px] rounded-full bg-white"></div>
-<span className="relative z-10 text-sm font-bold text-[#1e293b]">{progressPercent != null ? `${progressPercent}%` : "—"}</span>
+<span className="relative z-10 text-[10px] font-bold text-[#1e293b]">{progressPercent != null ? `${progressPercent}%` : "—"}</span>
 </div>
 <div className="text-right">
-<div className="text-[10px] text-[#64748b] uppercase tracking-wide font-semibold mb-1">Completed</div>
-<div className="text-sm font-bold text-[#1e293b] mb-3">{completedTreatmentDays ?? "—"} <span className="text-xs font-medium text-[#64748b] normal-case tracking-normal">Days</span></div>
-<div className="text-[10px] text-[#64748b] uppercase tracking-wide font-semibold mb-1">Remaining</div>
-<div className="text-sm font-bold text-[#1e293b]">—</div>
+<div className="text-[10px] text-slate-800 uppercase tracking-wide font-bold mb-1">Completed</div>
+<div className="text-[10px] font-bold text-[#1e293b] mb-3">{completedTreatmentDays ?? "—"} <span className="text-[10px] font-medium text-[#64748b] normal-case tracking-normal">Days</span></div>
+<div className="text-[10px] text-slate-800 uppercase tracking-wide font-bold mb-1">Remaining</div>
+<div className="text-[10px] font-bold text-[#1e293b]">—</div>
 </div>
 </div>
-<div className="pt-4 flex justify-between items-center text-xs">
+<div className="pt-4 flex justify-between items-center text-[10px]">
 <span className="text-[#64748b] font-medium">Next Visit</span>
 <span className="font-bold text-[#1e293b]">—</span>
 </div>
 </div>
 {/* END: Treatment Progress */}
 </div>
-</div>
-{/* BEGIN: Bottom Grid */}
+{/* Row 2: Clinical Info | Lab Validation */}
 <div className="grid grid-cols-12 gap-6">
-{/* Left Column */}
-<div className="col-span-3 space-y-6">
-<div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-5">
-<h4 className="text-sm font-bold text-[#1e293b] mb-4">Cycle &amp; Schedule</h4>
-        <div className="grid gap-4 mb-5 grid-cols-[auto_auto_auto]">
-          <div>
-            <div className="text-[10px] text-[#64748b] font-semibold uppercase mb-1">CYCLE</div>
-            <div className="font-bold text-sm">{displayCycleNumber ? `${displayCycleNumber}${savedPlan?.planned_cycles ? ` / ${savedPlan.planned_cycles}` : ""}` : "—"}</div>
-          </div>
-          <div>
-            <div className="text-[10px] text-[#64748b] font-semibold uppercase mb-1">DAY</div>
-            <div className="font-bold text-sm">{displayCycleDay ?? "—"}</div>
-          </div>
-          <div>
-            <div className="text-[10px] text-[#64748b] font-semibold uppercase mb-1">TOTAL DAYS</div>
-            <div className="font-bold text-sm">{totalTreatmentDays ?? "—"}</div>
-          </div>
-        </div>
-        <div className="grid gap-4 grid-cols-[auto_auto_auto]">
-<div>
-<div className="text-[10px] text-[#64748b] font-semibold uppercase mb-1">START DATE</div>
-<div className="font-bold text-sm">{fmtOrderDate(savedPlan?.treatment_start_date) || "—"}<br/></div>
-</div>
-<div>
-<div className="text-[10px] text-[#64748b] font-semibold uppercase mb-1">END DATE</div>
-<div className="font-bold text-sm">{fmtOrderDate(savedPlan?.expected_end_date) || "—"}<br/></div>
-</div>
-<div>
-<div className="text-[10px] text-[#64748b] font-semibold uppercase mb-1">INTERVAL</div>
-<div className="font-bold text-sm">{savedPlan?.cycle_interval_days ? `${savedPlan.cycle_interval_days} days` : "—"}</div>
-</div>
-</div>
-</div>
-<div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-5">
-<h4 className="text-sm font-bold text-[#1e293b] mb-4">Clinical Info</h4>
+<div className="col-span-3 bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-5">
+<h4 className="text-[10px] font-bold text-[#1e293b] mb-4">Clinical Info</h4>
 <div className="grid gap-4 mb-5 grid-cols-[auto_auto]">
 <div>
-<div className="text-[10px] text-[#64748b] font-semibold uppercase mb-1">TYPE</div>
-<div className="font-bold text-sm">{recentCancerType || "—"}</div>
+<div className="text-[10px] text-slate-800 font-bold uppercase mb-1">TYPE</div>
+<div className="font-bold text-[10px]">{recentCancerType || "—"}</div>
 </div>
 <div>
-<div className="text-[10px] text-[#64748b] font-semibold uppercase mb-1">STAGE</div>
-<div className="font-bold text-sm">{recentStage || "—"}</div>
+<div className="text-[10px] text-slate-800 font-bold uppercase mb-1">STAGE</div>
+<div className="font-bold text-[10px]">{recentStage || "—"}</div>
 </div>
 </div>
 <div>
-<div className="text-[10px] text-[#64748b] font-semibold uppercase mb-1">GRADE</div>
-<div className="font-bold text-sm">—</div>
+<div className="text-[10px] text-slate-800 font-bold uppercase mb-1">GRADE</div>
+<div className="font-bold text-[10px]">—</div>
 </div>
 </div>
-</div>
-{/* Middle Column */}
-<div className="col-span-9 space-y-6">
-<div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-5">
+<div className="col-span-9 bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] p-5">
 <div className="flex items-center mb-4">
-<h4 className="text-sm font-bold text-[#1e293b] mr-3">Lab Validation</h4>
+<h4 className="text-[10px] font-bold text-[#1e293b] mr-3">Lab Validation</h4>
 <span className="px-2 py-0.5 bg-slate-50 text-[#64748b] text-[10px] font-bold uppercase rounded border border-slate-200">{labItemsLoading ? "Loading…" : `${labItems.length} Test(s)`}</span>
 </div>
 {labItemsError && (
-  <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700">{labItemsError}</div>
+  <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-3 text-[10px] text-red-700">{labItemsError}</div>
 )}
 {labItemsLoading ? (
-  <div className="py-6 text-center text-xs text-[#64748b]">
+  <div className="py-6 text-center text-[10px] text-[#64748b]">
     <i className="fa-solid fa-circle-notch fa-spin mr-1" />Loading lab investigations…
   </div>
 ) : labItems.length === 0 ? (
-  <table className="w-full text-left text-sm mb-4">
+  <table className="w-full text-left text-[10px] mb-4">
     <thead>
       <tr className="text-[10px] text-[#64748b] uppercase border-b border-slate-100">
-        <th className="pb-2 font-semibold">PARAMETER</th>
-        <th className="pb-2 font-semibold">RESULT</th>
-        <th className="pb-2 font-semibold">RANGE</th>
-        <th className="pb-2 font-semibold">STATUS</th>
+        <th className="pb-2 font-bold text-gray-900">PARAMETER</th>
+        <th className="pb-2 font-bold text-gray-900">RESULT</th>
+        <th className="pb-2 font-bold text-gray-900">RANGE</th>
+        <th className="pb-2 font-bold text-gray-900">STATUS</th>
       </tr>
     </thead>
     <tbody>
       <tr>
-        <td colSpan={4} className="py-6 text-center text-xs text-[#64748b]">No lab validation records found.</td>
+        <td colSpan={4} className="py-6 text-center text-[10px] text-[#64748b]">No lab validation records found.</td>
       </tr>
     </tbody>
   </table>
 ) : (
-  <table className="w-full text-left text-sm mb-4">
+  <table className="w-full text-left text-[10px] mb-4">
     <thead>
       <tr className="text-[10px] text-[#64748b] uppercase border-b border-slate-100">
-        <th className="pb-2 font-semibold">TEST NAME</th>
-        <th className="pb-2 font-semibold">TEST CODE</th>
-        <th className="pb-2 font-semibold">UNIT</th>
-        <th className="pb-2 font-semibold">REFERENCE RANGE</th>
-        <th className="pb-2 font-semibold">STATUS</th>
+        <th className="pb-2 font-bold text-gray-900">TEST NAME</th>
+        <th className="pb-2 font-bold text-gray-900">TEST CODE</th>
+        <th className="pb-2 font-bold text-gray-900">UNIT</th>
+        <th className="pb-2 font-bold text-gray-900">REFERENCE RANGE</th>
+        <th className="pb-2 font-bold text-gray-900">STATUS</th>
       </tr>
     </thead>
     <tbody>
       {labItems.map((item) => (
         <tr key={item.lab_order_item_id} className="border-b border-slate-50">
-          <td className="py-2 font-bold text-sm">{item.lab_test_master?.test_name ?? "—"}</td>
-          <td className="py-2 text-sm">{item.lab_test_master?.test_code ?? "—"}</td>
-          <td className="py-2 text-sm">{item.lab_test_master?.unit ?? "—"}</td>
-          <td className="py-2 text-sm">{item.lab_test_master?.reference_range ?? "—"}</td>
+          <td className="py-2 font-bold text-[10px]">{item.lab_test_master?.test_name ?? "—"}</td>
+          <td className="py-2 text-[10px]">{item.lab_test_master?.test_code ?? "—"}</td>
+          <td className="py-2 text-[10px]">{item.lab_test_master?.unit ?? "—"}</td>
+          <td className="py-2 text-[10px]">{item.lab_test_master?.reference_range ?? "—"}</td>
           <td className="py-2">
             <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
               item.item_status === "Completed"
@@ -862,7 +859,7 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
     </tbody>
   </table>
 )}
-<div className="border-t border-slate-100 pt-3 flex justify-between items-center text-sm">
+<div className="border-t border-slate-100 pt-3 flex justify-between items-center text-[10px]">
 <span className="text-[#64748b]">Chemo Clearance :</span>
 <span className="font-bold text-[#64748b] uppercase">—</span>
 </div>
@@ -873,20 +870,20 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
 <div className="px-5 py-4 border-b border-[#e2e8f0] flex items-center justify-between text-[#1d4ed8]">
 <div className="flex items-center">
 <i className="fa-solid fa-flask mr-2"></i>
-<h4 className="text-sm font-bold">PROTOCOL: {orderTherapy || "—"}</h4>
+<h4 className="text-[10px] font-bold">PROTOCOL: {orderTherapy || "—"}</h4>
 </div>
-<a className="text-xs text-[#1d4ed8] font-medium hover:underline flex items-center" href="#">View Protocol <i className="fa-solid fa-chevron-right text-[10px] ml-1"></i></a>
+<a className="text-[10px] text-[#1d4ed8] font-medium hover:underline flex items-center" href="#">View Protocol <i className="fa-solid fa-chevron-right text-[10px] ml-1"></i></a>
 </div>
 <div className="p-5">
-<table className="w-full text-left text-sm">
+<table className="w-full text-left text-[10px]">
 <thead>
 <tr className="text-[10px] text-[#64748b] uppercase border-b border-slate-100">
-<th className="pb-2 font-semibold">DOSE</th>
-<th className="pb-2 font-semibold">PATIENT DOSE</th>
-<th className="pb-2 font-semibold">ROUTE</th>
-<th className="pb-2 font-semibold">DILUENT</th>
-<th className="pb-2 font-semibold">VOLUME</th>
-<th className="pb-2 font-semibold">INF. TIME</th>
+<th className="pb-2 font-bold text-gray-900">DOSE</th>
+<th className="pb-2 font-bold text-gray-900">PATIENT DOSE</th>
+<th className="pb-2 font-bold text-gray-900">ROUTE</th>
+<th className="pb-2 font-bold text-gray-900">DILUENT</th>
+<th className="pb-2 font-bold text-gray-900">VOLUME</th>
+<th className="pb-2 font-bold text-gray-900">INF. TIME</th>
 </tr>
 </thead>
 <tbody>
@@ -907,24 +904,24 @@ const OrderSummaryTab: React.FC<OrderSummaryTabProps> = ({
 <div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] overflow-hidden">
 <div className="px-5 py-4 border-b border-[#e2e8f0] flex items-center text-purple-600">
 <i className="fa-solid fa-pills mr-2"></i>
-<h4 className="text-sm font-bold">Premedications</h4>
+<h4 className="text-[10px] font-bold">Premedications</h4>
 </div>
 <div className="p-5">
-<table className="w-full text-left text-sm">
+<table className="w-full text-left text-[10px]">
 <thead>
 <tr className="text-[10px] text-[#64748b] uppercase border-b border-slate-100">
-<th className="pb-2 font-semibold w-8">#</th>
-<th className="pb-2 font-semibold">DRUG</th>
-<th className="pb-2 font-semibold">DOSE</th>
-<th className="pb-2 font-semibold">ROUTE</th>
-<th className="pb-2 font-semibold">TIMING</th>
-<th className="pb-2 font-semibold text-right">STATUS</th>
+<th className="pb-2 font-bold text-gray-900 w-8">#</th>
+<th className="pb-2 font-bold text-gray-900">DRUG</th>
+<th className="pb-2 font-bold text-gray-900">DOSE</th>
+<th className="pb-2 font-bold text-gray-900">ROUTE</th>
+<th className="pb-2 font-bold text-gray-900">TIMING</th>
+<th className="pb-2 font-bold text-gray-900 text-right">STATUS</th>
 </tr>
 </thead>
 <tbody>
 {premedicationItems.length === 0 ? (
 <tr>
-<td colSpan={6} className="py-6 text-center text-xs text-[#64748b]">No premedications found.</td>
+<td colSpan={6} className="py-6 text-center text-[10px] text-[#64748b]">No premedications found.</td>
 </tr>
 ) : (
 premedicationItems.map((item, index) => (
@@ -945,24 +942,24 @@ premedicationItems.map((item, index) => (
 <div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] overflow-hidden">
 <div className="px-5 py-4 border-b border-[#e2e8f0] flex items-center text-[#1d4ed8]">
 <i className="fa-solid fa-prescription-bottle-medical mr-2"></i>
-<h4 className="text-sm font-bold">Chemo Orders</h4>
+<h4 className="text-[10px] font-bold">Chemo Orders</h4>
 </div>
 <div className="p-5">
-<table className="w-full text-left text-sm">
+<table className="w-full text-left text-[10px]">
 <thead>
 <tr className="text-[10px] text-[#64748b] uppercase border-b border-slate-100">
-<th className="pb-2 font-semibold w-8">#</th>
-<th className="pb-2 font-semibold">DRUG</th>
-<th className="pb-2 font-semibold">DOSE</th>
-<th className="pb-2 font-semibold">ROUTE</th>
-<th className="pb-2 font-semibold">DILUENT</th>
-<th className="pb-2 font-semibold text-right">STATUS</th>
+<th className="pb-2 font-bold text-gray-900 w-8">#</th>
+<th className="pb-2 font-bold text-gray-900">DRUG</th>
+<th className="pb-2 font-bold text-gray-900">DOSE</th>
+<th className="pb-2 font-bold text-gray-900">ROUTE</th>
+<th className="pb-2 font-bold text-gray-900">DILUENT</th>
+<th className="pb-2 font-bold text-gray-900 text-right">STATUS</th>
 </tr>
 </thead>
 <tbody>
 {primaryChemoItems.length === 0 ? (
 <tr>
-<td colSpan={6} className="py-6 text-center text-xs text-[#64748b]">No chemo orders found.</td>
+<td colSpan={6} className="py-6 text-center text-[10px] text-[#64748b]">No chemo orders found.</td>
 </tr>
 ) : (
 primaryChemoItems.map((item, index) => (
@@ -983,24 +980,24 @@ primaryChemoItems.map((item, index) => (
 <div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] overflow-hidden">
 <div className="px-5 py-4 border-b border-[#e2e8f0] flex items-center text-emerald-600">
 <i className="fa-solid fa-heart-pulse mr-2"></i>
-<h4 className="text-sm font-bold">Supportive Medicines</h4>
+<h4 className="text-[10px] font-bold">Supportive Medicines</h4>
 </div>
 <div className="p-5">
-<table className="w-full text-left text-sm">
+<table className="w-full text-left text-[10px]">
 <thead>
 <tr className="text-[10px] text-[#64748b] uppercase border-b border-slate-100">
-<th className="pb-2 font-semibold w-8">#</th>
-<th className="pb-2 font-semibold">DRUG</th>
-<th className="pb-2 font-semibold">DOSE</th>
-<th className="pb-2 font-semibold">ROUTE</th>
-<th className="pb-2 font-semibold">TIMING</th>
-<th className="pb-2 font-semibold text-right">STATUS</th>
+<th className="pb-2 font-bold text-gray-900 w-8">#</th>
+<th className="pb-2 font-bold text-gray-900">DRUG</th>
+<th className="pb-2 font-bold text-gray-900">DOSE</th>
+<th className="pb-2 font-bold text-gray-900">ROUTE</th>
+<th className="pb-2 font-bold text-gray-900">TIMING</th>
+<th className="pb-2 font-bold text-gray-900 text-right">STATUS</th>
 </tr>
 </thead>
 <tbody>
 {supportiveItems.length === 0 ? (
 <tr>
-<td colSpan={6} className="py-6 text-center text-xs text-[#64748b]">No supportive medicines found.</td>
+<td colSpan={6} className="py-6 text-center text-[10px] text-[#64748b]">No supportive medicines found.</td>
 </tr>
 ) : (
 supportiveItems.map((item, index) => (
@@ -1021,32 +1018,32 @@ supportiveItems.map((item, index) => (
 <div className="bg-white rounded-[16px] shadow-sm border border-[#e2e8f0] overflow-hidden">
 <div className="px-5 py-4 border-b border-[#e2e8f0] flex items-center text-orange-500">
 <i className="fa-solid fa-capsules mr-2"></i>
-<h4 className="text-sm font-bold">Discharge Medication</h4>
+<h4 className="text-[10px] font-bold">Discharge Medication</h4>
 </div>
 <div className="p-5">
-<table className="w-full text-left text-sm">
+<table className="w-full text-left text-[10px]">
 <thead>
 <tr className="text-[10px] text-[#64748b] uppercase border-b border-slate-100">
-<th className="pb-2 font-semibold w-8">#</th>
-<th className="pb-2 font-semibold">DRUG</th>
-<th className="pb-2 font-semibold">DOSE</th>
-<th className="pb-2 font-semibold">FREQUENCY</th>
-<th className="pb-2 font-semibold">INSTRUCTION</th>
-<th className="pb-2 font-semibold text-right">DURATION</th>
+<th className="pb-2 font-bold text-gray-900 w-8">#</th>
+<th className="pb-2 font-bold text-gray-900">DRUG</th>
+<th className="pb-2 font-bold text-gray-900">DOSE</th>
+<th className="pb-2 font-bold text-gray-900">FREQUENCY</th>
+<th className="pb-2 font-bold text-gray-900">INSTRUCTION</th>
+<th className="pb-2 font-bold text-gray-900 text-right">DURATION</th>
 </tr>
 </thead>
 <tbody>
 {orderDischargeMedsLoading ? (
 <tr>
-<td colSpan={6} className="py-6 text-center text-xs text-[#64748b]"><i className="fa-solid fa-circle-notch fa-spin mr-2"></i>Loading discharge medicines…</td>
+<td colSpan={6} className="py-6 text-center text-[10px] text-[#64748b]"><i className="fa-solid fa-circle-notch fa-spin mr-2"></i>Loading discharge medicines…</td>
 </tr>
 ) : orderDischargeMedsError ? (
 <tr>
-<td colSpan={6} className="py-6 text-center text-xs text-red-500"><i className="fa-solid fa-triangle-exclamation mr-2"></i>{orderDischargeMedsError}</td>
+<td colSpan={6} className="py-6 text-center text-[10px] text-red-500"><i className="fa-solid fa-triangle-exclamation mr-2"></i>{orderDischargeMedsError}</td>
 </tr>
 ) : orderDischargeMeds.length === 0 ? (
 <tr>
-<td colSpan={6} className="py-6 text-center text-xs text-[#64748b]">{savedPlan?.source_protocol_id ? "No discharge medicines recorded on this patient's regimen protocol yet." : "No regimen protocol linked to this patient's plan yet."}</td>
+<td colSpan={6} className="py-6 text-center text-[10px] text-[#64748b]">{savedPlan?.source_protocol_id ? "No discharge medicines recorded on this patient's regimen protocol yet." : "No regimen protocol linked to this patient's plan yet."}</td>
 </tr>
 ) : (
 orderDischargeMeds.map((item, index) => (
@@ -1055,7 +1052,7 @@ orderDischargeMeds.map((item, index) => (
 <td className="py-2 font-medium text-[#1e293b] whitespace-nowrap">{item.medicine_master?.medicine_name ?? "—"}</td>
 <td className="py-2 whitespace-nowrap">{item.patient_dose != null && item.patient_dose !== "" ? `${item.patient_dose} ${item.patient_dose_unit ?? item.medicine_master?.unit ?? ""}`.trim() : "—"}</td>
 <td className="py-2 whitespace-nowrap">{item.frequency || "—"}</td>
-<td className="py-2 text-xs text-[#64748b]">{item.administration_detail || item.comment || "—"}</td>
+<td className="py-2 text-[10px] text-[#64748b]">{item.administration_detail || item.comment || "—"}</td>
 <td className="py-2 whitespace-nowrap text-right">{item.duration || "—"}</td>
 </tr>
 ))
@@ -1072,25 +1069,25 @@ orderDischargeMeds.map((item, index) => (
 <div>
 <div className="flex items-center text-[#1d4ed8] mb-4">
 <i className="fa-regular fa-file-lines mr-2"></i>
-<h4 className="text-sm font-bold">Instructions</h4>
+<h4 className="text-[10px] font-bold">Instructions</h4>
 </div>
-<p className="text-sm text-[#64748b] mb-3">Administration instructions from the selected regimen protocol:</p>
+<p className="text-[10px] text-[#64748b] mb-3">Administration instructions from the selected regimen protocol:</p>
 {adminInstructions.length === 0 ? (
-<ul className="space-y-2 text-sm text-[#1e293b] font-medium list-disc list-inside">
+<ul className="space-y-2 text-[10px] text-[#1e293b] font-medium list-disc list-inside">
 <li>No instructions recorded.</li>
 </ul>
 ) : (
-<ul className="space-y-3 text-sm text-[#1e293b]">
+<ul className="space-y-3 text-[10px] text-[#1e293b]">
 {adminInstructions.map((instruction, index) => (
 <li key={index} className="border border-slate-100 rounded-[12px] p-3">
 <div className="flex items-start justify-between gap-3">
 <span className="font-bold text-[#1e293b]">{instruction.medicineName || `Item ${index + 1}`}</span>
 {instruction.dose ? (
-<span className="text-xs text-[#64748b] whitespace-nowrap">{instruction.dose}</span>
+<span className="text-[10px] text-[#64748b] whitespace-nowrap">{instruction.dose}</span>
 ) : null}
 </div>
 {(instruction.route || instruction.infusion || instruction.frequency || instruction.timing) ? (
-<div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#64748b]">
+<div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-[#64748b]">
 {instruction.route ? <span>Route: {instruction.route}</span> : null}
 {instruction.infusion ? <span>Infusion: {instruction.infusion}</span> : null}
 {instruction.frequency ? <span>Frequency: {instruction.frequency}</span> : null}
@@ -1098,20 +1095,20 @@ orderDischargeMeds.map((item, index) => (
 </div>
 ) : null}
 {instruction.administrationDetail ? (
-<p className="mt-1.5 text-xs text-[#475569]">{instruction.administrationDetail}</p>
+<p className="mt-1.5 text-[10px] text-[#475569]">{instruction.administrationDetail}</p>
 ) : null}
 {instruction.remarks ? (
-<p className="mt-1.5 text-xs italic text-[#64748b]">{instruction.remarks}</p>
+<p className="mt-1.5 text-[10px] italic text-[#64748b]">{instruction.remarks}</p>
 ) : null}
 </li>
 ))}
 </ul>
 )}
-<a className="inline-block mt-4 text-sm font-semibold text-[#1d4ed8] underline" href="#">Investigation for Next Cycle: —</a>
+<a className="inline-block mt-4 text-[10px] font-semibold text-[#1d4ed8] underline" href="#">Investigation for Next Cycle: —</a>
 </div>
 <div className="bg-slate-50 border border-slate-200 rounded-[12px] p-5 flex flex-col items-center justify-center w-[160px] h-full">
 <div className="text-[10px] text-[#1d4ed8] font-bold uppercase tracking-wider mb-2">NEXT CYCLE</div>
-<div className="flex items-center text-sm font-bold text-[#1d4ed8]">
+<div className="flex items-center text-[10px] font-bold text-[#1d4ed8]">
 <i className="fa-regular fa-calendar mr-2"></i> —
               </div>
 </div>

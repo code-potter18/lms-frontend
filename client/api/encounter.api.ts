@@ -9,6 +9,25 @@ export interface CreateIpdEncounterPayload {
   admission_id: string;
 }
 
+export interface VitalsLogEntry {
+  entry_id?: string;
+  recorded_at: string;
+  recorded_by?: string | null;
+  recorded_by_name?: string | null;
+  systolic_bp?: number | null;
+  diastolic_bp?: number | null;
+  pulse?: number | null;
+  respiratory_rate?: number | null;
+  spo2?: number | null;
+  temperature?: number | null;
+  height?: number | null;
+  weight?: number | null;
+  bmi?: number | null;
+  blood_sugar?: number | string | null;
+  pain_score?: number | string | null;
+  remarks?: string | null;
+}
+
 export interface EncounterRecord {
   encounter_id: string;
   encounter_no: string;
@@ -60,6 +79,8 @@ export interface EncounterRecord {
    blood_sugar: number | string | null;
    pain_score: number | string | null;
    BMI: number | string | null;
+   remarks?: string | null;
+   vitals_log?: VitalsLogEntry[] | null;
   checkin_time: string | null;
   checkout_time: string | null;
   closed_by: string | null;
@@ -213,6 +234,17 @@ export const encounterApi = {
     API.put<{ success: boolean; message: string; data: EncounterRecord }>(
       `/encounters/${encounterNo}`,
       data,
+    ),
+
+  updateVitalsEntry: (encounterNo: string, entryId: string, data: any) =>
+    API.put<{ success: boolean; message: string; data: EncounterRecord }>(
+      `/encounters/${encounterNo}/vitals-log/${encodeURIComponent(entryId)}`,
+      data,
+    ),
+
+  deleteVitalsEntry: (encounterNo: string, entryId: string) =>
+    API.delete<{ success: boolean; message: string; data: EncounterRecord }>(
+      `/encounters/${encounterNo}/vitals-log/${encodeURIComponent(entryId)}`,
     ),
 
   close: (encounterNo: string, closedBy: string) =>

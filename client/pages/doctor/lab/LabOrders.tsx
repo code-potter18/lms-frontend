@@ -138,10 +138,10 @@ const toIsoDateString = (value?: string | null | Date): string => {
   return "";
 };
 
-export const isTestOverdue = (test: OrderTestItem, orderStatus?: string): boolean => {
+export const isTestOverdue = (test: OrderTestItem, orderStatus?: string, asOfDateIso?: string): boolean => {
   if (test.status === "COMPLETED" || orderStatus === "COMPLETED") return false;
 
-  const todayIso = format(new Date(), "yyyy-MM-dd");
+  const todayIso = asOfDateIso || format(new Date(), "yyyy-MM-dd");
   if (test.targetDateIso) {
     return test.targetDateIso < todayIso;
   }
@@ -163,15 +163,15 @@ export const isTestOverdue = (test: OrderTestItem, orderStatus?: string): boolea
   return false;
 };
 
-export const isOrderOverdue = (order: TrackedOrder): boolean => {
+export const isOrderOverdue = (order: TrackedOrder, asOfDateIso?: string): boolean => {
   if (order.orderStatus === "COMPLETED") return false;
 
-  const todayIso = format(new Date(), "yyyy-MM-dd");
+  const todayIso = asOfDateIso || format(new Date(), "yyyy-MM-dd");
   if (order.targetDateIso && order.targetDateIso < todayIso) {
     return true;
   }
 
-  return order.tests.some((t) => isTestOverdue(t, order.orderStatus));
+  return order.tests.some((t) => isTestOverdue(t, order.orderStatus, todayIso));
 };
 
 /* ================================================================
@@ -220,8 +220,8 @@ export default function LabOrders() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"ALL" | "COMPLETED" | "IN_PROGRESS" | "PENDING" | "OVERDUE">("ALL");
   const [priorityFilter, setPriorityFilter] = useState<"ALL" | "URGENT" | "ROUTINE">("ALL");
-  const [dateFilterType, setDateFilterType] = useState<"ALL" | "ORDER_DATE" | "TARGET_DATE">("ORDER_DATE");
-  const [selectedDate, setSelectedDate] = useState<Date | null>(() => new Date());
+  const [dateFilterType, setDateFilterType] = useState<"ACTIVE_RANGE" | "ALL" | "ORDER_DATE" | "TARGET_DATE">("ACTIVE_RANGE");
+  const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
   /* ---------- KPI Selection (Admin Dashboard style KPI Shower) ---------- */
@@ -395,20 +395,18 @@ export default function LabOrders() {
             oi.barcode ||
             undefined;
 
-          // status
-          let status: OrderTestItem["status"] = "PENDING";
-          let statusLabel = "Pending";
-          if (rawStatus === "COMPLETED" || lsStatus === "COMPLETED") {
-            status = "COMPLETED"; statusLabel = "Completed";
-          } else if (rawStatus === "RUNNING" || rawStatus === "IN_PROGRESS" || rawStatus === "IN PROGRESS" || lsStatus === "RUNNING") {
-            status = "IN_PROGRESS"; statusLabel = "In Testing";
-          } else if (rawStatus === "VERIFIED" || rawStatus === "COLLECTED") {
-            status = "VERIFIED"; statusLabel = "Specimen Verified";
-          } else if (rawStatus === "REJECTED") {
-            status = "REJECTED"; statusLabel = "Rejected";
-          } else if (rawStatus.includes("BARCODE") || barcode) {
-            status = "VERIFIED"; statusLabel = "Barcode Assigned";
-          }
+          // Test status: A test is ONLY completed if results exist or status is Completed/Report Generated
+          const isTestItemCompleted =
+            rawStatus === "COMPLETED" ||
+            rawStatus === "REPORT GENERATED" ||
+            rawStatus === "REPORT_GENERATED" ||
+            rawStatus === "DELIVERED" ||
+            lsStatus === "COMPLETED" ||
+            Boolean(lsResult);
+
+          // Tests which are not completed MUST show as Pending
+          let status: OrderTestItem["status"] = isTestItemCompleted ? "COMPLETED" : "PENDING";
+          let statusLabel = isTestItemCompleted ? "Completed" : "Pending";
 
           const itemRawTarget = oi.target_date || (order as any).target_date;
           const targetDateFormatted = formatTargetDate(itemRawTarget);
@@ -480,41 +478,24 @@ export default function LabOrders() {
         let finalTests = tests;
         let totalTests = finalTests.length;
         let completedTests = finalTests.filter((t) => t.status === "COMPLETED").length;
-        let inProgressTests = finalTests.filter((t) => t.status === "IN_PROGRESS" || t.status === "VERIFIED").length;
-        let pendingTests = finalTests.filter((t) => t.status === "PENDING" || t.status === "REJECTED").length;
+        let inProgressTests = 0;
+        let pendingTests = totalTests - completedTests;
         let completionPct = totalTests > 0 ? Math.round((completedTests / totalTests) * 100) : 0;
 
+        // Order is ONLY completed if ALL tests are completed
+        const isAllTestsCompleted = totalTests > 0 && completedTests === totalTests;
+
         let orderStatus: TrackedOrder["orderStatus"] = "PENDING";
-        if (isDbCompleted || completionPct === 100 || (totalTests > 0 && completedTests === totalTests)) {
+        if (isAllTestsCompleted) {
           orderStatus = "COMPLETED";
           completionPct = 100;
-          completedTests = totalTests;
-          inProgressTests = 0;
-          pendingTests = 0;
-          finalTests = finalTests.map((t) => ({
-            ...t,
-            status: "COMPLETED" as const,
-            statusLabel: "Completed",
-            completedAt: t.completedAt || (order.updated_at ? new Date(order.updated_at).toLocaleString() : new Date().toLocaleString()),
-          }));
         } else if (
-          isDbInProgress ||
           completedTests > 0 ||
-          inProgressTests > 0 ||
-          completionPct > 0 ||
+          isDbInProgress ||
           finalTests.some((t) => !!t.barcode) ||
           (typeof window !== "undefined" && !!localStorage.getItem(`generated_barcode_${order.lab_order_id}`))
         ) {
           orderStatus = "IN_PROGRESS";
-          if (completedTests === 0 && inProgressTests === 0 && isDbInProgress) {
-            inProgressTests = totalTests;
-            pendingTests = 0;
-            finalTests = finalTests.map((t) => ({
-              ...t,
-              status: "IN_PROGRESS" as const,
-              statusLabel: rawOrderStatus === "COLLECTED" ? "Specimen Collected" : "In Progress",
-            }));
-          }
         } else {
           orderStatus = "PENDING";
         }
@@ -542,7 +523,12 @@ export default function LabOrders() {
           )
         );
         const targetDateFormatted = itemTargetDates.length > 0 ? itemTargetDates.join(", ") : "—";
-        const targetDateIso = finalTests.find((t) => t.targetDateIso)?.targetDateIso || undefined;
+        const allTargetIsoDates = finalTests
+          .map((t) => t.targetDateIso)
+          .filter((d): d is string => Boolean(d));
+        const targetDateIso = allTargetIsoDates.length > 0
+          ? [...allTargetIsoDates].sort().reverse()[0]
+          : toIsoDateString((order as any).target_date) || undefined;
 
         const orderRevenue = orderItems.reduce((acc, it) => {
           const amt =
@@ -600,27 +586,54 @@ export default function LabOrders() {
 
   /* ---------- date matching helper ---------- */
   const isOrderMatchingDate = useCallback(
-    (o: TrackedOrder, targetDay: string, filterType: "ALL" | "ORDER_DATE" | "TARGET_DATE"): boolean => {
-      const matchesOrder = o.orderDateIso === targetDay;
-      const matchesTarget = Boolean(
-        o.targetDateIso === targetDay || o.tests.some((t) => t.targetDateIso === targetDay)
-      );
+    (o: TrackedOrder, targetDay: string, filterType: "ACTIVE_RANGE" | "ALL" | "ORDER_DATE" | "TARGET_DATE"): boolean => {
+      const orderDate = o.orderDateIso;
+      const targetDate = o.targetDateIso || orderDate;
+      const isCompleted = o.orderStatus === "COMPLETED";
 
-      if (filterType === "ORDER_DATE") return matchesOrder;
-      if (filterType === "TARGET_DATE") return matchesTarget;
-      return matchesOrder || matchesTarget;
+      if (filterType === "ORDER_DATE") return orderDate === targetDay;
+      if (filterType === "TARGET_DATE") {
+        return targetDate === targetDay || o.tests.some((t) => t.targetDateIso === targetDay);
+      }
+
+      // Default ("ACTIVE_RANGE" & "ALL"):
+      // 1. If targetDay is before order date, the order was not placed yet -> do not show
+      if (orderDate && targetDay < orderDate) {
+        return false;
+      }
+
+      // 2. Active span: from order date to target date inclusive -> show
+      if (targetDate && targetDay <= targetDate) {
+        return true;
+      }
+
+      // 3. After target date (targetDay > targetDate):
+      // "if it is not completed before the target date after the target date it should be shown in dashboard as overdue"
+      // "if it is completed before the target date dont show the order after the target date"
+      if (targetDate && targetDay > targetDate) {
+        if (!isCompleted) {
+          return true; // overdue -> keep shown in dashboard!
+        } else {
+          return false; // completed on or before target date -> do NOT show after target date
+        }
+      }
+
+      return orderDate === targetDay;
     },
     []
   );
 
   /* ---------- metrics ---------- */
   const metrics = useMemo(() => {
+    const currentDayIso = selectedDate ? format(selectedDate, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd");
+
     const list = selectedDate
-      ? orders.filter((o) => {
-          const targetDay = format(selectedDate, "yyyy-MM-dd");
-          return isOrderMatchingDate(o, targetDay, dateFilterType);
-        })
+      ? orders.filter((o) => isOrderMatchingDate(o, currentDayIso, dateFilterType))
       : orders;
+
+    const allOrdersCount = orders.length;
+    const allTestsCount = orders.reduce((a, o) => a + o.totalTests, 0);
+    const allRevenue = orders.reduce((a, o) => a + (o.revenue || 0), 0);
 
     const todayIso = format(new Date(), "yyyy-MM-dd");
     const todayOrders = orders.filter((o) => o.orderDateIso === todayIso);
@@ -652,14 +665,14 @@ export default function LabOrders() {
       list.filter((o) => o.priority === "URGENT").length
     );
 
-    const overdueOrders = list.filter((o) => isOrderOverdue(o));
+    const overdueOrders = list.filter((o) => isOrderOverdue(o, currentDayIso));
     const ordersOverdue = overdueOrders.length;
     const testsOverdue = list.reduce((acc, o) => {
       if (o.orderStatus === "COMPLETED") return acc;
-      const isOrderPassed = Boolean(o.targetDateIso && o.targetDateIso < todayIso);
+      const isOrderPassed = Boolean(o.targetDateIso && o.targetDateIso < currentDayIso);
       const count = o.tests.filter((t) => {
         if (t.status === "COMPLETED") return false;
-        return isTestOverdue(t, o.orderStatus) || isOrderPassed;
+        return isTestOverdue(t, o.orderStatus, currentDayIso) || isOrderPassed;
       }).length;
       return acc + (count > 0 ? count : isOrderPassed ? o.totalTests : 0);
     }, 0);
@@ -780,6 +793,9 @@ export default function LabOrders() {
     const transferPending = transPendingCount;
 
     return {
+      allOrdersCount,
+      allTestsCount,
+      allRevenue,
       total,
       completed,
       inProgress,
@@ -806,16 +822,21 @@ export default function LabOrders() {
   /* ---------- KPI Cards configuration (Admin Dashboard style) ---------- */
   const kpiCards = useMemo(
     () => [
-      {
+            {
         id: "total-orders",
         label: "Total Lab Orders",
-        subLabel: `${metrics.totalTests} tests requested`,
-        value: metrics.total,
+        subLabel: `${metrics.allTestsCount} tests requested`,
+        value: metrics.allOrdersCount,
         tag: "Total",
         bg: "#D6E3FF",
         valueColor: "#00488D",
         iconBg: "rgba(255, 255, 255, 0.40)",
         icon: <FileText className="w-[17px] h-[17px]" color="#00488D" />,
+        isActive: activeTab === "ALL",
+        onClick: () => {
+          setSelectedDate(new Date());
+          setActiveTab("ALL");
+        },
       },
       {
         id: "orders-today",
@@ -827,6 +848,12 @@ export default function LabOrders() {
         valueColor: "#00488D",
         iconBg: "rgba(255, 255, 255, 0.50)",
         icon: <CalendarDays className="w-[17px] h-[17px]" color="#00488D" />,
+        isActive: Boolean(selectedDate && isToday(selectedDate)),
+        onClick: () => {
+          setSelectedDate(new Date());
+          setDateFilterType("ACTIVE_RANGE");
+          setActiveTab("ALL");
+        },
       },
       {
         id: "revenue",
@@ -866,6 +893,8 @@ export default function LabOrders() {
         valueColor: "#B91C1C",
         iconBg: "rgba(255, 255, 255, 0.50)",
         icon: <Clock className="w-[17px] h-[17px]" color="#B91C1C" />,
+        isActive: activeTab === "OVERDUE",
+        onClick: () => setActiveTab((prev) => (prev === "OVERDUE" ? "ALL" : "OVERDUE")),
       },
       {
         id: "order-completed",
@@ -877,6 +906,8 @@ export default function LabOrders() {
         valueColor: "#00A87E",
         iconBg: "rgba(255, 255, 255, 0.40)",
         icon: <CheckCircle2 className="w-[17px] h-[17px]" color="#00A87E" />,
+        isActive: activeTab === "COMPLETED",
+        onClick: () => setActiveTab((prev) => (prev === "COMPLETED" ? "ALL" : "COMPLETED")),
       },
       {
         id: "order-in-progress",
@@ -888,6 +919,8 @@ export default function LabOrders() {
         valueColor: "#7B3200",
         iconBg: "#FFDBCB",
         icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
+        isActive: activeTab === "IN_PROGRESS",
+        onClick: () => setActiveTab((prev) => (prev === "IN_PROGRESS" ? "ALL" : "IN_PROGRESS")),
       },
       {
         id: "order-pending",
@@ -899,6 +932,8 @@ export default function LabOrders() {
         valueColor: "#4A5F83",
         iconBg: "rgba(255, 255, 255, 0.40)",
         icon: <FlaskConical className="w-[17px] h-[17px]" color="#4A5F83" />,
+        isActive: activeTab === "PENDING",
+        onClick: () => setActiveTab((prev) => (prev === "PENDING" ? "ALL" : "PENDING")),
       },
       {
         id: "registration-pending",
@@ -955,9 +990,7 @@ export default function LabOrders() {
         iconBg: "#FFDBCB",
         icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
       },
-    ],
-    [metrics]
-  );
+    ], [metrics, activeTab, selectedDate]);
 
   /* ---------- displayed KPI cards based on user selection (Admin Dashboard style) ---------- */
   const displayedKpiCards = useMemo(() => {
@@ -971,16 +1004,19 @@ export default function LabOrders() {
 
   /* ---------- filtered list ---------- */
   const filtered = useMemo(() => {
+    const currentDayIso = selectedDate ? format(selectedDate, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd");
+
     return orders.filter((o) => {
+      const isOverdue = isOrderOverdue(o, currentDayIso);
+
       if (activeTab === "COMPLETED" && o.orderStatus !== "COMPLETED") return false;
       if (activeTab === "IN_PROGRESS" && o.orderStatus !== "IN_PROGRESS") return false;
       if (activeTab === "PENDING" && o.orderStatus !== "PENDING") return false;
-      if (activeTab === "OVERDUE" && !isOrderOverdue(o)) return false;
+      if (activeTab === "OVERDUE" && !isOverdue) return false;
       if (priorityFilter !== "ALL" && o.priority !== priorityFilter) return false;
 
       if (selectedDate) {
-        const targetDay = format(selectedDate, "yyyy-MM-dd");
-        if (!isOrderMatchingDate(o, targetDay, dateFilterType)) return false;
+        if (!isOrderMatchingDate(o, currentDayIso, dateFilterType)) return false;
       }
 
       if (searchQuery.trim()) {
@@ -1204,11 +1240,19 @@ export default function LabOrders() {
                   displayedKpiCards.map((card) => (
                     <div
                       key={card.id}
+                      onClick={(card as any).onClick}
+                      role={(card as any).onClick ? "button" : undefined}
+                      tabIndex={(card as any).onClick ? 0 : undefined}
                       style={{
                         background: card.bg,
-                        boxShadow: "0 2px 10px rgba(0,0,0,0.06)",
+                        border: (card as any).isActive ? `2.5px solid ${card.valueColor}` : "2.5px solid transparent",
+                        boxShadow: (card as any).isActive
+                          ? `0 0 0 1px ${card.valueColor}20, 0 6px 18px ${card.valueColor}28`
+                          : "0 2px 10px rgba(0,0,0,0.06)",
                       }}
-                      className="flex-[0_0_206px] min-w-[206px] rounded-[12px] p-[14px_16px] flex flex-col gap-[10px] select-none cursor-default"
+                      className={`flex-[0_0_206px] min-w-[206px] rounded-[12px] p-[14px_16px] flex flex-col gap-[10px] select-none transition-all duration-200 ${
+                        (card as any).onClick ? "cursor-pointer hover:-translate-y-[2px] hover:shadow-[0_6px_20px_rgba(0,0,0,0.10)]" : "cursor-default"
+                      }`}
                     >
                       <div className="flex items-center justify-between">
                         <div
@@ -1313,13 +1357,14 @@ export default function LabOrders() {
                 </div>
                 {/* Right controls: Date Navigation + Priority */}
                 <div className="flex items-center gap-2.5 flex-wrap">
-                  {/* Date Filter Type: Order Date vs Target Date */}
+                  {/* Date Filter Type: Active Range vs Exact Date */}
                   <select
                     value={dateFilterType}
                     onChange={(e) => setDateFilterType(e.target.value as any)}
                     className="text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 outline-none focus:border-[#0b4a8b] cursor-pointer h-[34px] shadow-xs"
-                    title="Select which date field to filter with the calendar"
+                    title="Select date filtering mode"
                   >
+                    <option value="ACTIVE_RANGE">Filter: Active &amp; Overdue Range</option>
                     <option value="ORDER_DATE">Filter: Order Date</option>
                     <option value="TARGET_DATE">Filter: Target Date</option>
                     <option value="ALL">Filter: Either Date</option>
@@ -1345,16 +1390,14 @@ export default function LabOrders() {
                           }`}
                         >
                           <CalendarIcon className="w-3.5 h-3.5 mr-1.5 text-slate-500" />
-                          {selectedDate ? (
-                            isToday(selectedDate)
-                              ? "Today"
-                              : isYesterday(selectedDate)
-                                ? "Yesterday"
-                                : isTomorrow(selectedDate)
-                                  ? "Tomorrow"
-                                  : format(selectedDate, "dd/MM/yyyy")
+                          {selectedDate && !isToday(selectedDate) ? (
+                            isYesterday(selectedDate)
+                              ? "Yesterday"
+                              : isTomorrow(selectedDate)
+                                ? "Tomorrow"
+                                : format(selectedDate, "dd/MM/yyyy")
                           ) : (
-                            "All Dates"
+                            "Today"
                           )}
                         </button>
                       </PopoverTrigger>
@@ -1368,16 +1411,16 @@ export default function LabOrders() {
                               ? "Filter by Order Date"
                               : "Filter Orders by Date"}
                           </span>
-                          {selectedDate && (
+                          {selectedDate && !isToday(selectedDate) && (
                             <button
                               type="button"
                               onClick={() => {
-                                setSelectedDate(null);
+                                setSelectedDate(new Date());
                                 setIsCalendarOpen(false);
                               }}
-                              className="text-xs text-rose-600 hover:text-rose-800 font-semibold cursor-pointer hover:underline"
+                              className="text-xs text-[#0b4a8b] hover:text-[#083666] font-semibold cursor-pointer hover:underline"
                             >
-                              Show All Dates
+                              Reset to Today
                             </button>
                           )}
                         </div>
@@ -1404,16 +1447,18 @@ export default function LabOrders() {
                           >
                             Today
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedDate(null);
-                              setIsCalendarOpen(false);
-                            }}
-                            className="text-slate-600 hover:text-slate-900 font-medium cursor-pointer"
-                          >
-                            Show All Dates
-                          </button>
+                          {selectedDate && !isToday(selectedDate) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedDate(new Date());
+                                setIsCalendarOpen(false);
+                              }}
+                              className="text-slate-600 hover:text-slate-900 font-medium cursor-pointer"
+                            >
+                              Reset to Today
+                            </button>
+                          )}
                         </div>
                       </PopoverContent>
                     </Popover>
@@ -1428,18 +1473,15 @@ export default function LabOrders() {
                     </button>
                   </div>
 
-                  {selectedDate && (
+                  {selectedDate && !isToday(selectedDate) && (
                     <button
                       type="button"
-                      onClick={() => setSelectedDate(null)}
+                      onClick={() => setSelectedDate(new Date())}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-blue-50 text-[#0b4a8b] hover:bg-blue-100 text-xs font-bold cursor-pointer border border-blue-200 transition-colors h-[34px]"
-                      title="Clear date filter to show all orders"
+                      title="Reset back to Today"
                     >
-                      <span className="text-[10px] uppercase font-bold text-blue-600">
-                        {dateFilterType === "TARGET_DATE" ? "Target" : dateFilterType === "ORDER_DATE" ? "Order" : "Date"}:
-                      </span>
-                      <span>{isToday(selectedDate) ? "Today" : format(selectedDate, "dd/MM/yyyy")}</span>
-                      <X className="w-3.5 h-3.5" />
+                      <CalendarDays className="w-3.5 h-3.5" />
+                      <span>Back to Today</span>
                     </button>
                   )}
 
@@ -1492,13 +1534,15 @@ export default function LabOrders() {
                           ) : selectedDate ? (
                             <>
                               No orders found for {dateFilterType === "TARGET_DATE" ? "target date" : dateFilterType === "ORDER_DATE" ? "order date" : "date"} {isToday(selectedDate) ? "Today" : format(selectedDate, "dd/MM/yyyy")}.{" "}
-                              <button
-                                type="button"
-                                onClick={() => setSelectedDate(null)}
-                                className="text-[#0b4a8b] hover:underline font-semibold cursor-pointer"
-                              >
-                                Show all dates
-                              </button>
+                              {!isToday(selectedDate) && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedDate(new Date())}
+                                  className="text-[#0b4a8b] hover:underline font-semibold cursor-pointer"
+                                >
+                                  Back to Today
+                                </button>
+                              )}
                             </>
                           ) : (
                             "Try changing filters or search query."
@@ -1509,7 +1553,8 @@ export default function LabOrders() {
                   ) : filtered.map((o) => {
                     const isCompleted = o.orderStatus === "COMPLETED";
                     const isInProgress = o.orderStatus === "IN_PROGRESS";
-                    const isOverdue = isOrderOverdue(o);
+                    const currentDayIso = selectedDate ? format(selectedDate, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd");
+                    const isOverdue = isOrderOverdue(o, currentDayIso);
                     return (
                       <tr
                         key={o.id}
@@ -1543,10 +1588,15 @@ export default function LabOrders() {
                         </td>
                         {/* Doctor */}
                         <td className="py-4 px-5"><span className="font-medium text-slate-800 block">{o.doctorName}</span><span className="text-[11px] text-slate-400">{o.doctorDepartment}</span></td>
-                        {/* Order Date */}
+                        {/* Order Date & Target Date */}
                         <td className="py-4 px-5 whitespace-nowrap">
                           <span className="font-semibold text-slate-800 block text-xs">{o.orderDateFormatted}</span>
                           {o.orderTimeFormatted && <span className="text-[11px] text-slate-400 block">{o.orderTimeFormatted}</span>}
+                          {o.targetDateFormatted && o.targetDateFormatted !== "—" && (
+                            <span className={`text-[11px] block mt-0.5 font-medium ${isOverdue ? "text-rose-700 font-bold" : "text-slate-500"}`}>
+                              Target: {o.targetDateFormatted}
+                            </span>
+                          )}
                         </td>
                         {/* Test Completion — the core feature */}
                         <td className="py-4 px-5">
@@ -1600,7 +1650,11 @@ export default function LabOrders() {
                         </td>
                         {/* Status */}
                         <td className="py-4 px-5">
-                          {isCompleted ? (
+                          {isOverdue ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse" />OVERDUE
+                            </span>
+                          ) : isCompleted ? (
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />Completed
                             </span>
@@ -1770,8 +1824,8 @@ export default function LabOrders() {
                           </div>
                           <p className="text-xs text-slate-500 mt-0.5">Specimen: <strong className="text-slate-700">{t.sampleType}</strong></p>
                         </div>
-                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1 ${done ? "bg-emerald-100 text-emerald-800" : testing ? "bg-amber-100 text-amber-800" : t.status === "VERIFIED" ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-600"}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${done ? "bg-emerald-600" : testing ? "bg-amber-600" : t.status === "VERIFIED" ? "bg-blue-600" : "bg-slate-400"}`} />{t.statusLabel}
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1 ${done ? "bg-emerald-100 text-emerald-800 border border-emerald-200" : "bg-slate-100 text-slate-700 border border-slate-200"}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${done ? "bg-emerald-600" : "bg-slate-400"}`} />{done ? "Completed" : "Pending"}
                         </span>
                       </div>
                       {/* Barcode */}

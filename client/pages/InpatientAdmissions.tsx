@@ -24,10 +24,16 @@ import {
   type TransferAdmissionPayload,
   type DischargeAdmissionPayload,
   type DiseaseStatusRecord,
+  type DischargeTypeRecord,
   PATIENT_STATUS_AT_DISCHARGE_OPTIONS,
 } from "@/api/ipd.api";
+
+/* Dropdown value for "Others": the typed text is added to the master on
+   submit, so the whole hospital sees it next time. */
+const OTHERS_OPTION = "__OTHERS__";
 import { EncounterDocuments } from "@/components/hms/EncounterDocuments";
 import { useToast } from "@/hooks/use-toast";
+import { getUser } from "@/utils/token";
 import { RefreshButton } from "@/components/hms/RefreshButton";
 import { StatusBadge } from "@/components/hms/StatusBadge";
 import { useBranchFilter, ALL_BRANCHES_VALUE, NO_BRANCH_VALUE } from "@/context/BranchFilterContext";
@@ -74,6 +80,9 @@ const InpatientAdmissions: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { can } = usePermission();
+  // Nurses can discharge directly (with the clinical fields); admins only
+  // confirm what the doctor saved in the consultation.
+  const isNurseRole = String(getUser()?.role ?? "").toUpperCase() === "NURSE";
   const { selectedBranchId } = useBranchFilter();
 
   // ---------------------------------------------------------------
@@ -115,7 +124,6 @@ const InpatientAdmissions: React.FC = () => {
   const [dischargeData, setDischargeData] = useState<DischargeAdmissionPayload>({
     discharge_type: "RECOVERED",
     discharge_summary: "",
-    discharge_date: new Date().toISOString().slice(0, 16),
     discharge_advice: "",
     review_date: "",
     discharge_disease_status: "",
@@ -125,6 +133,9 @@ const InpatientAdmissions: React.FC = () => {
   // Fetched lazily the first time the discharge dialog opens, then cached --
   // same list the doctor's Diagnosis form maintains (disease_status_master).
   const [diseaseStatusOptions, setDiseaseStatusOptions] = useState<DiseaseStatusRecord[]>([]);
+  const [dischargeTypeOptions, setDischargeTypeOptions] = useState<DischargeTypeRecord[]>([]);
+  const [otherDischargeType, setOtherDischargeType] = useState("");
+  const [otherDiseaseStatus, setOtherDiseaseStatus] = useState("");
 
   // Planned-request workflow: bed picker (admit / reserve) and the
   // confirm dialogs for cancel / no-show / release reservation.
@@ -344,13 +355,22 @@ const InpatientAdmissions: React.FC = () => {
     setDischargeData({
       discharge_type: "RECOVERED",
       discharge_summary: "",
-      discharge_date: new Date().toISOString().slice(0, 16),
       discharge_advice: "",
       review_date: "",
       discharge_disease_status: "",
       patient_status_at_discharge: "",
     });
+    setOtherDischargeType("");
+    setOtherDiseaseStatus("");
     setDischargeOpen(true);
+    ipdApi
+      .listDischargeTypes()
+      .then((res) => setDischargeTypeOptions(res.data?.data || []))
+      .catch(() => { /* Non-fatal -- the dropdown shows no options. */ });
+    ipdApi
+      .getByIpNumber(admission.ip_number)
+      .then((res) => { if (res.data?.data) setActiveAdmission(res.data.data); })
+      .catch(() => { /* list row is enough to confirm */ });
 
     if (diseaseStatusOptions.length === 0) {
       ipdApi
@@ -374,12 +394,31 @@ const InpatientAdmissions: React.FC = () => {
       // undefined -- an empty string still hits isISO8601()/isIn() and
       // fails. review_date and patient_status_at_discharge are both
       // genuinely optional, so blank out to undefined rather than "".
+      // discharge_date is intentionally dropped -- the backend stamps "now"
+      // the moment this request lands, the same way the doctor's Inpatient
+      // Discharge section does, instead of a client-side snapshot that could
+      // go stale if the dialog sat open a while before submitting.
+      const { discharge_date: _unused, ...rest } = dischargeData;
+      // "Others" (nurse): add the typed value to its master first.
+      if (isNurseRole && rest.discharge_type === OTHERS_OPTION) {
+        if (!otherDischargeType.trim()) throw new Error("Enter the discharge type");
+        const added = (await ipdApi.addDischargeType(otherDischargeType.trim())).data?.data;
+        if (!added) throw new Error("Could not add the discharge type");
+        rest.discharge_type = added.type_code;
+      }
+      if (isNurseRole && rest.discharge_disease_status === OTHERS_OPTION) {
+        if (!otherDiseaseStatus.trim()) throw new Error("Enter the disease status");
+        const added = (await ipdApi.addDiseaseStatus(otherDiseaseStatus.trim())).data?.data;
+        if (!added) throw new Error("Could not add the disease status");
+        rest.discharge_disease_status = added.status_name;
+        setDiseaseStatusOptions((prev) => [...prev, added]);
+      }
       const payload: DischargeAdmissionPayload = {
-        ...dischargeData,
+        ...rest,
         review_date: dischargeData.review_date || undefined,
         patient_status_at_discharge: dischargeData.patient_status_at_discharge || undefined,
       };
-      const res = await ipdApi.discharge(activeAdmission.admission_id, payload);
+      const res = await ipdApi.discharge(activeAdmission.admission_id, isNurseRole ? payload : {});
       if (res.data?.success) {
         toast({
           title: "Patient Discharged",
@@ -650,7 +689,16 @@ const InpatientAdmissions: React.FC = () => {
       key: "status",
       label: "STATUS",
       className: "!whitespace-normal",
-      render: (row) => <StatusBadge status={row.status} />,
+      render: (row) => (
+        <div className="flex flex-col items-start gap-1">
+          <StatusBadge status={row.status} />
+          {row.status === "ADMITTED" && row.discharge_details_at && (
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+              Ready for discharge
+            </span>
+          )}
+        </div>
+      ),
     },
     {
       key: "actions",
@@ -666,6 +714,17 @@ const InpatientAdmissions: React.FC = () => {
           onAdmit={() => handleAdmitPlanned(row)}
           onTransfer={() => handleOpenTransfer(row)}
           onDischarge={() => handleOpenDischarge(row)}
+          dischargeReady={Boolean(row.discharge_details_at)}
+          onOpenConsultation={() =>
+            navigate("/doctor/patient-consultation", {
+              state: {
+                patientId: row.patient_id,
+                branchId: row.branch_id,
+                encounterNo: row.encounter_no,
+                initialStep: "DISCHARGE MEDICATION",
+              },
+            })
+          }
           onReserve={() => handleReserveBed(row)}
           onReleaseReservation={() => openPlannedAction("release", row)}
           onCancel={() => openPlannedAction("cancel", row)}
@@ -1023,19 +1082,12 @@ const InpatientAdmissions: React.FC = () => {
                 </div>
               </div>
 
-              {/* Discharge Date & Time */}
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-700">Discharge Date & Time *</Label>
-                <Input
-                  type="datetime-local"
-                  max={new Date().toISOString().slice(0, 16)}
-                  value={dischargeData.discharge_date || ""}
-                  onChange={(e) =>
-                    setDischargeData((prev) => ({ ...prev, discharge_date: e.target.value }))
-                  }
-                />
-              </div>
+              {/* Discharge date & time is not entered here -- the server
+                  stamps the moment this form is submitted, the same way an
+                  admission's start time is stamped at admit, not picked. */}
 
+              {isNurseRole ? (
+                <>
               {/* Discharge Type */}
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-slate-700">Discharge Type *</Label>
@@ -1056,13 +1108,22 @@ const InpatientAdmissions: React.FC = () => {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="RECOVERED">Recovered / Normal Discharge</SelectItem>
-                    <SelectItem value="DAYCARE_RELEASED">Daycare Released</SelectItem>
-                    <SelectItem value="AGAINST_MEDICAL_ADVICE">Against Medical Advice (AMA)</SelectItem>
-                    <SelectItem value="REFERRED_OUT">Referred Out to Other Facility</SelectItem>
-                    <SelectItem value="DECEASED">Deceased</SelectItem>
+                    {dischargeTypeOptions.map((opt) => (
+                      <SelectItem key={opt.discharge_type_id} value={opt.type_code}>
+                        {opt.type_name}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value={OTHERS_OPTION}>Others</SelectItem>
                   </SelectContent>
                 </Select>
+                {dischargeData.discharge_type === OTHERS_OPTION && (
+                  <Input
+                    maxLength={100}
+                    placeholder="Type the discharge type"
+                    value={otherDischargeType}
+                    onChange={(e) => setOtherDischargeType(e.target.value)}
+                  />
+                )}
               </div>
 
               {/* Patient Status at Discharge */}
@@ -1106,8 +1167,17 @@ const InpatientAdmissions: React.FC = () => {
                         {opt.status_name}
                       </SelectItem>
                     ))}
+                    <SelectItem value={OTHERS_OPTION}>Others</SelectItem>
                   </SelectContent>
                 </Select>
+                {dischargeData.discharge_disease_status === OTHERS_OPTION && (
+                  <Input
+                    maxLength={100}
+                    placeholder="Type the disease status"
+                    value={otherDiseaseStatus}
+                    onChange={(e) => setOtherDiseaseStatus(e.target.value)}
+                  />
+                )}
               </div>
 
               {/* Discharge Summary */}
@@ -1142,13 +1212,47 @@ const InpatientAdmissions: React.FC = () => {
                   <Label className="text-xs font-semibold text-slate-700">Review / Follow-up Date</Label>
                   <Input
                     type="date"
-                    min={(dischargeData.discharge_date || "").slice(0, 10)}
+                    min={new Date().toISOString().slice(0, 10)}
                     value={dischargeData.review_date || ""}
                     onChange={(e) =>
                       setDischargeData((prev) => ({ ...prev, review_date: e.target.value }))
                     }
                   />
                 </div>
+              )}
+
+                </>
+              ) : (
+                <>
+              {/* Admin: read-only -- the doctor entered these in the
+                  consultation; the admin only confirms the discharge. */}
+              <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+                {[
+                  ["Discharge Type", dischargeTypeOptions.find((o) => o.type_code === activeAdmission.discharge_type)?.type_name ?? activeAdmission.discharge_type],
+                  ["Patient Status", activeAdmission.patient_status_at_discharge],
+                  ["Disease Status", activeAdmission.discharge_disease_status],
+                  ["Next Visit Date", activeAdmission.review_date ? String(activeAdmission.review_date).slice(0, 10) : null],
+                ].map(([label, value]) => (
+                  <div key={label as string}>
+                    <div className="text-[10px] font-bold uppercase text-slate-400">{label}</div>
+                    <div className="font-semibold text-slate-800">{(value as string) || "—"}</div>
+                  </div>
+                ))}
+                <div className="col-span-2">
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Discharge Summary</div>
+                  <div className="whitespace-pre-wrap font-semibold text-slate-800">{activeAdmission.discharge_summary || "—"}</div>
+                </div>
+                <div className="col-span-2">
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Discharge Advice</div>
+                  <div className="whitespace-pre-wrap font-semibold text-slate-800">{activeAdmission.discharge_advice || "—"}</div>
+                </div>
+                <div className="col-span-2 text-[11px] text-slate-500">
+                  Saved by {activeAdmission.discharge_details_by_name || activeAdmission.discharge_details_by || "doctor"}
+                  {activeAdmission.discharge_details_at ? ` on ${new Date(activeAdmission.discharge_details_at).toLocaleString()}` : ""}
+                </div>
+              </div>
+
+                </>
               )}
 
               {/* Attachments -- biopsy reports, discharge paperwork, etc. */}

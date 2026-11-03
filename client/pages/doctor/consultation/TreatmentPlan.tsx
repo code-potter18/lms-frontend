@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import API from "../../../api/axios";
 import { isChemoPlanClosed } from "../../../api/chemotherapy.api";
@@ -380,7 +380,7 @@ const TreatmentPlan: React.FC<{
         undefined,
         undefined,
         undefined,
-        { allowNewCourse: true }
+        { allowNewCourse: true, encounterNo }
       );
 
       if (error) {
@@ -587,7 +587,7 @@ const TreatmentPlan: React.FC<{
 
           <label
             htmlFor="treatmentIntent"
-            className="mb-2 block text-sm font-semibold text-slate-700"
+            className="mb-2 block text-[10px] font-bold text-slate-800"
           >
             Treatment Intent
           </label>
@@ -600,7 +600,7 @@ const TreatmentPlan: React.FC<{
               onChange={(event) =>
                 setTreatmentIntent(event.target.value)
               }
-              className="block w-full appearance-none rounded-lg border border-slate-300 bg-white p-3 text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              className="block w-full appearance-none rounded-lg border border-slate-300 bg-white p-3 text-[10px] text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             >
               <option value="">
                 Select Treatment Intent
@@ -638,7 +638,7 @@ const TreatmentPlan: React.FC<{
 
         <div>
 
-          <label className="mb-3 block text-sm font-semibold text-slate-700">
+          <label className="mb-3 block text-[10px] font-bold text-slate-800">
             Treatment Type
           </label>
 
@@ -686,7 +686,7 @@ const TreatmentPlan: React.FC<{
 
             <label
               htmlFor="lineOfTherapy"
-              className="mb-2 block text-sm font-semibold text-slate-700"
+              className="mb-2 block text-[10px] font-bold text-slate-800"
             >
               Line of Therapy
             </label>
@@ -699,7 +699,7 @@ const TreatmentPlan: React.FC<{
                 onChange={(event) =>
                   setLineOfTherapy(event.target.value)
                 }
-                className="block w-full appearance-none rounded-lg border border-slate-300 bg-white p-3 text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                className="block w-full appearance-none rounded-lg border border-slate-300 bg-white p-3 text-[10px] text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               >
                 <option value="First Line">
                   First Line
@@ -722,7 +722,7 @@ const TreatmentPlan: React.FC<{
 
             <label
               htmlFor="plannedStartDate"
-              className="mb-2 block text-sm font-semibold text-slate-700"
+              className="mb-2 block text-[10px] font-bold text-slate-800"
             >
               Planned Start Date
             </label>
@@ -745,7 +745,7 @@ const TreatmentPlan: React.FC<{
                         );
                       }
                     }}
-                    className="block w-full rounded-lg border border-slate-300 bg-white p-3 pr-12 text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                    className="block w-full rounded-lg border border-slate-300 bg-white p-3 pr-12 text-[10px] text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                   />
 
                   <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400">
@@ -793,7 +793,7 @@ const TreatmentPlan: React.FC<{
 
             <label
               htmlFor="protocol"
-              className="block text-sm font-semibold text-slate-700"
+              className="block text-[10px] font-bold text-slate-800"
             >
               Protocol
             </label>
@@ -803,7 +803,7 @@ const TreatmentPlan: React.FC<{
               onClick={() =>
                 console.log("View Protocol clicked")
               }
-              className="text-sm font-semibold text-blue-700 hover:underline"
+              className="text-[10px] font-semibold text-blue-700 hover:underline"
             >
             
             </button>
@@ -857,7 +857,7 @@ const TreatmentPlan: React.FC<{
                   );
                 }
               }}
-              className="block w-full appearance-none rounded-lg border border-slate-300 bg-white p-3 text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              className="block w-full appearance-none rounded-lg border border-slate-300 bg-white p-3 text-[10px] text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             >
               <option value="">
                 {protocolsLoading
@@ -882,13 +882,13 @@ const TreatmentPlan: React.FC<{
           </div>
 
           {protocolsError && (
-            <div className="mt-2 text-sm font-medium text-red-600">
+            <div className="mt-2 text-[10px] font-medium text-red-600">
               {protocolsError}
             </div>
           )}
 
           {staleProtocol && (
-            <div className="mt-2 text-sm font-medium text-amber-600">
+            <div className="mt-2 text-[10px] font-medium text-amber-600">
               The previously selected protocol doesn't match the current
               cancer type / histopathology. Please select a protocol again.
             </div>
@@ -904,7 +904,7 @@ const TreatmentPlan: React.FC<{
 
           <label
             htmlFor="remarks"
-            className="mb-2 block text-sm font-semibold text-slate-700"
+            className="mb-2 block text-[10px] font-bold text-slate-800"
           >
             Remarks
           </label>
@@ -926,7 +926,7 @@ const TreatmentPlan: React.FC<{
       <div className="flex flex-col items-end gap-3 rounded-b-xl border-t border-slate-200 bg-slate-50 p-6">
 
         {saveError && (
-          <div className="text-sm font-medium text-red-600">
+          <div className="text-[10px] font-medium text-red-600">
             {saveError}
           </div>
         )}
@@ -971,19 +971,19 @@ const TreatmentPlan: React.FC<{
             className="mb-4 h-32 w-32 rounded-full border border-slate-100 object-cover object-[50%_10%] shadow-sm"
           />
 
-          <h2 className="mb-1 text-xl font-bold text-slate-900">
+          <h2 className="mb-1 text-[10px] font-bold text-slate-900">
             {""}
           </h2>
 
-          <p className="mb-3 text-sm text-slate-500">
+          <p className="mb-3 text-[10px] text-slate-500">
             {""}
           </p>
 
-          <div className="mb-4 rounded-md bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">
+          <div className="mb-4 rounded-md bg-slate-100 px-3 py-1 text-[10px] font-medium text-slate-600">
             {""}
           </div>
 
-          <p className="text-center text-sm font-bold tracking-wide text-blue-700">
+          <p className="text-center text-[10px] font-bold tracking-wide text-blue-700">
             {""}
           </p>
         </div>
@@ -993,24 +993,24 @@ const TreatmentPlan: React.FC<{
 
           {/* Phone */}
           <div>
-            <div className="mb-1 flex items-center text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <div className="mb-1 flex items-center text-[10px] font-bold uppercase tracking-wider text-slate-800">
               <PhoneIcon />
               PHONE
             </div>
 
-            <p className="text-slate-900">
+            <p className="text-[10px] text-slate-900">
               {""}
             </p>
           </div>
 
           {/* Email */}
           <div>
-            <div className="mb-1 flex items-center text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <div className="mb-1 flex items-center text-[10px] font-bold uppercase tracking-wider text-slate-800">
               <EnvelopeIcon />
               EMAIL
             </div>
 
-            <p className="text-slate-900">
+            <p className="text-[10px] text-slate-900">
               {""}
             </p>
           </div>
@@ -1019,37 +1019,37 @@ const TreatmentPlan: React.FC<{
           <div className="grid grid-cols-2 gap-y-6 pt-2">
 
             <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-800">
                 HEIGHT
               </div>
-              <p className="font-semibold text-slate-900">
+              <p className="text-[10px] font-semibold text-slate-900">
                 {measurements.height}
               </p>
             </div>
 
             <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-800">
                 WEIGHT
               </div>
-              <p className="font-semibold text-slate-900">
+              <p className="text-[10px] font-semibold text-slate-900">
                 {measurements.weight}
               </p>
             </div>
 
             <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-800">
                 BSA
               </div>
-              <p className="font-semibold text-slate-900">
+              <p className="text-[10px] font-semibold text-slate-900">
                 {measurements.bsa}
               </p>
             </div>
 
             <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-800">
                 BMI
               </div>
-              <p className="font-semibold text-slate-900">
+              <p className="text-[10px] font-semibold text-slate-900">
                 {measurements.bmi}
               </p>
             </div>
@@ -1063,7 +1063,7 @@ const TreatmentPlan: React.FC<{
           <button
             type="button"
             onClick={handleViewProfile}
-            className="w-full rounded-lg border-2 border-blue-600 py-2.5 font-semibold text-blue-600 transition-colors hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            className="w-full rounded-lg border-2 border-blue-600 py-2.5 text-[10px] font-semibold text-blue-600 transition-colors hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             View Full Profile
           </button>
@@ -1095,7 +1095,7 @@ const TreatmentPlan: React.FC<{
               <ArrowLeftIcon />
             </button>
 
-            <h1 className="text-2xl font-bold text-slate-900">
+            <h1 className="text-[10px] font-bold text-slate-900">
               Patients
             </h1>
 
@@ -1162,7 +1162,7 @@ const TreatmentPlan: React.FC<{
                     <CheckIcon />
                   </div>
 
-                  <span className="text-xs font-bold tracking-wider text-slate-900">
+                  <span className="text-[10px] font-bold tracking-wider text-slate-900">
                     DIAGNOSIS
                   </span>
 
@@ -1185,7 +1185,7 @@ const TreatmentPlan: React.FC<{
                     <CheckIcon />
                   </div>
 
-                  <span className="mb-2 text-xs font-bold tracking-wider text-slate-900">
+                  <span className="mb-2 text-[10px] font-bold tracking-wider text-slate-900">
                     TREATMENT PLAN
                   </span>
 
@@ -1212,7 +1212,7 @@ const TreatmentPlan: React.FC<{
                     <CheckIcon />
                   </div>
 
-                  <span className="text-center text-xs font-bold tracking-wider text-slate-900">
+                  <span className="text-center text-[10px] font-bold tracking-wider text-slate-900">
                     CHEMOTHERAPY ORDER
                   </span>
 

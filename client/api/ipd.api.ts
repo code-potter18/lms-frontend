@@ -71,6 +71,12 @@ export const PATIENT_STATUS_AT_DISCHARGE_OPTIONS: { value: string; label: string
   { value: "DECEASED", label: "Deceased" },
 ];
 
+export interface DischargeTypeRecord {
+  discharge_type_id: string;
+  type_code: string;
+  type_name: string;
+}
+
 export interface DiseaseStatusRecord {
   disease_status_id: string;
   status_name: string;
@@ -117,6 +123,10 @@ export interface AdmissionRecord {
   review_date?: string | null;
   discharge_disease_status?: string | null;
   patient_status_at_discharge?: string | null;
+  /** Set once the doctor saved the discharge details (Discharge Medication step). */
+  discharge_details_by?: string | null;
+  discharge_details_at?: string | null;
+  discharge_details_by_name?: string | null;
   advance_amount: number | string | null;
   status: "PLANNED" | "ADMITTED" | "DISCHARGED" | "TRANSFERRED" | "CANCELLED" | "NO_SHOW" | string;
   cancellation_reason?: string | null;
@@ -359,8 +369,24 @@ export const ipdApi = {
   // The discharge form's Disease Status dropdown reuses the exact list the
   // doctor's Diagnosis form maintains (disease_status_master) -- same
   // endpoint, not a separate IPD copy.
+  // Doctor: save the clinical discharge details while the patient stays
+  // admitted. The discharge itself is confirmed separately (discharge()).
+  saveDischargeDetails: (id: string, data: DischargeAdmissionPayload) =>
+    API.put<{ success: boolean; message: string; data: AdmissionRecord }>(`/ipd/${id}/discharge-details`, data),
+
   listDiseaseStatuses: () =>
     API.get<{ success: boolean; data: DiseaseStatusRecord[] }>("/oncology/reference/disease-statuses"),
+  /** "Others" free text -> saved for the whole hospital (DSM id from id_sequences). */
+  addDiseaseStatus: (value: string) =>
+    API.post<{ success: boolean; data: DiseaseStatusRecord }>("/oncology/reference/disease-statuses", { value }),
+
+  /** Discharge Type options (discharge_type_master). */
+  listDischargeTypes: () =>
+    API.get<{ success: boolean; data: DischargeTypeRecord[] }>("/ipd/reference/discharge-types"),
+
+  /** "Others" free text -> new discharge type for everyone (DST id from id_sequences). */
+  addDischargeType: (type_name: string) =>
+    API.post<{ success: boolean; data: DischargeTypeRecord }>("/ipd/reference/discharge-types", { type_name }),
 
   transfer: (id: string, data: TransferAdmissionPayload) =>
     API.post<{ success: boolean; message: string; data: any }>(`/ipd/${id}/transfer`, data),

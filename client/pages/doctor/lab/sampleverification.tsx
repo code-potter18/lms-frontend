@@ -23,6 +23,13 @@ const COMMON_REJECTION_REASONS = [
 ];
 import LabNav from "./labnav";
 import {
+  calculateSampleStability,
+  resolveStabilityHours,
+  useCurrentTimeTicker,
+  compareBySampleStability,
+  SampleStabilityInfo,
+} from "@/utils/sampleStability";
+import {
   labOrderApi,
   labOrderItemApi,
   LabOrderRecord,
@@ -76,6 +83,8 @@ interface SampleItem {
   sampleId: string;
   collectionId: string;
   collectedOn: string;
+  collectionTimeIso?: string;
+  stabilityHours?: number;
   patientId: string;
   patientName: string;
   ageGender: string;
@@ -298,9 +307,7 @@ export default function SampleVerification() {
 
   // Table search & filter state
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<
-    "ALL" | "PENDING" | "VERIFIED" | "REJECTED"
-  >("ALL");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "PENDING" | "VERIFIED" | "REJECTED">("ALL");
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
 
   /* ---------- KPI Track Scroll (Admin Dashboard style) ---------- */
@@ -732,20 +739,52 @@ export default function SampleVerification() {
     handleOpenRejectModal(idOrSample, defaultReason);
   };
 
-  const filteredSamples = useMemo(() => {
-    return samples.filter((sample) => {
-      const matchesSearch =
-        searchQuery.trim() === "" ||
-        sample.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        sample.barcode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        sample.sampleId.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        sample.testName.toLowerCase().includes(searchQuery.toLowerCase());
+    const currentTime = useCurrentTimeTicker(30000);
 
-      const matchesStatus =
-        statusFilter === "ALL" || sample.status === statusFilter;
-
-      return matchesSearch && matchesStatus;
+  const sampleStabilityMap = useMemo(() => {
+    const map = new Map<string, SampleStabilityInfo>();
+    samples.forEach((s) => {
+      const colTime = s.collectionTimeIso || s.collectedOn || s.collectionTime;
+      const info = calculateSampleStability(
+        colTime,
+        s.stabilityHours || 2,
+        s.status === "VERIFIED" ? "COMPLETED" : s.status,
+        currentTime,
+        true
+      );
+      map.set(s.id, info);
     });
+    return map;
+  }, [samples, currentTime]);
+
+  const expiringSoonCount = useMemo(() => {
+    return samples.filter((s) => {
+      if (s.status === "VERIFIED" || s.status === "REJECTED") return false;
+      const info = sampleStabilityMap.get(s.id);
+      return info ? info.urgencyLevel === "CRITICAL" || info.urgencyLevel === "EXPIRED" : false;
+    }).length;
+  }, [samples, sampleStabilityMap]);
+
+  const filteredSamples = useMemo(() => {
+    return samples
+      .filter((sample) => {
+        const matchesSearch =
+          searchQuery.trim() === "" ||
+          sample.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          sample.barcode.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          sample.sampleId.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          sample.testName.toLowerCase().includes(searchQuery.toLowerCase());
+
+        const matchesStatus =
+          statusFilter === "ALL"
+            ? true
+            : sample.status === statusFilter;
+
+        return matchesSearch && matchesStatus;
+      })
+      .sort((a, b) => {
+        return (b.sampleId || "").localeCompare(a.sampleId || "");
+      });
   }, [samples, searchQuery, statusFilter]);
 
   const verifiedCount = useMemo(
@@ -825,7 +864,7 @@ export default function SampleVerification() {
         onClick: () => setStatusFilter((prev) => (prev === "REJECTED" ? "ALL" : "REJECTED")),
       },
     ],
-    [samples.length, verifiedCount, pendingCount, rejectedCount, statusFilter]
+    [samples.length, verifiedCount, pendingCount, rejectedCount, expiringSoonCount, statusFilter]
   );
 
   return (
@@ -1140,12 +1179,14 @@ export default function SampleVerification() {
                     </div>
                   )}
 
+
+
                   {/* Card 1: Sample Collected Successfully Banner */}
                   <div
-                    className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-sm"
+                    className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-sm md:max-lg:p-4"
                     data-purpose="success-status-card"
                   >
-                    <div className="flex items-start gap-4 mb-6">
+                    <div className="flex items-start gap-4 mb-6 md:max-lg:gap-3 md:max-lg:mb-4">
                       {/* Green Check Circle Badge */}
                       <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
                         <svg
@@ -3120,7 +3161,7 @@ export default function SampleVerification() {
                         />
                       </svg>
                       <span>
-                        {statusFilter === "ALL" ? "Filter" : statusFilter}
+                        {statusFilter === "ALL" ? "Filter" : statusFilter === "EXPIRING_SOON" ? "Expiring Soon" : statusFilter}
                       </span>
                     </button>
 

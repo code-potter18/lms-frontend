@@ -179,6 +179,11 @@ function getEditTitle(roleType: BackendRoleType, designation: string): string {
   }
 }
 
+// Roles whose designation is just the role name -- no dropdown is shown and
+// the value is set automatically (employees.designation stays filled for
+// edit titles, listings and reports).
+const ADMIN_DESIGNATION_ROLES = ["Branch Admin", "Staff Admin"];
+
 interface RoleConfig {
   designations: string[];
   qualifications: string[];
@@ -245,8 +250,10 @@ const ROLE_CONFIG: Record<string, RoleConfig> = {
     isMedical: true,
     showSchedule: false,
   },
+  // Admin roles have no designation choice -- the role itself is the
+  // designation (filled automatically, see ADMIN_DESIGNATION_ROLES).
   "Branch Admin": {
-    designations: ["Branch Admin"],
+    designations: [],
     qualifications: [],
     licenseLabel: "License no",
     licensePlaceholder: "",
@@ -254,7 +261,7 @@ const ROLE_CONFIG: Record<string, RoleConfig> = {
     showSchedule: false,
   },
   "Staff Admin": {
-    designations: ["Branch Admin", "Staff Admin", "Receptionist"],
+    designations: [],
     qualifications: [],
     licenseLabel: "License no",
     licensePlaceholder: "",
@@ -883,7 +890,9 @@ export default function AddEmployee() {
     setFormData((p) => ({
       ...p,
       roleType: newRole,
-      designation: newRole === "BRANCH_ADMIN" ? "Branch Admin" : "",
+      designation: ADMIN_DESIGNATION_ROLES.includes(toDisplayRole(newRole))
+        ? toDisplayRole(newRole)
+        : "",
       specialization: "",
       departmentId: "",
       qualification: "",
@@ -1051,7 +1060,9 @@ export default function AddEmployee() {
           ? Number(formData.experience)
           : undefined,
         department_id: departmentId,
-        designation: formData.designation,
+        designation: ADMIN_DESIGNATION_ROLES.includes(displayRole)
+          ? displayRole
+          : formData.designation,
         specialization:
           isMedical
             ? formData.departmentId === OTHER_DEPARTMENT_VALUE
@@ -1165,7 +1176,10 @@ export default function AddEmployee() {
       { key: "lastName", label: "Last Name" },
       { key: "email", label: "Email" },
       { key: "mobileNo", label: "Mobile Number" },
-      { key: "designation", label: "Designation" },
+      // Admin roles fill designation automatically (no dropdown shown).
+      ...(ADMIN_DESIGNATION_ROLES.includes(toDisplayRole(formData.roleType))
+        ? []
+        : [{ key: "designation" as const, label: "Designation" }]),
       { key: "joiningDate", label: "Joining Date" },
       { key: "bloodGroup", label: "Blood Group" },
       { key: "experience", label: "Experience (years)" },
@@ -1928,22 +1942,24 @@ export default function AddEmployee() {
             }
           >
             <div className="grid grid-cols-3 gap-x-5 gap-y-[18px]">
-              <div>
-                <label className={labelCls}>
-                  {displayRole} designation <Req />
-                </label>
-                <FormDropdown
-                  name="designation"
-                  className={roleConfig ? inputCls : inputCls}
-                  options={roleConfig?.designations ?? []}
-                  value={formData.designation}
-                  onValueChange={(v) =>
-                    setFormData((p) => ({ ...p, designation: v }))
-                  }
-                  placeholder={roleConfig ? "Select designation" : "Select a role first"}
-                  disabled={submitting || !roleConfig}
-                />
-              </div>
+              {!ADMIN_DESIGNATION_ROLES.includes(displayRole) && (
+                <div>
+                  <label className={labelCls}>
+                    {displayRole} designation <Req />
+                  </label>
+                  <FormDropdown
+                    name="designation"
+                    className={roleConfig ? inputCls : inputCls}
+                    options={roleConfig?.designations ?? []}
+                    value={formData.designation}
+                    onValueChange={(v) =>
+                      setFormData((p) => ({ ...p, designation: v }))
+                    }
+                    placeholder={roleConfig ? "Select designation" : "Select a role first"}
+                    disabled={submitting || !roleConfig}
+                  />
+                </div>
+              )}
 
               <AnimatePresence>
                 {(isMedical || displayRole === "Branch Admin" || displayRole === "Staff Admin" || formData.roleType === "STAFF") && (

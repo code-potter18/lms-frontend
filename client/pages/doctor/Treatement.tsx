@@ -234,19 +234,19 @@ const TreatmentPlan: React.FC = () => {
             className="mb-4 h-32 w-32 rounded-full border border-slate-100 object-cover object-[50%_10%] shadow-sm"
           />
 
-          <h2 className="mb-1 text-xl font-bold text-slate-900">
+          <h2 className="mb-1 text-xs font-bold text-slate-900">
             Vijaya Nallusamy
           </h2>
 
-          <p className="mb-3 text-sm text-slate-500">
+          <p className="mb-3 text-[10px] text-slate-500">
             51 Y / Female
           </p>
 
-          <div className="mb-4 rounded-md bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">
+          <div className="mb-4 rounded-md bg-slate-100 px-3 py-1 text-[10px] font-medium text-slate-600">
             ONC-2026-10025
           </div>
 
-          <p className="text-center text-sm font-bold tracking-wide text-blue-700">
+          <p className="text-center text-[10px] font-bold tracking-wide text-blue-700">
             DUCTAL CARCINOMA STAGE II
           </p>
         </div>
@@ -256,24 +256,24 @@ const TreatmentPlan: React.FC = () => {
 
           {/* Phone */}
           <div>
-            <div className="mb-1 flex items-center text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <div className="mb-1 flex items-center text-[10px] font-semibold uppercase tracking-wider text-slate-400">
               <PhoneIcon />
               PHONE
             </div>
 
-            <p className="text-slate-900">
+            <p className="text-[10px] text-slate-900">
               +91 98765 43210
             </p>
           </div>
 
           {/* Email */}
           <div>
-            <div className="mb-1 flex items-center text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <div className="mb-1 flex items-center text-[10px] font-semibold uppercase tracking-wider text-slate-400">
               <EnvelopeIcon />
               EMAIL
             </div>
 
-            <p className="text-slate-900">
+            <p className="text-[10px] text-slate-900">
               vijaya.n@example.com
             </p>
           </div>
@@ -282,37 +282,37 @@ const TreatmentPlan: React.FC = () => {
           <div className="grid grid-cols-2 gap-y-6 pt-2">
 
             <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                 HEIGHT
               </div>
-              <p className="font-semibold text-slate-900">
+              <p className="text-[10px] font-semibold text-slate-900">
                 154 cm
               </p>
             </div>
 
             <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                 WEIGHT
               </div>
-              <p className="font-semibold text-slate-900">
+              <p className="text-[10px] font-semibold text-slate-900">
                 52 kg
               </p>
             </div>
 
             <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                 BSA
               </div>
-              <p className="font-semibold text-slate-900">
+              <p className="text-[10px] font-semibold text-slate-900">
                 1.49 m²
               </p>
             </div>
 
             <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                 BMI
               </div>
-              <p className="font-semibold text-slate-900">
+              <p className="text-[10px] font-semibold text-slate-900">
                 21.93
               </p>
             </div>
@@ -326,7 +326,7 @@ const TreatmentPlan: React.FC = () => {
           <button
             type="button"
             onClick={handleViewProfile}
-            className="w-full rounded-lg border-2 border-blue-600 py-2.5 font-semibold text-blue-600 transition-colors hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            className="w-full rounded-lg border-2 border-blue-600 py-2.5 text-[10px] font-semibold text-blue-600 transition-colors hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             View Full Profile
           </button>

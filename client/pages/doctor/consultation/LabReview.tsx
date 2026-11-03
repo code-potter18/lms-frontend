@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+﻿import React, { useEffect, useRef, useState, useCallback } from "react";
 import API, { getActiveBranchId } from "../../../api/axios";
 import { getUser } from "../../../utils/token";
 import { encounterApi } from "../../../api/encounter.api";
@@ -339,11 +339,8 @@ const LabReview: React.FC<{
       <section className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)]">
         {/* Card Header */}
         <div className="flex items-center justify-between border-b border-gray-100 px-8 py-6">
-          <h2 className="text-2xl font-bold text-gray-900">
-            Laboratory Investigations
-          </h2>
 
-          <span className="text-sm font-medium text-gray-500">
+          <span className="text-xs font-bold text-gray-900">
             {itemsLoading
               ? "Loading..."
               : `${orderedItems.length} Reports Found`}
@@ -351,19 +348,19 @@ const LabReview: React.FC<{
         </div>
 
         {itemsError && (
-          <div className="border-b border-gray-100 bg-red-50 px-8 py-4 text-sm text-red-700">
+          <div className="border-b border-gray-100 bg-red-50 px-8 py-4 text-xs text-red-700">
             {itemsError}
           </div>
         )}
 
         {orderError && (
-          <div className="border-b border-gray-100 bg-red-50 px-8 py-4 text-sm text-red-700">
+          <div className="border-b border-gray-100 bg-red-50 px-8 py-4 text-xs text-red-700">
             Failed to place order: {orderError}
           </div>
         )}
 
         {!patientId && pendingTests.length > 0 && (
-          <div className="border-b border-gray-100 bg-amber-50 px-8 py-4 text-sm text-amber-700">
+          <div className="border-b border-gray-100 bg-amber-50 px-8 py-4 text-xs text-amber-700">
             Cannot place the selected investigations: this page was opened
             without a patient reference. Go back and open the patient from the
             appointments list.
@@ -375,23 +372,23 @@ const LabReview: React.FC<{
           <table className="w-full border-collapse text-left">
             <thead>
               <tr className="border-b border-gray-100 bg-white">
-                <th className="w-[36%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <th className="w-[36%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-900">
                   Investigation Name
                 </th>
 
-                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-900">
                   Ordered Date
                 </th>
 
-                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-900">
                   Target Date
                 </th>
 
-                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-900">
                   Status
                 </th>
 
-                <th className="w-[16%] px-8 py-4 text-right text-xs font-bold uppercase tracking-wider text-gray-500">
+                <th className="w-[16%] px-8 py-4 text-right text-xs font-bold uppercase tracking-wider text-gray-900">
                   Action
                 </th>
               </tr>
@@ -402,7 +399,7 @@ const LabReview: React.FC<{
                 <tr>
                   <td
                     colSpan={5}
-                    className="px-8 py-6 text-center text-sm text-gray-500"
+                    className="px-8 py-6 text-center text-xs text-gray-500"
                   >
                     No investigations have been ordered for this patient yet.
                   </td>
@@ -420,11 +417,11 @@ const LabReview: React.FC<{
                 >
                   <td className="max-w-0 px-8 py-5">
                     <div className="flex items-center gap-2">
-                      <span className="truncate text-[15px] font-semibold">
+                      <span className="truncate text-xs font-semibold">
                         {item.lab_test_master?.test_name ?? "—"}
                       </span>
                       {item.priority === "Urgent" && (
-                        <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-600 ring-1 ring-red-200">
+                        <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-xs font-bold uppercase tracking-wider text-red-600 ring-1 ring-red-200">
                           Urgent
                         </span>
                       )}
@@ -451,7 +448,7 @@ const LabReview: React.FC<{
 
                   <td className="px-8 py-5">
                     <span
-                      className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold ${
+                      className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
                         completed
                           ? "bg-[#DCFCE7] text-[#166534]"
                           : "bg-[#FEF3C7] text-[#92400E]"
@@ -477,7 +474,7 @@ const LabReview: React.FC<{
                           ? "View report"
                           : "Report available once the test is Completed"
                       }
-                      className={`inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 ${
+                      className={`inline-flex items-center justify-center rounded-lg px-4 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 ${
                         completed
                           ? "bg-[#F0F5FF] text-[#2563EB] hover:bg-blue-100 focus:ring-blue-500"
                           : "cursor-not-allowed bg-slate-100 text-slate-400"
@@ -496,14 +493,14 @@ const LabReview: React.FC<{
 
       {/* Clinical Remarks */}
       <section className="rounded-xl border border-gray-100 bg-white p-8 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)]">
-        <h2 className="mb-6 text-2xl font-bold text-gray-900">
+        <h2 className="mb-6 text-xs font-bold text-gray-900">
           Clinical Remarks
         </h2>
 
         <div className="space-y-3">
           <label
             htmlFor="observations"
-            className="block text-[13px] font-bold uppercase tracking-widest text-[#9CA3AF]"
+            className="block text-xs font-bold uppercase tracking-widest text-[#9CA3AF]"
           >
             Observations & Notes
           </label>
@@ -516,7 +513,7 @@ const LabReview: React.FC<{
         </div>
 
         {saved && (
-          <p className="mt-3 text-sm font-medium text-green-600">
+          <p className="mt-3 text-xs font-medium text-green-600">
             Draft saved successfully.
           </p>
         )}
@@ -542,7 +539,7 @@ const LabReview: React.FC<{
             <BackIcon />
           </button>
 
-          <h1 className="text-xl font-bold tracking-tight text-gray-900">
+          <h1 className="text-xs font-bold tracking-tight text-gray-900">
             Patients
           </h1>
         </div>
@@ -563,7 +560,7 @@ const LabReview: React.FC<{
             {notifications && (
               <div className="absolute right-0 top-14 z-50 w-[360px] overflow-hidden rounded-xl border border-[#e5e7ef] bg-white shadow-[0_10px_30px_rgba(0,0,0,0.15)]">
                 <header className="flex items-center justify-between border-b border-[#e5e7ef] bg-white px-5 py-4">
-                  <h1 className="text-base font-semibold tracking-[0.01em] text-[#131b2e]">Notifications</h1>
+                  <h1 className="text-xs font-semibold tracking-[0.01em] text-[#131b2e]">Notifications</h1>
                   <div className="flex shrink-0 items-center gap-3">
                     <button
                       type="button"
@@ -621,9 +618,6 @@ const LabReview: React.FC<{
                 <CheckIcon />
               </div>
 
-              <span className="text-xs font-bold uppercase tracking-wider text-gray-800">
-                Lab Report Review
-              </span>
 
               <div className="absolute bottom-0 left-0 right-0 mx-auto h-1 w-[95%] rounded bg-green-500" />
             </div>
@@ -634,9 +628,6 @@ const LabReview: React.FC<{
                 <CheckIcon />
               </div>
 
-              <span className="text-xs font-bold uppercase tracking-wider text-gray-800">
-                Diagnosis
-              </span>
 
               <div className="absolute bottom-0 left-[-50%] right-0 h-1 rounded bg-white" />
             </div>
@@ -657,7 +648,7 @@ const LabReview: React.FC<{
           <button
             type="button"
             onClick={handleCancel}
-            className="rounded-xl border border-gray-300 px-8 py-3 text-[15px] font-bold text-gray-700 transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-200"
+            className="rounded-xl border border-gray-300 px-8 py-3 text-xs font-bold text-gray-700 transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-200"
           >
             Cancel
           </button>
@@ -665,7 +656,7 @@ const LabReview: React.FC<{
           <button
             type="button"
             onClick={handleSaveDraft}
-            className="rounded-xl border border-blue-600 px-8 py-3 text-[15px] font-bold text-blue-600 transition-colors hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="rounded-xl border border-blue-600 px-8 py-3 text-xs font-bold text-blue-600 transition-colors hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             Save as Draft
           </button>
@@ -674,7 +665,7 @@ const LabReview: React.FC<{
             type="button"
             onClick={handleProceed}
             disabled={savingObservations}
-            className="flex items-center gap-2 rounded-xl bg-[#2563EB] px-8 py-3 text-[15px] font-bold text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex items-center gap-2 rounded-xl bg-[#2563EB] px-8 py-3 text-xs font-bold text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {savingObservations ? "Saving" : "Proceed to Treatment Plan"}
             <ArrowRightIcon />

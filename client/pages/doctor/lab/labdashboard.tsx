@@ -7,6 +7,8 @@ import {
   FileText,
   CheckCircle2,
   Clock,
+  Timer,
+  AlertTriangle,
 } from "lucide-react";
 import LabNav from "./labnav";
 import { labOrderApi, labOrderItemApi, LabOrderRecord, LabOrderItemRecord } from "@/api/labOrder.api";
@@ -14,6 +16,13 @@ import { patientApi, PatientRecord } from "@/api/patient.api";
 import { UserProfileDropdown } from "@/components/ui/User_profile_dropdown";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
 import { LabNotificationBell } from "@/components/hms/LabNotificationBell";
+import {
+  calculateSampleStability,
+  resolveStabilityHours,
+  useCurrentTimeTicker,
+  compareBySampleStability,
+  SampleStabilityInfo,
+} from "@/utils/sampleStability";
 
 export interface TestItemDetail {
   id: string;
@@ -49,6 +58,11 @@ export interface TestRecord {
   testItems?: TestItemDetail[];
   barcode?: string;
   barcodeGenerated?: boolean;
+  isCollected?: boolean;
+  collectionTimeIso?: string;
+  collectionTime?: string;
+  stabilityHours?: number;
+  priority?: string;
 }
 
 const INITIAL_TESTS: TestRecord[] = [
@@ -63,6 +77,8 @@ const INITIAL_TESTS: TestRecord[] = [
     date: "10/04/26",
     time: "10:30 AM",
     orderDateIso: "2026-04-10",
+    barcodeGenerated: false,
+    priority: "Normal",
     targetDate: "12-04-2026",
     targetDateIso: "2026-04-12",
     status: "PROCESSING",
@@ -83,6 +99,9 @@ const INITIAL_TESTS: TestRecord[] = [
     date: "30/03/26",
     time: "11:30 AM",
     orderDateIso: "2026-03-30",
+    collectionTimeIso: new Date(Date.now() - 150 * 60 * 1000).toISOString(),
+    stabilityHours: 2,
+    priority: "Normal",
     targetDate: "01-04-2026",
     targetDateIso: "2026-04-01",
     status: "COMPLETED",
@@ -103,6 +122,8 @@ const INITIAL_TESTS: TestRecord[] = [
     date: "03/04/26",
     time: "10:45AM",
     orderDateIso: "2026-04-03",
+    barcodeGenerated: false,
+    priority: "Stat",
     targetDate: "05-04-2026",
     targetDateIso: "2026-04-05",
     status: "PROCESSING",
@@ -123,6 +144,8 @@ const INITIAL_TESTS: TestRecord[] = [
     date: "05/04/26",
     time: "10:30 AM",
     orderDateIso: "2026-04-05",
+    barcodeGenerated: false,
+    priority: "Urgent",
     targetDate: "07-04-2026",
     targetDateIso: "2026-04-07",
     status: "PROCESSING",
@@ -315,6 +338,11 @@ const isTargetDateOverdue = (targetDateIso?: string, targetDateFormatted?: strin
   return iso < todayIso;
 };
 
+export const isTestOverdue = (test?: TestRecord | null): boolean => {
+  if (!test) return false;
+  return isTargetDateOverdue(test.targetDateIso, test.targetDate, test.status);
+};
+
 interface SampleBarcodeItem {
   id: string;
   testCode: string;
@@ -392,6 +420,8 @@ export default function LabDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "PROCESSING" | "COMPLETED">("ALL");
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
+  const [priorityFilter, setPriorityFilter] = useState<"ALL" | "DUE_SOON" | "EXPIRED">("ALL");
+  const currentTime = useCurrentTimeTicker(30000);
 
   /* ---------- KPI Track Scroll (Admin Dashboard style) ---------- */
   const trackRef = useRef<HTMLDivElement>(null);
@@ -622,6 +652,40 @@ export default function LabDashboard() {
             (typeof window !== "undefined" &&
               !!localStorage.getItem(`generated_barcode_${order.lab_order_id}`));
 
+          // Check if sample has been collected from patient
+          const storedColTime =
+            typeof window !== "undefined"
+              ? localStorage.getItem(`collected_sample_time_${order.lab_order_id}`) ||
+                localStorage.getItem(`registered_sample_time_${order.lab_order_id}`)
+              : null;
+          const hasDbCollection = orderItems.some(
+            (oi) =>
+              (oi.sample_collection && oi.sample_collection.length > 0) ||
+              oi.item_status === "Collected" ||
+              oi.item_status === "Barcode Generated"
+          );
+          const isCollected = Boolean(hasDbCollection || storedColTime || (isBarcodeGenerated && structuredItems.some(it => it.barcode)));
+
+          const colDateTime = isCollected
+            ? orderItems.find((oi) => oi.sample_collection?.[0]?.collection_datetime)
+                ?.sample_collection?.[0]?.collection_datetime ||
+              storedColTime ||
+              orderItems.find((oi) => oi.sample_collection?.[0]?.created_at)
+                ?.sample_collection?.[0]?.created_at ||
+              order.created_at ||
+              order.order_datetime
+            : undefined;
+
+          const colDate = colDateTime ? new Date(colDateTime) : null;
+          const colPriority = orderItems.find((oi) => oi.priority)?.priority || order.priority || "Normal";
+          const firstTest = orderItems[0];
+          const stabilityHours = resolveStabilityHours(
+            testNames,
+            firstTest?.lab_test_master?.sample_type,
+            firstTest?.lab_test_master?.tat_hours,
+            colPriority
+          );
+
           const firstBarcode =
             structuredItems.find((it) => it.barcode)?.barcode ||
             (isBarcodeGenerated
@@ -639,6 +703,12 @@ export default function LabDashboard() {
             date: formattedDate,
             time: formattedTime,
             orderDateIso: toIsoDateString(dateObj),
+            collectionTimeIso: isCollected && colDate && !isNaN(colDate.getTime()) ? colDate.toISOString() : undefined,
+            collectionTime: isCollected && colDate && !isNaN(colDate.getTime()) ? colDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true }) : undefined,
+            barcodeGenerated: isCollected,
+            isCollected,
+            stabilityHours,
+            priority: colPriority,
             targetDate: orderTargetDate,
             targetDateIso: itemTargetDates[0] ? normalizeToIsoDate(itemTargetDates[0]) || undefined : undefined,
             status: isCompleted ? "COMPLETED" : "PROCESSING",
@@ -661,7 +731,7 @@ export default function LabDashboard() {
             avatarUrl: patient?.patient_photo_url || undefined,
             testItems: structuredItems,
             barcode: firstBarcode,
-            barcodeGenerated: isBarcodeGenerated,
+
           };
         });
 
@@ -755,6 +825,8 @@ export default function LabDashboard() {
     if (selectedPatient) {
       const orderId = selectedPatient.id;
       const primaryBarcode = sampleBarcodes[0]?.barcode || `BC${selectedPatient.requestId.replace(/\D/g, "").slice(-6) || "2609"}0001`;
+      const nowIso = new Date().toISOString();
+      const nowTimeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
 
       setTestsList((prev) =>
         prev.map((t) =>
@@ -764,6 +836,9 @@ export default function LabDashboard() {
                 status: "COMPLETED",
                 barcode: primaryBarcode,
                 barcodeGenerated: true,
+                isCollected: true,
+                collectionTimeIso: nowIso,
+                collectionTime: nowTimeStr,
                 testItems: t.testItems?.map((ti, idx) => ({
                   ...ti,
                   barcode: sampleBarcodes[idx]?.barcode || primaryBarcode,
@@ -776,6 +851,8 @@ export default function LabDashboard() {
       // Save locally
       try {
         localStorage.setItem(`generated_barcode_${orderId}`, "true");
+        localStorage.setItem(`registered_sample_time_${orderId}`, nowIso);
+        localStorage.setItem(`collected_sample_time_${orderId}`, nowIso);
         sampleBarcodes.forEach((sb) => {
           localStorage.setItem(`generated_barcode_item_${sb.id}`, sb.barcode);
         });
@@ -783,7 +860,7 @@ export default function LabDashboard() {
 
       // Persist to backend
       try {
-        await labOrderApi.update(orderId, { order_status: "Completed" });
+        await labOrderApi.update(orderId, { order_status: "Processing" });
       } catch (e) {
         console.warn("Could not persist status to backend API:", e);
       }
@@ -908,8 +985,40 @@ export default function LabDashboard() {
     setPrintSuccessMessage(null);
   };
 
+  const sampleStabilityMap = useMemo(() => {
+    const map = new Map<string, SampleStabilityInfo>();
+    testsList.forEach((t) => {
+      const isCol = Boolean(t.isCollected || (t.barcodeGenerated && t.collectionTimeIso));
+      const info = calculateSampleStability(
+        t.collectionTimeIso,
+        t.stabilityHours || 2,
+        t.status,
+        currentTime,
+        isCol
+      );
+      map.set(t.id, info);
+    });
+    return map;
+  }, [testsList, currentTime]);
+
+  const expiringSoonCount = useMemo(() => {
+    return testsList.filter((t) => {
+      if (t.status === "COMPLETED") return false;
+      const info = sampleStabilityMap.get(t.id);
+      return info?.isExpiringSoon;
+    }).length;
+  }, [testsList, sampleStabilityMap]);
+
+  const expiredStabilityCount = useMemo(() => {
+    return testsList.filter((t) => {
+      if (t.status === "COMPLETED") return false;
+      const info = sampleStabilityMap.get(t.id);
+      return info?.isExpired;
+    }).length;
+  }, [testsList, sampleStabilityMap]);
+
   const filteredTests = useMemo(() => {
-    return testsList.filter((test) => {
+    const list = testsList.filter((test) => {
       const matchesSearch =
         searchQuery.trim() === "" ||
         test.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -920,9 +1029,26 @@ export default function LabDashboard() {
       const matchesStatus =
         statusFilter === "ALL" || test.status === statusFilter;
 
-      return matchesSearch && matchesStatus;
+      const info = sampleStabilityMap.get(test.id);
+      const matchesPriority =
+        priorityFilter === "ALL"
+          ? true
+          : priorityFilter === "DUE_SOON"
+          ? (info?.isExpiringSoon || false)
+          : priorityFilter === "EXPIRED"
+          ? (info?.isExpired || false)
+          : true;
+
+      return matchesSearch && matchesStatus && matchesPriority;
     });
-  }, [testsList, searchQuery, statusFilter]);
+
+    return [...list].sort((a, b) => {
+      const isOverdueA = isTestOverdue(a) ? 1 : 0;
+      const isOverdueB = isTestOverdue(b) ? 1 : 0;
+      if (isOverdueA !== isOverdueB) return isOverdueB - isOverdueA;
+      return (b.id || "").localeCompare(a.id || "");
+    });
+  }, [testsList, searchQuery, statusFilter, priorityFilter]);
 
   const completedCount = useMemo(() => {
     return testsList.filter((t) => t.status === "COMPLETED").length;
@@ -933,12 +1059,7 @@ export default function LabDashboard() {
   }, [testsList]);
 
   const overdueCount = useMemo(() => {
-    const now = Date.now();
-    return testsList.filter((t) => {
-      if (t.status !== "PROCESSING") return false;
-      const orderDate = new Date(t.date || "").getTime();
-      return !isNaN(orderDate) && now - orderDate > 48 * 3600 * 1000;
-    }).length;
+    return testsList.filter((t) => isTestOverdue(t)).length;
   }, [testsList]);
 
   const repeatCount = useMemo(() => {
@@ -2059,6 +2180,8 @@ export default function LabDashboard() {
                         </button>
                       )}
                     </div>
+
+
                     {/* Filter Button */}
                     <div className="relative shrink-0">
                       <button
@@ -2161,6 +2284,8 @@ export default function LabDashboard() {
                   </div>
                 )}
 
+
+
                 {/* BEGIN: TableContent */}
                 <div
                   className="overflow-x-auto w-full"
@@ -2225,7 +2350,7 @@ export default function LabDashboard() {
                         </tr>
                       ) : (
                         filteredTests.map((test) => {
-                          const isOverdue = isTargetDateOverdue(test.targetDateIso, test.targetDate, test.status);
+                          const isOverdue = isTestOverdue(test);
                           return (
                             <tr
                               key={test.id}

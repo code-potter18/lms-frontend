@@ -6,6 +6,10 @@ export interface ConsultationState {
   appointmentTime?: string;
   consultedBy?: string;
   visit_type?: string;
+  /* Inpatient entry ("Open consultation" on the inpatient list): the
+     admission's own encounter, and the step to open on. */
+  encounterNo?: string;
+  initialStep?: string;
 }
 
 /* Consultation > Investigations / Scans: what the doctor sets per selected

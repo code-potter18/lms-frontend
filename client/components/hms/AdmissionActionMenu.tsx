@@ -2,6 +2,7 @@ import { useState } from "react";
 import { MoreVertical } from "lucide-react";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { usePermission } from "@/context/PermissionContext";
+import { getUser } from "@/utils/token";
 import VitalsSignsPopover from "./VitalsSignsPopover";
 
 interface AdmissionActionMenuProps {
@@ -11,6 +12,10 @@ interface AdmissionActionMenuProps {
   onAdmit: () => void;
   onTransfer: () => void;
   onDischarge: () => void;
+  /** Doctor-only: opens the consultation wizard on this inpatient's encounter. */
+  onOpenConsultation?: () => void;
+  /** The doctor has saved the discharge details -- admins may now confirm. */
+  dischargeReady?: boolean;
   /** Planned-request actions: hold / change / release a bed, cancel, no-show. */
   onReserve?: () => void;
   onReleaseReservation?: () => void;
@@ -34,6 +39,8 @@ export function AdmissionActionMenu({
   onAdmit,
   onTransfer,
   onDischarge,
+  onOpenConsultation,
+  dischargeReady = false,
   onReserve,
   onReleaseReservation,
   onCancel,
@@ -46,6 +53,13 @@ export function AdmissionActionMenu({
   onVitalsSaved,
 }: AdmissionActionMenuProps) {
   const { can } = usePermission();
+  // Doctors record the clinical discharge details (consultation wizard).
+  // Admins confirm the discharge once those are saved; nurses can still
+  // discharge directly (e.g. deceased).
+  const role = String(getUser()?.role ?? "").toUpperCase();
+  const isAdminRole = ["HEAD_ADMIN", "SUPER_ADMIN", "BRANCH_ADMIN", "ADMIN"].includes(role);
+  const canDischarge =
+    can("admission.discharge") && (role === "NURSE" || (isAdminRole && dischargeReady));
   // Per-row open state, same pattern as OPD's AppointmentActionMenu -- every
   // menu owns its own popover instance so opening Vitals on one admission
   // can never bleed into another row's overlay.
@@ -173,7 +187,16 @@ export function AdmissionActionMenu({
             </DropdownMenuItem>
           )}
 
-          {isAdmitted && can("admission.discharge") && (
+          {isAdmitted && role === "DOCTOR" && onOpenConsultation && (
+            <DropdownMenuItem
+              onSelect={() => onOpenConsultation()}
+              className="flex w-full cursor-pointer px-3 py-2 text-xs font-semibold text-left text-[#374151] focus:bg-[#F2F4F6]"
+            >
+              Open consultation
+            </DropdownMenuItem>
+          )}
+
+          {isAdmitted && canDischarge && (
             <DropdownMenuItem
               onSelect={() => onDischarge()}
               className="flex w-full cursor-pointer px-3 py-2 text-xs font-semibold text-left text-amber-700 focus:bg-amber-50"
@@ -189,6 +212,7 @@ export function AdmissionActionMenu({
         onOpenChange={setVitalsOpen}
         encounterNo={encounterNo ?? undefined}
         patientId={patientId}
+        encounterType="Inpatient (IPD)"
         onSaved={onVitalsSaved}
       />
     </>

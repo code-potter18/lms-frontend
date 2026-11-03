@@ -17,8 +17,9 @@ export interface MultiSelectDropdownProps {
   placeholder?: string;
   disabled?: boolean;
   className?: string;
-  /* When set, a search with no exact match offers "+ Add '<typed>'". */
+  /* When set, a search with no exact match offers "<createLabel> '<typed>'". */
   onCreateOption?: (typed: string) => void;
+  createLabel?: string;
 }
 
 function normalizeOptions(
@@ -39,6 +40,7 @@ export function MultiSelectDropdown({
   disabled,
   className,
   onCreateOption,
+  createLabel = "+ Add",
 }: MultiSelectDropdownProps) {
   const normalized = React.useMemo(() => normalizeOptions(options), [options]);
   const [open, setOpen] = React.useState(false);
@@ -190,7 +192,7 @@ export function MultiSelectDropdown({
               }}
               className="flex w-full items-center gap-1 rounded-lg border-t border-gray-100 px-3 py-2 text-left text-sm font-semibold text-blue-600 transition-colors hover:bg-blue-50"
             >
-              <span className="shrink-0">+ Add</span>
+              <span className="shrink-0">{createLabel}</span>
               <span className="truncate">"{typed}"</span>
             </button>
           )}

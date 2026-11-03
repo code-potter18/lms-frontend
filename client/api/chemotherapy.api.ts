@@ -206,6 +206,8 @@ export interface ChemoPlan {
      with that day's drugs and hydration. */
   plan_orders?: ChemoPlanOrderHeader[] | null;
   current_order?: ChemoPlanOrder | null;
+  /* The planned date of every cycle day. */
+  chemotherapy_plan_schedule?: ChemoPlanScheduleRow[] | null;
 }
 
 /* A plan drug: a medicine from medicine_master, or (medicine_id null) a
@@ -278,15 +280,17 @@ export interface ChemoPlanHydration {
   display_order?: number | null;
 }
 
-/* One saved order per plan + cycle + day: ORDERED until the consultation
-   is submitted, then COMPLETED (read-only). */
+/* One saved order per plan + cycle + day: ORDERED while it is being
+   ordered, IN_ADMINISTRATION (read-only) once its consultation is
+   submitted, COMPLETED once every medicine is Given / Skipped / Cancelled
+   and the day is completed from the patient's Administration tab. */
 export interface ChemoPlanOrderHeader {
   plan_order_id: string;
   chemotherapy_plan_id: string;
   chemotherapy_cycle_id: string;
   cycle_number: number;
   cycle_day: number;
-  order_status: "ORDERED" | "COMPLETED" | string;
+  order_status: "ORDERED" | "IN_ADMINISTRATION" | "COMPLETED" | string;
   hydration_saved: boolean;
   copied_from_order_id?: string | null;
   encounter_no?: string | null;
@@ -297,6 +301,23 @@ export interface ChemoPlanOrderHeader {
   created_at?: string | null;
   updated_at?: string | null;
   chemotherapy_cycle?: { cycle_status: string | null } | null;
+  /* The cycle day's planned date, from the plan's schedule. */
+  planned_date?: string | null;
+}
+
+/* The planned date of one cycle day of a plan, calculated when the plan
+   is created (Cycle 1 / Day 1 = treatment start; +1 day per day, +1 more
+   for a day without medicine; next cycle = last day + interval + 1).
+   edited = the doctor moved this day's date. */
+export interface ChemoPlanScheduleRow {
+  chemotherapy_plan_id?: string;
+  cycle_number: number;
+  cycle_day: number;
+  planned_date: string;
+  medication_day: boolean;
+  edited: boolean;
+  /* The day's date by the rule, before any edit. */
+  calculated_date?: string;
 }
 
 /* GET /chemotherapy/pharmacy-slips?encounter_no=: a visit's pharmacy slips
@@ -363,13 +384,149 @@ export interface ChemoPlanOrderPayload {
   /* Left out = the saved text is kept; empty = cleared. */
   chemo_instructions?: string | null;
   additional_notes?: string | null;
+  /* The cycle day's planned date (YYYY-MM-DD); moves only this day.
+     Left out = unchanged. */
+  planned_date?: string | null;
 }
 
+/* Consultation submit: the visit's cycle day orders sent for administration
+   (released_orders) - or completed outright when they had no medicine to
+   administer (completed_orders). */
 export interface ChemoPlanOrderCompletion {
+  released_orders?: {
+    plan_order_id: string;
+    cycle_number: number;
+    cycle_day: number;
+    medicine_count: number;
+  }[];
   completed_orders: { plan_order_id: string; cycle_number: number; cycle_day: number }[];
   completed_cycles: number[];
   plan_completed: boolean;
   treatment_status: string | null;
+}
+
+/* ---------------- Administration sheet (one cycle day) ---------------- */
+
+export type ChemoAdministrationStatus = "PENDING" | "GIVEN" | "SKIPPED" | "CANCELLED";
+
+export interface ChemoAdministrationItem {
+  /* Null on a day not sent for administration yet (or completed before
+     administration was tracked). */
+  administration_id: string | null;
+  chemotherapy_plan_item_id: string;
+  drug_role: string;
+  drug_sequence: number;
+  drug_name: string;
+  brand_name: string | null;
+  generic_name: string | null;
+  protocol_dose: number | null;
+  protocol_dose_unit: string | null;
+  calculated_dose: number | null;
+  calculated_dose_unit: string | null;
+  administration_route: string | null;
+  dilution_solution: string | null;
+  dilution_volume: string | null;
+  infusion_rate: string | null;
+  infusion_type: string | null;
+  infusion_duration_minutes: number | null;
+  frequency: string | null;
+  timing_relative_to_primary: string | null;
+  administration_detail: string | null;
+  item_remarks: string | null;
+  /* NOT_RECORDED: a day completed before administration was tracked. */
+  status: ChemoAdministrationStatus | "NOT_RECORDED";
+  status_reason: string | null;
+  remarks: string | null;
+  administered_by: string | null;
+  administered_by_name: string | null;
+  given_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ChemoAdministrationSummary {
+  total: number;
+  pending: number;
+  given: number;
+  skipped: number;
+  cancelled: number;
+}
+
+export interface ChemoAdministrationDay {
+  plan_order_id: string;
+  chemotherapy_cycle_id: string;
+  cycle_number: number;
+  cycle_day: number;
+  order_status: ChemoPlanOrderHeader["order_status"];
+  cycle_status: string | null;
+  physician_approved: boolean | null;
+  treatment_date: string | null;
+  completed_at: string | null;
+  chemo_instructions: string | null;
+  additional_notes: string | null;
+  is_last_day: boolean;
+  closes_cycle: boolean;
+  closes_course: boolean;
+  can_update: boolean;
+  can_complete: boolean;
+  treatment_status: "AWAITING_ORDER" | "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED" | null;
+  administered_by: string[];
+  summary: ChemoAdministrationSummary;
+  items: ChemoAdministrationItem[];
+}
+
+export interface ChemoAdministrationSheet {
+  /* Today in IST, YYYY-MM-DD. */
+  today: string;
+  plan: {
+    chemotherapy_plan_id: string;
+    regimen_name: string | null;
+    protocol_name: string | null;
+    treatment_status: string | null;
+    planned_cycles: number;
+    completed_cycles: number;
+    cycle_interval_days: number | null;
+    doctor_name: string | null;
+  };
+  medication_days: number[];
+  day: ChemoAdministrationDay | null;
+  pending_alert: { level: "TODAY" | "OVERDUE"; pending: number; treatment_date: string } | null;
+  cycle_days: { plan_order_id: string; cycle_number: number; cycle_day: number; order_status: string }[];
+  current_cycle: {
+    chemotherapy_cycle_id: string;
+    cycle_number: number;
+    cycle_status: string | null;
+    current_day: number;
+    completed_days: number;
+    total_days: number;
+    started: boolean;
+    next_cycle_number: number | null;
+    next_cycle_date: string | null;
+  } | null;
+  previous_cycles: {
+    chemotherapy_cycle_id: string;
+    cycle_number: number;
+    cycle_status: string | null;
+    completion_date: string | null;
+    protocol_name: string | null;
+  }[];
+  post_medications: {
+    chemotherapy_plan_item_id: string;
+    drug_name: string;
+    brand_name: string | null;
+    protocol_dose: number | null;
+    protocol_dose_unit: string | null;
+    administration_route: string | null;
+    frequency: string | null;
+    duration: string | null;
+    remarks: string | null;
+  }[];
+}
+
+export interface ChemoAdministrationDayCompletion {
+  day_completed: boolean;
+  cycle_completed: boolean;
+  plan_completed: boolean;
+  sheet: ChemoAdministrationSheet;
 }
 
 // Full single-plan fetch (GET /chemotherapy/plans/:planId) -- unlike ChemoPlan
@@ -418,6 +575,79 @@ export interface LabReviewRecord {
   chemotherapy_fit?: boolean | null;
   review_notes?: string | null;
 }
+
+/* The adverse-event symptom flags (boolean columns of
+   chemotherapy_adverse_event). */
+export type ChemoAdverseSymptomFlag =
+  | "nausea" | "vomiting" | "diarrhea" | "constipation" | "mucositis" | "fever"
+  | "fatigue" | "neuropathy" | "alopecia" | "skin_rash" | "anemia" | "neutropenia"
+  | "thrombocytopenia" | "infection" | "bleeding" | "pain";
+
+/* POST /chemotherapy/cycles/:cycleId/adverse-events. plan_order_id ties the
+   event to its cycle day (the backend takes cycle_day from that order). */
+export type ChemoAdverseEventPayload = Partial<Record<ChemoAdverseSymptomFlag, boolean>> & {
+  plan_order_id?: string | null;
+  cycle_day?: number | null;
+  event_date?: string | null;
+  adverse_event_name: string;
+  adverse_event_category?: string | null;
+  /* CTCAE grade "1"-"5". */
+  ctcae_grade?: string | null;
+  reaction_grade?: string | null;
+  severity?: string | null;
+  reaction_description?: string | null;
+  treatment_interrupted?: boolean;
+  treatment_stopped?: boolean;
+  hospitalization_required?: boolean;
+  icu_required?: boolean;
+  emergency_medication_given?: boolean;
+  medication_given?: string | null;
+  dose_modified?: boolean;
+  dose_reduced?: boolean;
+  reduction_percentage?: number | null;
+  dose_delayed?: boolean;
+  delay_days?: number | null;
+  doctor_action?: string | null;
+  nursing_action?: string | null;
+  resolved?: boolean;
+  resolution_date?: string | null;
+  remarks?: string | null;
+};
+
+export type ChemoAdverseEventRecord = Partial<Record<ChemoAdverseSymptomFlag, boolean | null>> & {
+  adverse_event_id: string;
+  chemotherapy_cycle_id: string;
+  plan_order_id: string | null;
+  cycle_day: number | null;
+  event_date: string;
+  adverse_event_name: string;
+  adverse_event_category: string | null;
+  ctcae_grade: string | null;
+  reaction_grade: string | null;
+  severity: string | null;
+  reaction_description: string | null;
+  treatment_interrupted: boolean | null;
+  treatment_stopped: boolean | null;
+  hospitalization_required: boolean | null;
+  icu_required: boolean | null;
+  emergency_medication_given: boolean | null;
+  medication_given: string | null;
+  dose_modified: boolean | null;
+  dose_reduced: boolean | null;
+  reduction_percentage: number | string | null;
+  dose_delayed: boolean | null;
+  delay_days: number | null;
+  doctor_action: string | null;
+  nursing_action: string | null;
+  physician_id: string | null;
+  reported_by: string | null;
+  resolved: boolean | null;
+  resolution_date: string | null;
+  remarks: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+};
 
 export const chemotherapyApi = {
   listRegimenProtocols: (params?: {
@@ -506,9 +736,54 @@ export const chemotherapyApi = {
       `/chemotherapy/plans/${planId}/orders/complete`,
       { encounter_no: encounterNo }
     ),
+  getAdministrationSheet: (
+    planId: string,
+    day?: { cycle_number: number; cycle_day: number } | null
+  ) =>
+    API.get<{ success: boolean; message: string; data: ChemoAdministrationSheet }>(
+      `/chemotherapy/plans/${planId}/administration`,
+      { params: day ? { cycle_number: day.cycle_number, cycle_day: day.cycle_day } : undefined }
+    ),
+  updateAdministrationStatus: (
+    administrationId: string,
+    payload: { status: ChemoAdministrationStatus; reason?: string | null; remarks?: string | null }
+  ) =>
+    API.patch<{ success: boolean; message: string; data: ChemoAdministrationSheet }>(
+      `/chemotherapy/administration/${administrationId}/status`,
+      payload
+    ),
+  completeAdministrationDay: (planId: string, cycleNumber: number, cycleDay: number) =>
+    API.post<{ success: boolean; message: string; data: ChemoAdministrationDayCompletion }>(
+      `/chemotherapy/plans/${planId}/orders/${cycleNumber}/${cycleDay}/administration/complete`
+    ),
   listLabReviews: (cycleId: string) =>
     API.get<{ success: boolean; message: string; data: LabReviewRecord[] }>(
       `/chemotherapy/cycles/${cycleId}/lab-review`
+    ),
+  listAdverseEvents: (cycleId: string) =>
+    API.get<{ success: boolean; message: string; data: ChemoAdverseEventRecord[] }>(
+      `/chemotherapy/cycles/${cycleId}/adverse-events`
+    ),
+  recordAdverseEvent: (cycleId: string, payload: ChemoAdverseEventPayload) =>
+    API.post<{ success: boolean; message: string; data: ChemoAdverseEventRecord }>(
+      `/chemotherapy/cycles/${cycleId}/adverse-events`,
+      payload
+    ),
+  /* Edits a recorded adverse event; only the fields sent change (the cycle
+     day it belongs to stays as recorded). */
+  updateAdverseEvent: (
+    adverseEventId: string,
+    payload: Partial<Omit<ChemoAdverseEventPayload, "plan_order_id" | "cycle_day">>
+  ) =>
+    API.put<{ success: boolean; message: string; data: ChemoAdverseEventRecord }>(
+      `/chemotherapy/adverse-events/${adverseEventId}`,
+      payload
+    ),
+  /* Removes an event entered in error (soft delete; reason is audited). */
+  removeAdverseEvent: (adverseEventId: string, reason: string) =>
+    API.delete<{ success: boolean; message: string; data: { adverse_event_id: string } }>(
+      `/chemotherapy/adverse-events/${adverseEventId}`,
+      { data: { reason } }
     ),
   changePlanStatus: (
     planId: string,

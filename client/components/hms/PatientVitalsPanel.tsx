@@ -200,37 +200,125 @@ function VitalTile({ data }: { data: VitalTileData }) {
   );
 }
 
-export default function PatientVitalsPanel({ patientId }: { patientId?: string }) {
-  const [encounters, setEncounters] = useState<EncounterRecord[]>([]);
+interface PatientVitalsPanelProps {
+  patientId?: string;
+  encounterNo?: string | null;     // Scoped to Admission (IPD)
+  appointmentId?: string | null;   // Scoped to Appointment (OPD)
+}
+
+export default function PatientVitalsPanel({
+  patientId,
+  encounterNo,
+  appointmentId,
+}: PatientVitalsPanelProps) {
   const [loading, setLoading] = useState(true);
+  const [selectedRecord, setSelectedRecord] = useState<any>(null);
+  const [options, setOptions] = useState<{ key: string; label: string; data: any }[]>([]);
   const [selectedKey, setSelectedKey] = useState("");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!patientId) {
-      setLoading(false);
-      return;
-    }
     let cancelled = false;
     setLoading(true);
-    encounterApi
-      .getLatest(patientId, 10)
-      .then((res) => {
-        if (cancelled) return;
-        // /encounters/latest already returns newest-first records.
-        const rows = res.data?.data?.encounters ?? [];
-        setEncounters(rows);
-        setSelectedKey(rows[0]?.encounter_no ?? "");
-      })
-      .catch(() => {})
-      .finally(() => {
+
+    const loadData = async () => {
+      try {
+        if (encounterNo) {
+          // ── Case 1: View Admission (scoped strictly to this single admission) ──
+          const res = await encounterApi.getByEncounterNo(encounterNo);
+          const enc = res.data?.data;
+          if (!enc || cancelled) return;
+
+          const logs = Array.isArray(enc.vitals_log) ? enc.vitals_log : [];
+          if (logs.length > 0) {
+            // Sort newest first
+            const sorted = [...logs].sort(
+              (a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime()
+            );
+            const opts = sorted.map((entry, idx) => ({
+              key: String(idx),
+              label:
+                entry.recorded_at && !isNaN(new Date(entry.recorded_at).getTime())
+                  ? format(new Date(entry.recorded_at), "dd MMM yyyy, hh:mm a")
+                  : `Reading ${idx + 1}`,
+              data: entry,
+            }));
+            setOptions(opts);
+            setSelectedKey("0");
+            setSelectedRecord(opts[0].data);
+          } else {
+            // Fallback to flat columns if no log entries yet
+            const hasFlatVitals = [
+              enc.systolic_bp,
+              enc.pulse,
+              enc.temperature,
+              enc.spo2,
+              enc.respiratory_rate,
+            ].some((v) => v !== null && v !== undefined);
+
+            setOptions([]);
+            setSelectedKey("");
+            setSelectedRecord(hasFlatVitals ? enc : null);
+          }
+        } else if (appointmentId) {
+          // ── Case 2: View Appointment (OPD - strictly this visit, NO dropdown) ──
+          const res = await encounterApi.getByAppointment(appointmentId);
+          const enc = res.data?.data;
+          if (!enc || cancelled) return;
+
+          const hasFlatVitals = [
+            enc.systolic_bp,
+            enc.pulse,
+            enc.temperature,
+            enc.spo2,
+            enc.respiratory_rate,
+          ].some((v) => v !== null && v !== undefined);
+
+          setOptions([]); // Strictly NO dropdown
+          setSelectedKey("");
+          setSelectedRecord(hasFlatVitals ? enc : null);
+        } else if (patientId) {
+          // ── Case 3: Global Patient Profile (cross-encounter history) ──
+          const res = await encounterApi.getLatest(patientId, 10);
+          if (cancelled) return;
+          const rows = res.data?.data?.encounters ?? [];
+          if (rows.length > 0) {
+            const opts = rows.map((e) => ({
+              key: e.encounter_no,
+              label:
+                e.created_at && !isNaN(new Date(e.created_at).getTime())
+                  ? format(new Date(e.created_at), "dd MMM yyyy")
+                  : "—",
+              data: e,
+            }));
+            setOptions(opts);
+            setSelectedKey(rows[0]?.encounter_no ?? "");
+            setSelectedRecord(rows[0]);
+          } else {
+            setOptions([]);
+            setSelectedKey("");
+            setSelectedRecord(null);
+          }
+        } else {
+          setOptions([]);
+          setSelectedRecord(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setOptions([]);
+          setSelectedRecord(null);
+        }
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+
+    loadData();
     return () => {
       cancelled = true;
     };
-  }, [patientId]);
+  }, [encounterNo, appointmentId, patientId]);
 
   useEffect(() => {
     if (!isMenuOpen) return;
@@ -241,17 +329,7 @@ export default function PatientVitalsPanel({ patientId }: { patientId?: string }
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, [isMenuOpen]);
 
-  const selected = encounters.find((e) => e.encounter_no === selectedKey) ?? encounters[0];
-
-  const dateOptions = encounters.map((e) => ({
-    key: e.encounter_no,
-    label:
-      e.created_at && !isNaN(new Date(e.created_at).getTime())
-        ? format(new Date(e.created_at), "dd MMM yyyy")
-        : "—",
-  }));
-
-  const tiles = selected ? buildTiles(selected) : [];
+  const tiles = selectedRecord ? buildTiles(selectedRecord) : [];
 
   return (
     <div className="rounded-xl border border-[#E5E7EB] bg-white p-6 shadow-sm">
@@ -261,33 +339,36 @@ export default function PatientVitalsPanel({ patientId }: { patientId?: string }
           Vital Signs
         </h2>
 
-        {dateOptions.length > 1 && (
+        {options.length > 1 && (
           <div className="relative" ref={menuRef}>
             <button
               type="button"
               onClick={() => setIsMenuOpen((o) => !o)}
               className="flex items-center gap-1.5 rounded-md border border-[#E5E7EB] px-2.5 py-1.5 text-xs font-semibold text-[#374151] transition-colors hover:border-[#00488D]"
             >
-              {dateOptions.find((d) => d.key === selected?.encounter_no)?.label ?? "Select date"}
+              <span>
+                {options.find((d) => d.key === selectedKey)?.label ?? "Select reading"}
+              </span>
               <ChevronDown
                 className={`h-3 w-3 text-[#6B7280] transition-transform duration-200 ${isMenuOpen ? "rotate-180" : ""}`}
               />
             </button>
             <div
-              className={`absolute right-0 top-full z-20 mt-1 max-h-60 w-36 overflow-y-auto rounded-md border border-[#E5E7EB] bg-white shadow-lg transition-all duration-150 ${
+              className={`absolute right-0 top-full z-20 mt-1 max-h-60 min-w-[200px] w-auto overflow-y-auto rounded-md border border-[#E5E7EB] bg-white shadow-lg transition-all duration-150 ${
                 isMenuOpen ? "scale-100 opacity-100" : "pointer-events-none scale-95 opacity-0"
               }`}
             >
-              {dateOptions.map((d) => (
+              {options.map((d) => (
                 <button
                   key={d.key}
                   type="button"
                   onClick={() => {
                     setSelectedKey(d.key);
+                    setSelectedRecord(d.data);
                     setIsMenuOpen(false);
                   }}
-                  className={`w-full px-3 py-2 text-left text-xs font-semibold transition-colors ${
-                    d.key === selected?.encounter_no
+                  className={`w-full whitespace-nowrap px-3 py-2 text-left text-xs font-semibold transition-colors ${
+                    d.key === selectedKey
                       ? "bg-[#D6E3FF] text-[#00488D]"
                       : "text-[#374151] hover:bg-[#F2F4F6]"
                   }`}
@@ -304,7 +385,7 @@ export default function PatientVitalsPanel({ patientId }: { patientId?: string }
         <div className="flex items-center justify-center py-10">
           <Loader2 size={24} className="animate-spin text-[#00488D]" />
         </div>
-      ) : !selected ? (
+      ) : !selectedRecord ? (
         <p className="py-6 text-sm text-slate-500">No vitals recorded yet.</p>
       ) : (
         <div className="grid grid-cols-2 gap-x-4 gap-y-5 md:grid-cols-4">

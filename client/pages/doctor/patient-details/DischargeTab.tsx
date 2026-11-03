@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { useBranchFilter } from "../../../context/BranchFilterContext";
 import type {
   SummaryPlan,
@@ -180,17 +180,17 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
               <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 {/* Section Header */}
                 <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-6 py-4">
-                  <h3 className="text-lg font-medium text-gray-900">
+                  <h3 className="text-[10px] font-medium text-gray-900">
                     Discharge Status Summary
                   </h3>
 
                   {((dischargePlan?.treatment_status ?? "").toUpperCase() === "COMPLETED") ? (
-                    <span className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-700">
+                    <span className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-[10px] font-medium text-green-700">
                       <i className="fa-regular fa-circle-check mr-1.5" />
                       Protocol Completed
                     </span>
                   ) : (
-                    <span className="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-700">
+                    <span className="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-[10px] font-medium text-amber-700">
                       <i className="fa-regular fa-clock mr-1.5" />
                       {dischargePlan ? "Treatment In Progress" : "Not Recorded"}
                     </span>
@@ -203,42 +203,42 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
                   <div className="flex-1 space-y-5">
                     {/* Treatment Outcome */}
                     <div className="grid grid-cols-3 gap-4">
-                      <div className="text-sm text-gray-500">
+                      <div className="text-[10px] text-gray-500">
                         Treatment
                         <br />
                         Outcome
                       </div>
 
-                      <div className={`col-span-2 text-lg font-semibold ${((dischargePlan?.treatment_status ?? "").toUpperCase() === "COMPLETED") ? "text-green-700" : "text-gray-500"}`}>
+                      <div className={`col-span-2 text-[10px] font-semibold ${((dischargePlan?.treatment_status ?? "").toUpperCase() === "COMPLETED") ? "text-green-700" : "text-gray-500"}`}>
                         {dischargePlan?.treatment_status || "Not recorded"}
                       </div>
                     </div>
 
                     {/* Discharge Date */}
                     <div className="grid grid-cols-3 gap-4">
-                      <div className="flex items-center text-sm text-gray-500">
+                      <div className="flex items-center text-[10px] text-gray-500">
                         Discharge Date
                       </div>
 
-                      <div className="col-span-2 flex items-center font-semibold text-gray-500">
+                      <div className="col-span-2 flex items-center font-bold text-gray-900">
                         Not recorded
                       </div>
                     </div>
 
                     {/* Discharge Time */}
                     <div className="grid grid-cols-3 gap-4">
-                      <div className="flex items-center text-sm text-gray-500">
+                      <div className="flex items-center text-[10px] text-gray-500">
                         Discharge Time
                       </div>
 
-                      <div className="col-span-2 flex items-center font-semibold text-gray-500">
+                      <div className="col-span-2 flex items-center font-bold text-gray-900">
                         Not recorded
                       </div>
                     </div>
 
                     {/* Physician */}
                     <div className="grid grid-cols-3 gap-4">
-                      <div className="flex items-center text-sm text-gray-500">
+                      <div className="flex items-center text-[10px] text-gray-500">
                         Admitting Physician
                       </div>
 
@@ -267,45 +267,45 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
 
                   {/* Treatment Cycle Stats */}
                   <div className="w-full rounded-lg border border-dashed border-gray-300 bg-white p-5 lg:w-80">
-                    <h4 className="mb-4 text-xs font-semibold uppercase tracking-wider text-gray-500">
+                    <h4 className="mb-4 text-[10px] font-bold uppercase tracking-wider text-gray-900">
                       Treatment Cycle Stats
                     </h4>
 
                     <div className="grid gap-y-4 sm:grid-cols-2">
                       {/* Planned */}
                       <div>
-                        <p className="mb-1 text-xs text-gray-500">
+                        <p className="mb-1 text-[10px] font-bold text-slate-800">
                           Cycles Planned
                         </p>
-                        <p className="text-xl font-medium text-gray-900">
+                        <p className="text-[10px] font-medium text-gray-900">
                           {dischargePlan?.planned_cycles ?? 0}
                         </p>
                       </div>
 
                       {/* Administered */}
                       <div>
-                        <p className="mb-1 text-xs text-gray-500">
+                        <p className="mb-1 text-[10px] font-bold text-slate-800">
                           Cycles Administered
                         </p>
-                        <p className="text-xl font-medium text-blue-800">
+                        <p className="text-[10px] font-medium text-blue-800">
                           {administeredCount}
                         </p>
                       </div>
 
                       {/* Duration */}
                       <div>
-                        <p className="mb-1 text-xs text-gray-500">
+                        <p className="mb-1 text-[10px] font-bold text-slate-800">
                           Total Duration
                         </p>
-                        <p className="text-base text-gray-900">{treatmentDurationLabel || "—"}</p>
+                        <p className="text-[10px] text-gray-900">{treatmentDurationLabel || "—"}</p>
                       </div>
 
                       {/* Reactions */}
                       <div>
-                        <p className="mb-1 text-xs text-gray-500">
+                        <p className="mb-1 text-[10px] font-bold text-slate-800">
                           Adverse Reactions
                         </p>
-                        <p className={`text-base font-medium ${reactionCount > 0 ? "text-red-600" : "text-green-700"}`}>
+                        <p className={`text-[10px] font-medium ${reactionCount > 0 ? "text-red-600" : "text-green-700"}`}>
                           {reactionCount > 0 ? reactionCount : "None"}
                         </p>
                       </div>
@@ -320,10 +320,10 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
               <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-                  <h3 className="text-lg font-medium text-gray-900">
+                  <h3 className="text-[10px] font-medium text-gray-900">
                     Take-Home Medications{" "}
                     {!dischargeMedsLoading && medications.length > 0 && (
-                      <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 align-middle text-xs font-bold text-blue-700">
+                      <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 align-middle text-[10px] font-bold text-blue-700">
                         {medications.length}
                       </span>
                     )}
@@ -331,7 +331,7 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
 
                   <button
                     type="button"
-                    className="flex items-center text-sm font-medium text-blue-800 transition hover:underline"
+                    className="flex items-center text-[10px] font-medium text-blue-800 transition hover:underline"
                     onClick={() => window.print()}
                   >
                     <i className="fa-solid fa-print mr-2" />
@@ -344,23 +344,23 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
                   <table className="min-w-full divide-y divide-gray-200">
                     <thead className="bg-slate-50">
                       <tr>
-                        <th className="whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        <th className="whitespace-nowrap px-6 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-900">
                           Medication
                         </th>
 
-                        <th className="whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        <th className="whitespace-nowrap px-6 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-900">
                           Composition
                         </th>
 
-                        <th className="whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        <th className="whitespace-nowrap px-6 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-900">
                           Dose
                         </th>
 
-                        <th className="whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        <th className="whitespace-nowrap px-6 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-900">
                           Frequency
                         </th>
 
-                        <th className="whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        <th className="whitespace-nowrap px-6 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-900">
                           Duration
                         </th>
                       </tr>
@@ -369,19 +369,19 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
                     <tbody className="divide-y divide-gray-200 bg-white">
                       {dischargeMedsLoading ? (
                         <tr>
-                          <td colSpan={5} className="px-6 py-6 text-center text-xs text-slate-400">
+                          <td colSpan={5} className="px-6 py-6 text-center text-[10px] text-slate-400">
                             <i className="fa-solid fa-circle-notch fa-spin mr-2" /> Loading discharge medicines…
                           </td>
                         </tr>
                       ) : dischargeMedsError ? (
                         <tr>
-                          <td colSpan={5} className="px-6 py-6 text-center text-xs text-red-500">
+                          <td colSpan={5} className="px-6 py-6 text-center text-[10px] text-red-500">
                             <i className="fa-solid fa-triangle-exclamation mr-2" /> {dischargeMedsError}
                           </td>
                         </tr>
                       ) : medications.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="px-6 py-6 text-center text-xs text-slate-400">
+                          <td colSpan={5} className="px-6 py-6 text-center text-[10px] text-slate-400">
                             {dischargeProtocolId
                               ? "No discharge medicines recorded on this patient's regimen protocol yet."
                               : "No regimen protocol linked to this patient's plan yet."}
@@ -394,19 +394,19 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
                             {medication.medication}
                           </td>
 
-                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                          <td className="whitespace-nowrap px-6 py-4 text-[10px] text-gray-500">
                             {medication.composition}
                           </td>
 
-                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-900">
+                          <td className="whitespace-nowrap px-6 py-4 text-[10px] text-gray-900">
                             {medication.dose}
                           </td>
 
-                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-900">
+                          <td className="whitespace-nowrap px-6 py-4 text-[10px] text-gray-900">
                             {medication.frequency}
                           </td>
 
-                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-900">
+                          <td className="whitespace-nowrap px-6 py-4 text-[10px] text-gray-900">
                             {medication.duration}
                           </td>
                         </tr>
@@ -427,11 +427,11 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
               ================================================== */}
               <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div className="mb-5 flex items-end justify-between">
-                  <h3 className="text-lg font-medium text-gray-900">
+                  <h3 className="text-[10px] font-medium text-gray-900">
                     Final Vital Signs
                   </h3>
 
-                  <span className="text-xs text-gray-500">
+                  <span className="text-[10px] text-gray-500">
                     {lastCheckedLabel || "No vitals recorded"}
                   </span>
                 </div>
@@ -442,15 +442,15 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
                       key={vital.label}
                       className="rounded-lg bg-slate-50 p-4"
                     >
-                      <p className="mb-1 text-xs text-gray-500">
+                      <p className="mb-1 text-[10px] font-bold text-slate-800">
                         {vital.label}
                       </p>
 
-                      <p className="text-xl font-bold text-gray-900">
+                      <p className="text-[10px] font-bold text-gray-900">
                         {vital.value}
                       </p>
 
-                      <p className="mt-1 text-xs font-medium uppercase text-green-700">
+                      <p className="mt-1 text-[10px] font-medium uppercase text-green-700">
                         {vital.status}
                       </p>
                     </div>
@@ -463,26 +463,26 @@ const DischargeTab: React.FC<DischargeTabProps> = ({
               ================================================== */}
               <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div className="mb-5 flex items-center justify-between">
-                  <h3 className="text-lg font-medium text-gray-900">
+                  <h3 className="text-[10px] font-medium text-gray-900">
                     Checklist
                   </h3>
 
-                  <span className="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700">
+                  <span className="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-[10px] font-medium text-blue-700">
                     {checklist.length}/{checklist.length} Done
                   </span>
                 </div>
 
                 <ul className="space-y-4">
                   {checklist.length === 0 ? (
-                    <li className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-xs text-slate-400">
+                    <li className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-[10px] text-slate-400">
                       No discharge checklist recorded for this patient yet.
                     </li>
                   ) : (
                     checklist.map((item, index) => (
                       <li key={index} className="flex items-start">
-                        <i className="fa-solid fa-circle-check mr-3 mt-0.5 text-lg text-green-500" />
+                        <i className="fa-solid fa-circle-check mr-3 mt-0.5 text-[10px] text-green-500" />
 
-                        <span className="text-sm text-gray-700">{item}</span>
+                        <span className="text-[10px] text-gray-700">{item}</span>
                       </li>
                     ))
                   )}

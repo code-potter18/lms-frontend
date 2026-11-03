@@ -419,6 +419,14 @@ const AdmissionDetails: React.FC = () => {
           </section>
         </div>
 
+        {/* Vital Signs -- right after the doctor / patient cards */}
+        <section className="space-y-2">
+          <PatientVitalsPanel
+            patientId={admission.patient_id}
+            encounterNo={admission.encounter_no}
+          />
+        </section>
+
         {/* 4. Full Width Stay & Clinical Details */}
         <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm w-full space-y-6">
           <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100">
@@ -576,49 +584,49 @@ const AdmissionDetails: React.FC = () => {
 
         {/* 6. Discharge Details */}
         {rawStatus === "DISCHARGED" && (
-          <section className="rounded-xl border border-amber-200 bg-amber-50/60 p-6 shadow-sm w-full space-y-4">
+          <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm w-full space-y-4">
             <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
                 <ShieldCheck className="h-4 w-4" />
               </div>
-              <h2 className="text-base font-bold text-amber-900">Discharge Details</h2>
+              <h2 className="text-base font-bold text-slate-900">Discharge Details</h2>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-              <div className="rounded-lg border border-amber-200 bg-white p-3">
-                <span className="text-amber-500 text-[10px] uppercase font-bold">Discharge Type</span>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <span className="text-slate-400 text-[10px] uppercase font-bold">Discharge Type</span>
                 <p className="font-semibold text-slate-800 mt-0.5">{admission.discharge_type || "Recovered"}</p>
               </div>
 
-              <div className="rounded-lg border border-amber-200 bg-white p-3">
-                <span className="text-amber-500 text-[10px] uppercase font-bold">Discharge Date</span>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <span className="text-slate-400 text-[10px] uppercase font-bold">Discharge Date</span>
                 <p className="font-semibold text-slate-800 mt-0.5">{formatDateTime(admission.discharge_date)}</p>
               </div>
 
-              <div className="rounded-lg border border-amber-200 bg-white p-3">
-                <span className="text-amber-500 text-[10px] uppercase font-bold">Patient Status</span>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <span className="text-slate-400 text-[10px] uppercase font-bold">Patient Status</span>
                 <p className="font-semibold text-slate-800 mt-0.5">{admission.patient_status_at_discharge || "—"}</p>
               </div>
 
-              <div className="rounded-lg border border-amber-200 bg-white p-3">
-                <span className="text-amber-500 text-[10px] uppercase font-bold">Disease Status</span>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <span className="text-slate-400 text-[10px] uppercase font-bold">Disease Status</span>
                 <p className="font-semibold text-slate-800 mt-0.5">{admission.discharge_disease_status || "—"}</p>
               </div>
 
-              <div className="rounded-lg border border-amber-200 bg-white p-3">
-                <span className="text-amber-500 text-[10px] uppercase font-bold">Review / Follow-up Date</span>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <span className="text-slate-400 text-[10px] uppercase font-bold">Next Visit Date</span>
                 <p className="font-semibold text-slate-800 mt-0.5">
                   {admission.review_date ? formatDateOnly(admission.review_date) : "—"}
                 </p>
               </div>
 
-              <div className="rounded-lg border border-amber-200 bg-white p-3">
-                <span className="text-amber-500 text-[10px] uppercase font-bold">Discharge Summary</span>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <span className="text-slate-400 text-[10px] uppercase font-bold">Discharge Summary</span>
                 <p className="font-semibold text-slate-800 mt-0.5 whitespace-pre-wrap">{admission.discharge_summary || "—"}</p>
               </div>
 
-              <div className="rounded-lg border border-amber-200 bg-white p-3 sm:col-span-3">
-                <span className="text-amber-500 text-[10px] uppercase font-bold">Discharge Advice</span>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 sm:col-span-3">
+                <span className="text-slate-400 text-[10px] uppercase font-bold">Discharge Advice</span>
                 <p className="font-semibold text-slate-800 mt-0.5 whitespace-pre-wrap">{admission.discharge_advice || "—"}</p>
               </div>
             </div>
@@ -682,10 +690,6 @@ const AdmissionDetails: React.FC = () => {
           />
         </section>
 
-        {/* 8. Vitals Section */}
-        <section className="space-y-2">
-          <PatientVitalsPanel patientId={admission.patient_id} />
-        </section>
 
         {/* Footer meta */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-slate-200 pt-4 text-[11px] text-slate-400">
