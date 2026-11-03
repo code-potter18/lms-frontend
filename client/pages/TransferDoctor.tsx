@@ -21,6 +21,7 @@ import {
 } from "@/api/employee.api";
 import { branchApi, Branch } from "@/api/branch.api";
 import { departmentApi, Department } from "@/api/department.api";
+import { useBranches, useDepartments, useDoctors } from "@/hooks/useMasterData";
 import {
   doctorTransferApi,
   InitiateTransferPayload,
@@ -82,9 +83,9 @@ export default function TransferDoctor() {
   const [loading, setLoading] = useState(true);
 
   const [employee, setEmployee] = useState<EmployeeDetailResponse | null>(null);
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [openDoctors, setOpenDoctors] = useState<EmployeeRecord[]>([]);
+  const { branches } = useBranches();
+  const { departments } = useDepartments();
+  const { doctors: openDoctors } = useDoctors(undefined, roleOk);
   const [submitting, setSubmitting] = useState(false);
 
   const defaultBranchDetails = (): BranchTransferDetails => ({
@@ -166,17 +167,17 @@ export default function TransferDoctor() {
 
     const initial = async () => {
       try {
-        const [empRes, branchRes, deptRes, docRes] = await Promise.all([
-          employeeApi.getOne(id!),
-          branchApi.getAll(),
-          departmentApi.getAll(),
-          employeeApi.getAll({ roleType: "DOCTOR", limit: 1000 }),
-        ]);
+        const empRes = await employeeApi.getOne(id!);
+
+
+
+
+
         const detail = empRes.data?.data;
         setEmployee(detail);
-        setBranches(branchRes.data?.data || branchRes.data?.branches || []);
-        setDepartments(deptRes.data?.data || []);
-        setOpenDoctors(docRes.data?.data?.employees || []);
+
+
+
         if (detail) {
           // Initialize default details from doctor's current profile
           const seededDetails: BranchTransferDetails = {

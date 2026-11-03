@@ -537,41 +537,27 @@ export function NotificationProvider({ children, employeeId }: NotificationProvi
   const consecutiveFailuresRef = useRef<number>(0);
   const employeeIdRef = useRef(employeeId);
   employeeIdRef.current = employeeId;
+  const lastMetaRef = useRef<{ empTotal: number; patTotal: number }>({ empTotal: -1, patTotal: -1 });
+  const lastEmployeesRef = useRef<EmployeeRecord[]>([]);
+  const lastPatientsRef = useRef<PatientRecord[]>([]);
 
   useEffect(() => {
     dismissedIdsRef.current = loadDismissedIds();
   }, []);
 
   const fetchAppointmentsForBranch = useCallback(async (feedBranchId?: string): Promise<GenericRecord[]> => {
-    const pageSize = 100;
-    const sortBy = "created_at";
-    const sortOrder = "desc";
-    let all: GenericRecord[] = [];
     try {
       const firstPage = await appointmentApi.getAll({
-        limit: pageSize,
+        limit: 50,
         page: 1,
-        sortBy,
-        sortOrder,
+        sortBy: "created_at",
+        sortOrder: "desc",
         ...(feedBranchId ? { branchId: feedBranchId } : {}),
       });
-      const total = firstPage.data?.data?.total || 0;
-      const totalPages = Math.ceil(total / pageSize);
-      all = extractArray(firstPage, ["appointments", "appointment", "data", "results"]);
-      for (let page = 2; page <= totalPages && all.length < 2000; page++) {
-        const response = await appointmentApi.getAll({
-          limit: pageSize,
-          page,
-          sortBy,
-          sortOrder,
-          ...(feedBranchId ? { branchId: feedBranchId } : {}),
-        });
-        all = all.concat(extractArray(response, ["appointments", "appointment", "data", "results"]));
-      }
+      return extractArray(firstPage, ["appointments", "appointment", "data", "results"]);
     } catch {
       return [];
     }
-    return all;
   }, []);
 
   const fetchAppointments = useCallback(async (feedBranchIds: string[]): Promise<GenericRecord[] | null> => {
@@ -622,12 +608,39 @@ export function NotificationProvider({ children, employeeId }: NotificationProvi
 
     try {
       const feedBranchIds = await resolveFeedBranchIds();
-      const [employeesRes, patientsRes] = await Promise.all([
-        employeeApi.getAll({ limit: 1000 }).catch(() => null),
-        patientApi.getAll({ limit: 1000 }).catch(() => null),
+
+      // Lightweight probe: check totals before downloading full payload
+      const isInitial = previousSnapshotRef.current === null;
+      const [empHead, patHead] = await Promise.all([
+        employeeApi.getAll({ limit: 1 }).catch(() => null),
+        patientApi.getAll({ limit: 1 }).catch(() => null),
       ]);
-      const employees = employeesRes ? (employeesRes.data?.data?.employees ?? []) as any[] : null;
-      const patients = patientsRes ? (patientsRes.data?.data?.patients ?? []) as any[] : null;
+      const empTotal = empHead?.data?.data?.total ?? 0;
+      const patTotal = patHead?.data?.data?.total ?? 0;
+      const empChanged = isInitial || empTotal !== lastMetaRef.current.empTotal;
+      const patChanged = isInitial || patTotal !== lastMetaRef.current.patTotal;
+
+      let employees = lastEmployeesRef.current;
+      let patients = lastPatientsRef.current;
+
+      if (empChanged) {
+        const employeesRes = await employeeApi.getAll({ limit: 100 }).catch(() => null);
+        if (employeesRes) {
+          employees = (employeesRes.data?.data?.employees ?? []) as any[];
+          lastEmployeesRef.current = employees;
+          lastMetaRef.current.empTotal = empTotal;
+        }
+      }
+
+      if (patChanged) {
+        const patientsRes = await patientApi.getAll({ limit: 100 }).catch(() => null);
+        if (patientsRes) {
+          patients = (patientsRes.data?.data?.patients ?? []) as any[];
+          lastPatientsRef.current = patients;
+          lastMetaRef.current.patTotal = patTotal;
+        }
+      }
+
       const [appointments, doctorNotifs] = await Promise.all([
         fetchAppointments(feedBranchIds),
         fetchDoctorNotifications(),

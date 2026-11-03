@@ -1,7 +1,8 @@
 import { useMemo, useState, useEffect, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
-import { X, Clock } from "lucide-react";
+import { X, Clock, Loader2 } from "lucide-react";
+import { appointmentApi } from "@/api/appointment.api";
 import { cn } from "@/lib/utils";
 
 const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
@@ -26,6 +27,7 @@ export interface AvailableSlotsPopoverProps {
   date?: string;
   slots?: SlotTime[];
   branchesSlots?: Array<{branchId:string; branchName:string; times:SlotTime[]}>;
+  doctorBranches?: Array<{branch_id:string; branch_name:string; branch_area?: string | null}>;
   slotsByPeriod?: {
     Morning: SlotTime[];
     Afternoon: SlotTime[];
@@ -94,14 +96,58 @@ const AvailableSlotsPopoverComponent = ({
   open: openProp,
   onOpenChange,
   trigger,
+  doctorBranches,
 }: AvailableSlotsPopoverProps) => {
   const navigate = useNavigate();
   const [internalOpen, setInternalOpen] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<SlotTime | null>(null);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [lazySlots, setLazySlots] = useState<Array<{branchId:string; branchName:string; times:SlotTime[]}>>([]);
   const [, forceUpdate] = useState(0);
   const open = openProp ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
+
+  // Lazy-load slots ONLY when the popover is opened
+  useEffect(() => {
+    if (!open || (branchesSlots && branchesSlots.length > 0)) return;
+    const targetBranches = doctorBranches && doctorBranches.length > 0
+      ? doctorBranches
+      : (branchId ? [{ branch_id: branchId, branch_name: branch }] : []);
+    if (targetBranches.length === 0 || !doctorId || !date) return;
+
+    let cancelled = false;
+    setLoadingSlots(true);
+    Promise.all(
+      targetBranches.map(async (b) => {
+        try {
+          const res = await appointmentApi.getAvailableSlots(doctorId, b.branch_id, date, { includePast: false });
+          const slotsData = res.data?.data?.slots ?? [];
+          const availableTimes = slotsData.filter((s: any) => s.is_available).map((s: any) => {
+            const [h, m] = s.time.split(':');
+            const hour = parseInt(h, 10);
+            const ampm = hour >= 12 ? 'PM' : 'AM';
+            const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+            return `${String(hour12).padStart(2, '0')}:${m} ${ampm}`;
+          });
+          return { branchId: b.branch_id, branchName: b.branch_name, times: availableTimes };
+        } catch {
+          return { branchId: b.branch_id, branchName: b.branch_name, times: [] };
+        }
+      })
+    ).then((results) => {
+      if (!cancelled) {
+        setLazySlots(results.filter((b) => b.times.length > 0));
+        setLoadingSlots(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [open, doctorId, date, branchId, branch, doctorBranches, branchesSlots]);
+
+  const activeBranchesSlots = useMemo(() => {
+    if (branchesSlots && branchesSlots.length > 0) return branchesSlots;
+    return lazySlots;
+  }, [branchesSlots, lazySlots]);
 
   // Timer only while popover is open to avoid per-row work
   useEffect(() => {
@@ -114,8 +160,8 @@ const AvailableSlotsPopoverComponent = ({
   const nowMinutes = open && isToday ? getNowMinutesInIST() : null;
 
   const filteredBranchesSlots = useMemo(() => {
-    if (!open || !branchesSlots || !isToday || nowMinutes === null) return branchesSlots;
-    return branchesSlots
+    if (!open || !activeBranchesSlots || !isToday || nowMinutes === null) return activeBranchesSlots;
+    return activeBranchesSlots
       .map(b => ({
         ...b,
         times: b.times.filter(t => {
@@ -124,7 +170,7 @@ const AvailableSlotsPopoverComponent = ({
         })
       }))
       .filter(b => b.times.length > 0);
-  }, [branchesSlots, isToday, nowMinutes, open]);
+  }, [activeBranchesSlots, isToday, nowMinutes, open]);
 
   // clear selection if selected slot is no longer available
   useEffect(() => {
@@ -144,14 +190,14 @@ const AvailableSlotsPopoverComponent = ({
   }, [slots, slotsByPeriod]);
 
   const total = useMemo(() => {
-    if (filteredBranchesSlots) {
+    if (filteredBranchesSlots && filteredBranchesSlots.length > 0) {
       return filteredBranchesSlots.reduce((sum, b) => sum + b.times.length, 0);
     }
-    if (branchesSlots) {
-      return branchesSlots.reduce((sum, b) => sum + b.times.length, 0);
+    if (activeBranchesSlots && activeBranchesSlots.length > 0) {
+      return activeBranchesSlots.reduce((sum, b) => sum + b.times.length, 0);
     }
     return Object.values(groups).reduce((sum, arr) => sum + arr.length, 0);
-  }, [groups, branchesSlots, filteredBranchesSlots]);
+  }, [groups, activeBranchesSlots, filteredBranchesSlots]);
   const hasSlots = total > 0;
   const periods: Period[] = ["Morning", "Afternoon", "Evening"];
 
@@ -207,7 +253,12 @@ const AvailableSlotsPopoverComponent = ({
           </div>
 
           <div className="max-h-[300px] overflow-y-auto px-4 py-3">
-            {hasSlots ? (
+            {loadingSlots ? (
+              <div className="flex items-center justify-center py-8 text-[12px] text-[#5B6B84] gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-[#0F9D6B]" />
+                <span>Loading available slots...</span>
+              </div>
+            ) : hasSlots ? (
               <div className="space-y-4">
                 {(filteredBranchesSlots && filteredBranchesSlots.length > 0 ? filteredBranchesSlots : (branchesSlots && branchesSlots.length > 0 ? branchesSlots : [{branchId: branchId || '', branchName: branch || '', times: slots || []}])).map((branch) => {
                   const branchGrouped = groupSlotsByPeriod(branch.times);

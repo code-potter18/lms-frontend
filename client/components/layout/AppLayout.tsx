@@ -11,6 +11,7 @@ import { clearAccountActivity } from "@/utils/accountActivity";
 import { QuickAddFab } from "@/components/hms/QuickAddFab";
 import { AIChatBox } from "@/components/hms/AIChatBox";
 import { usePermission } from "@/context/PermissionContext";
+import { useToast } from "@/hooks/use-toast";
 import { UserProfileDropdown } from "@/components/ui/User_profile_dropdown";
 import { BellNotification } from "@/components/hms/BellNotification";
 import { UserAvatar } from "@/components/ui/UserAvatar";
@@ -68,6 +69,7 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const { toast } = useToast();
 
   // Form routes that shouldn't highlight parent nav items
   const isFormPage =
@@ -99,9 +101,9 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
   // instead of linking to the old AdminDashboard hub page.
   const isAdminSectionActive = /^\/admin(\/|$)/i.test(location.pathname);
 
-  // Protocol nav item is also a label that toggles a Cancer dropdown
-  // instead of linking directly to the Protocol master page.
-  const isProtocolSectionActive = /^\/protocol(\/|$)/i.test(location.pathname);
+  // Cancer nav item is a label that toggles a Protocol/Orders dropdown
+  // instead of linking directly to the protocol master page.
+  const isCancerSectionActive = /^\/(protocol|orders)(\/|$)/i.test(location.pathname);
 
   // Inpatient (IPD) is also a dropdown header, covering both the admissions
   // roster (/ipd) and the admission-details sub-page (/admissions/view/...),
@@ -112,8 +114,8 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
   const [openMenu, setOpenMenu] = useState<string | null>(() =>
     isAdminSectionActive
       ? "Admin"
-      : isProtocolSectionActive
-        ? "Protocol"
+      : isCancerSectionActive
+        ? "Cancer"
         : isIpdSectionActive
           ? "Inpatient (IPD)"
           : null,
@@ -121,9 +123,9 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
 
   useEffect(() => {
     if (isAdminSectionActive) setOpenMenu("Admin");
-    else if (isProtocolSectionActive) setOpenMenu("Protocol");
+    else if (isCancerSectionActive) setOpenMenu("Cancer");
     else if (isIpdSectionActive) setOpenMenu("Inpatient (IPD)");
-  }, [isAdminSectionActive, isProtocolSectionActive, isIpdSectionActive]);
+  }, [isAdminSectionActive, isCancerSectionActive, isIpdSectionActive]);
 
   const [logoutOpen, setLogoutOpen] = useState(false);
 
@@ -168,10 +170,14 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
       ]
     : [];
 
-  // Protocol is a dropdown header (like Admin) whose sub-pages live under
-  // /protocol/... . It is shown for every user (no permission gate) so the
+  // Cancer is a dropdown header (like Admin) whose sub-pages are the
+  // protocol master (/protocol/cancer) and the chemotherapy orders
+  // (/orders). It is shown for every user (no permission gate) so the
   // Protocol master page always loads.
-  const protocolChildren = [{ label: "Cancer", to: "/protocol/cancer" }];
+  const cancerChildren = [
+    { label: "Protocol", to: "/protocol/cancer" },
+    { label: "Orders", to: "/orders", permission: "chemo.plan.read" },
+  ].filter((item) => hasPermission(item.permission));
 
   // Inpatient (IPD) is a dropdown header whose sub-pages are the admissions
   // roster (Appointments.tsx's IPD tab, previously only reachable via the
@@ -199,22 +205,18 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
       to: "/appointments/reschedule-queue",
       permission: "doctor.transfer",
     },
-    {
-      label: "Pending Follow-ups",
-      to: "/appointments/pending",
-      permission: "appointment.read",
-    },
+    // Billing has no route/page yet, so it shows a toast instead of
+    // navigating to the catch-all 404 page.
+    { label: "Billing", to: "/billing", comingSoon: true },
     {
       label: "Inpatient (IPD)",
       permission: "admission.read",
       children: ipdChildren,
     },
-    { label: "Billing", to: "/billing" },
     {
-      label: "Protocol",
-      children: protocolChildren,
+      label: "Cancer",
+      children: cancerChildren,
     },
-    { label: "Orders", to: "/orders", permission: "chemo.plan.read" },
     ...(adminChildren.length > 0
       ? [
           {
@@ -348,8 +350,8 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
                       "w-full flex items-center gap-2 px-3 py-2 rounded-[4px] text-xs font-semibold tracking-[0.6px] capitalize",
                       (item.label === "Admin"
                         ? isAdminSectionActive
-                        : item.label === "Protocol"
-                          ? isProtocolSectionActive
+                        : item.label === "Cancer"
+                          ? isCancerSectionActive
                           : item.label === "Inpatient (IPD)"
                             ? isIpdSectionActive
                             : false)
@@ -390,6 +392,21 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
                     </div>
                   )}
                 </div>
+              ) : item.comingSoon ? (
+                <button
+                  key={item.to}
+                  type="button"
+                  onClick={() =>
+                    toast({
+                      title: `${item.label} is not available yet`,
+                      description: "This module is coming soon.",
+                    })
+                  }
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-[4px] text-xs font-semibold tracking-[0.6px] capitalize text-[#475569] hover:bg-[#E6E8EA]"
+                >
+                  {navIcon[item.label]}
+                  {item.label}
+                </button>
               ) : (
                 <NavLink
                   key={item.to}

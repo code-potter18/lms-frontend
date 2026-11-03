@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import {
   Plus,
@@ -198,8 +199,27 @@ export default function ProtocolMaster() {
   const navigate = useNavigate();
   const { can } = usePermission();
 
-  const [rows, setRows] = useState<ProtocolRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+
+  const {
+    data: protocolRows = [],
+    isLoading: loading,
+    refetch: fetchProtocols,
+  } = useQuery<ProtocolRow[]>({
+    queryKey: ["protocol-master-list"],
+    queryFn: async () => {
+      const res = await chemotherapyApi.listRegimenProtocols();
+      const list = res.data?.data ?? [];
+      return list.map(toRow);
+    },
+    staleTime: 10 * 60 * 1000, // 10 minutes cache
+  });
+
+  const [rowOverride, setRowOverride] = useState<ProtocolRow[] | null>(null);
+  const rows = rowOverride ?? protocolRows;
+  const setRows = (updater: React.SetStateAction<ProtocolRow[]>) => {
+    setRowOverride((prev) => (typeof updater === "function" ? updater(prev ?? protocolRows) : updater));
+  };
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"All" | ProtocolStatus>("All");
@@ -224,22 +244,6 @@ export default function ProtocolMaster() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const fetchProtocols = async () => {
-    setLoading(true);
-    try {
-      const res = await chemotherapyApi.listRegimenProtocols();
-      const list = res.data?.data ?? [];
-      setRows(list.map(toRow));
-    } catch {
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void fetchProtocols();
-  }, []);
 
   const stats = useMemo(() => {
     const active = rows.filter((r) => r.status === "Active").length;
@@ -455,6 +459,7 @@ export default function ProtocolMaster() {
         await chemotherapyApi.deleteRegimenProtocol(deleteTarget.protocol_id);
       } catch {}
       setRows((prev) => prev.filter((r) => r.protocol_id !== deleteTarget.protocol_id));
+      queryClient.invalidateQueries({ queryKey: ["protocol-master-list"] });
       toast({ title: "Protocol deleted", description: `${deleteTarget.name} has been removed.` });
       setDeleteTarget(null);
     } catch (e: any) {

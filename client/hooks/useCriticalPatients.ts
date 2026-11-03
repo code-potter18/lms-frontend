@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { encounterApi, type EncounterRecord } from "@/api/encounter.api";
 import { patientApi } from "@/api/patient.api";
 import type { CriticalInfo } from "@/components/hms/CriticalPatientIndicator";
@@ -61,16 +61,38 @@ function checkClinicalStatus(enc: EncounterRecord): string[] {
   return reasons;
 }
 
+// Shared in-memory cache across component mounts (5-minute TTL)
+const globalEncounterCache: Record<string, { data: EncounterRecord | null; timestamp: number }> = {};
+const globalDobCache: Record<string, { dob: string | null; timestamp: number }> = {};
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 export function useCriticalPatients(
   patientAgeData: PatientAgeData[],
   enabled = true
 ) {
   const [encounterCache, setEncounterCache] = useState<
     Record<string, EncounterRecord>
-  >({});
-  const [dobCache, setDobCache] = useState<Record<string, string>>({});
-  const fetchedRef = useRef<Set<string>>(new Set());
-  const dobFetchedRef = useRef<Set<string>>(new Set());
+  >(() => {
+    const initial: Record<string, EncounterRecord> = {};
+    const now = Date.now();
+    for (const [id, entry] of Object.entries(globalEncounterCache)) {
+      if (now - entry.timestamp < CACHE_TTL_MS && entry.data) {
+        initial[id] = entry.data;
+      }
+    }
+    return initial;
+  });
+
+  const [dobCache, setDobCache] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    const now = Date.now();
+    for (const [id, entry] of Object.entries(globalDobCache)) {
+      if (now - entry.timestamp < CACHE_TTL_MS && entry.dob) {
+        initial[id] = entry.dob;
+      }
+    }
+    return initial;
+  });
 
   const patientIds = patientAgeData.map((p) => p.patientId);
   const key = [...patientIds].sort().join(",");
@@ -78,39 +100,43 @@ export function useCriticalPatients(
   const fetchEncounters = useCallback(async () => {
     if (!enabled || patientAgeData.length === 0) return;
 
-    const toFetch = patientAgeData.filter(
-      (p) => !fetchedRef.current.has(p.patientId)
-    );
+    const now = Date.now();
+    const toFetch = patientAgeData.filter((p) => {
+      const cached = globalEncounterCache[p.patientId];
+      return !cached || now - cached.timestamp >= CACHE_TTL_MS;
+    });
     if (toFetch.length === 0) return;
 
     const results = await Promise.allSettled(
       toFetch.map(async (p) => {
         try {
           const res = await encounterApi.getLatest(p.patientId, 1);
-          const enc = res.data?.data?.encounters?.[0];
-          if (enc) return { patientId: p.patientId, encounter: enc };
+          const enc = res.data?.data?.encounters?.[0] || null;
+          return { patientId: p.patientId, encounter: enc };
         } catch {
-          // silent
+          return { patientId: p.patientId, encounter: null };
         }
-        return null;
       })
     );
 
+    const nowFulfilled = Date.now();
     const newEntries: Record<string, EncounterRecord> = {};
     for (const r of results) {
       if (r.status === "fulfilled" && r.value) {
-        newEntries[r.value.patientId] = r.value.encounter;
+        globalEncounterCache[r.value.patientId] = {
+          data: r.value.encounter,
+          timestamp: nowFulfilled,
+        };
+        if (r.value.encounter) {
+          newEntries[r.value.patientId] = r.value.encounter;
+        }
       }
     }
 
     if (Object.keys(newEntries).length > 0) {
       setEncounterCache((prev) => ({ ...prev, ...newEntries }));
     }
-
-    for (const p of toFetch) {
-      fetchedRef.current.add(p.patientId);
-    }
-  }, [key, enabled]);
+  }, [key, enabled, patientAgeData]);
 
   useEffect(() => {
     fetchEncounters();
@@ -119,12 +145,12 @@ export function useCriticalPatients(
   const fetchMissingDobs = useCallback(async () => {
     if (!enabled || patientAgeData.length === 0) return;
 
-    const needDob = patientAgeData.filter(
-      (p) =>
-        !dobFetchedRef.current.has(p.patientId) &&
-        p.age == null &&
-        !p.dob
-    );
+    const now = Date.now();
+    const needDob = patientAgeData.filter((p) => {
+      if (p.age != null || p.dob) return false;
+      const cached = globalDobCache[p.patientId];
+      return !cached || now - cached.timestamp >= CACHE_TTL_MS;
+    });
     if (needDob.length === 0) return;
 
     const results = await Promise.allSettled(
@@ -132,40 +158,35 @@ export function useCriticalPatients(
         try {
           const res = await patientApi.getById(p.patientId);
           const patient = res.data?.data;
-          if (patient?.patient_dob) {
-            return { patientId: p.patientId, dob: patient.patient_dob };
-          }
+          return { patientId: p.patientId, dob: patient?.patient_dob || null };
         } catch {
-          // silent
+          return { patientId: p.patientId, dob: null };
         }
-        return null;
       })
     );
 
+    const nowFulfilled = Date.now();
     const newDobs: Record<string, string> = {};
     for (const r of results) {
       if (r.status === "fulfilled" && r.value) {
-        newDobs[r.value.patientId] = r.value.dob;
+        globalDobCache[r.value.patientId] = {
+          dob: r.value.dob,
+          timestamp: nowFulfilled,
+        };
+        if (r.value.dob) {
+          newDobs[r.value.patientId] = r.value.dob;
+        }
       }
     }
 
     if (Object.keys(newDobs).length > 0) {
       setDobCache((prev) => ({ ...prev, ...newDobs }));
     }
-
-    for (const p of needDob) {
-      dobFetchedRef.current.add(p.patientId);
-    }
-  }, [key, enabled]);
+  }, [key, enabled, patientAgeData]);
 
   useEffect(() => {
     fetchMissingDobs();
   }, [fetchMissingDobs]);
-
-  useEffect(() => {
-    fetchedRef.current.clear();
-    dobFetchedRef.current.clear();
-  }, [key]);
 
   const getCriticalInfo = useCallback(
     (patientId: string): CriticalInfo => {

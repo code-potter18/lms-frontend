@@ -405,115 +405,32 @@ useEffect(() => {
   // Fetch each doctor's booked/total slot counts for the selected single day
   // (list view only). Total slots = the doctor's real working-hours
   // availability that day sliced into fixed 20-minute slots (backend-computed).
+  // Reset slot summaries when date or branch filter changes
+  useEffect(() => {
+    setSlotSummaries({});
+  }, [selectedDate, selectedBranchId, isAllBranches, showDeactivated]);
+
+  // Fetch each visible active doctor's slot summary for the selected day (page-scoped, on-demand)
   const fetchSlotSummaries = useCallback(
-    async (doctors: EmployeeRecord[], date: Date, signal: { cancelled: boolean }) => {
+    async (doctorIds: string[], date: Date, signal: { cancelled: boolean }) => {
       const dateStr = format(date, "yyyy-MM-dd");
-
-      // Fetch in small concurrent batches instead of firing one request per
-      // doctor all at once - hosts that are fine locally can rate-limit or
-      // choke on dozens of simultaneous connections in production. Each
-      // batch's results are merged in as soon as they land (rather than
-      // waiting for every doctor to finish) so rows show their real slot
-      // count progressively instead of all flipping at once at the end.
-      const BATCH_SIZE = 5;
-
-      for (let i = 0; i < doctors.length; i += BATCH_SIZE) {
-        if (signal.cancelled) return;
-        const batch = doctors.slice(i, i + BATCH_SIZE);
-        const batchEntries = await Promise.all(
-          batch.map(async (doc) => {
-            try {
-              const res = await appointmentApi.getDoctorSlotSummary(doc.employee_id, dateStr);
-              const data = res.data?.data;
-              return [doc.employee_id, { total: data?.total_slots ?? 0, booked: data?.booked_count ?? 0 }] as const;
-            } catch (err: any) {
-              console.error(
-                `[Doctor Page] Slot summary fetch failed for ${doc.employee_id}:`,
-                err?.response?.status,
-                err?.response?.data || err?.message,
-              );
-              return [doc.employee_id, { total: 0, booked: 0 }] as const;
-            }
-          }),
-        );
-
-        if (signal.cancelled) return;
-        setSlotSummaries((prev) => ({ ...prev, ...Object.fromEntries(batchEntries) }));
-
-        // Also fetch available slot times for popover
-        const timesEntries = await Promise.all(
-          batch.map(async (doc) => {
-            try {
-              const branchIds = doc.branches?.map(b => b.branch_id).filter(Boolean) || [];
-              if (branchIds.length === 0) return [doc.employee_id, []] as const;
-              const branchData = await Promise.all(
-                branchIds.map(async (branchId) => {
-                  try {
-                    const res = await appointmentApi.getAvailableSlots(doc.employee_id, branchId, dateStr, { includePast: false });
-                    const slots = res.data?.data?.slots ?? [];
-                    const branchName = doc.branches?.find(b => b.branch_id === branchId)?.branch_name || branchId;
-                    const availableTimes = slots.filter((s: any) => s.is_available).map((s: any) => {
-                      const [h, m] = s.time.split(':');
-                      const hour = parseInt(h, 10);
-                      const ampm = hour >= 12 ? 'PM' : 'AM';
-                      const hour12 = hour % 12 === 0 ? 12 : hour % 12;
-                      const timeLabel = `${String(hour12).padStart(2,'0')}:${m} ${ampm}`;
-                      return timeLabel;
-                    });
-                    return { branchId, branchName, times: availableTimes };
-                  } catch {
-                    return { branchId, branchName: branchId, times: [] };
-                  }
-                })
-              );
-              return [doc.employee_id, branchData.filter(b => b.times.length > 0)] as const;
-            } catch {
-              return [doc.employee_id, []] as const;
-            }
-          })
-        );
-        if (signal.cancelled) return;
-        setSlotTimes((prev) => ({ ...prev, ...Object.fromEntries(timesEntries) }));
+      const results = await Promise.all(
+        doctorIds.map(async (id) => {
+          try {
+            const res = await appointmentApi.getDoctorSlotSummary(id, dateStr);
+            const data = res.data?.data;
+            return [id, { total: data?.total_slots ?? 0, booked: data?.booked_count ?? 0 }] as const;
+          } catch {
+            return [id, { total: 0, booked: 0 }] as const;
+          }
+        })
+      );
+      if (!signal.cancelled) {
+        setSlotSummaries((prev) => ({ ...prev, ...Object.fromEntries(results) }));
       }
     },
     [],
   );
-
-  useEffect(() => {
-    if (!realDoctors || realDoctors.length === 0 || viewMode !== "list") return;
-    const signal = { cancelled: false };
-
-    // Only Active doctors have slots that day -- fetching summaries for
-    // Leave/Inactive doctors would be wasted requests returning zeros.
-    const activeDoctors = realDoctors.filter((d) => activeDoctorIds.has(d.employee_id));
-
-    // Reset so every row shows its loading state again for the newly
-    // selected date/doctor set, instead of briefly showing the previous
-    // date's stale counts while the fresh fetch is in flight.
-    setSlotSummaries({});
-    setSlotTimes({});
-
-    if (activeDoctors.length === 0) return () => { signal.cancelled = true; };
-    fetchSlotSummaries(activeDoctors, selectedDate, signal);
-
-    // Keep the booked/total counts live: poll periodically, and refetch as
-    // soon as the tab regains focus (e.g. after booking an appointment on
-    // another page/tab), instead of only updating on next full page load.
-    const intervalId = window.setInterval(() => {
-      fetchSlotSummaries(activeDoctors, selectedDate, signal);
-    }, 15000);
-
-    const handleFocus = () => fetchSlotSummaries(activeDoctors, selectedDate, signal);
-    window.addEventListener("focus", handleFocus);
-    document.addEventListener("visibilitychange", handleFocus);
-
-    return () => {
-      signal.cancelled = true;
-      window.clearInterval(intervalId);
-      window.removeEventListener("focus", handleFocus);
-      document.removeEventListener("visibilitychange", handleFocus);
-    };
-  }, [realDoctors, selectedDate, viewMode, activeDoctorIds, fetchSlotSummaries]);
 
   // ---- SEARCH & FILTER ----
   const filteredData = useMemo(() => {
@@ -564,6 +481,23 @@ useEffect(() => {
   const currentRows = displayData.slice(startIndex, endIndex);
   const visibleStart = totalRecords === 0 ? 0 : startIndex + 1;
   const visibleEnd = Math.min(endIndex, totalRecords);
+
+  // Only fetch slot summaries for the 10 doctors currently visible on this page
+  useEffect(() => {
+    if (currentRows.length === 0 || viewMode !== "list") return;
+    const signal = { cancelled: false };
+    const visibleActiveIds = currentRows
+      .filter((r) => r.status === "Active")
+      .map((r) => String(r.id))
+      .filter((id) => !slotSummaries[id]);
+
+    if (visibleActiveIds.length > 0) {
+      fetchSlotSummaries(visibleActiveIds, selectedDate, signal);
+    }
+    return () => {
+      signal.cancelled = true;
+    };
+  }, [currentRows, selectedDate, viewMode, fetchSlotSummaries, slotSummaries]);
  
   // ---- INFINITE SCROLL (grid only) ----
   useEffect(() => {
@@ -906,7 +840,7 @@ useEffect(() => {
                         branchId={branchId}
                         departmentId={departmentId}
                         date={dateStr}
-                        branchesSlots={branchesSlots}
+                        doctorBranches={r.branches}
                         trigger={trigger}
                       />
                     );

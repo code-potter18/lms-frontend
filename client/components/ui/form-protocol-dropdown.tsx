@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, ChevronDown, Loader2 } from "lucide-react";
+import { Check, ChevronDown, Loader2, Pencil, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createPortal } from "react-dom";
 
@@ -20,12 +20,16 @@ export interface FormDropdownProps
   > {
   options: (FormDropdownOption | string)[];
   value?: string;
+  displayValue?: string;
   onValueChange?: (value: string) => void;
+  onEditValue?: (text: string) => void;
+  editableChip?: boolean;
   /* When set, a search with no exact match offers "+ Add '<typed>'". */
   onCreateOption?: (typed: string) => void;
   emptyMessage?: string;
   leftIcon?: React.ReactNode;
   loading?: boolean;
+  allowFreeText?: boolean;
 }
 
 /**
@@ -55,7 +59,10 @@ const FormProtocolDropdown = React.forwardRef<HTMLInputElement, FormDropdownProp
     {
       options,
       value,
+      displayValue,
       onValueChange,
+      onEditValue,
+      editableChip = false,
       onCreateOption,
       placeholder = "Select...",
       emptyMessage = "No results found.",
@@ -64,6 +71,8 @@ const FormProtocolDropdown = React.forwardRef<HTMLInputElement, FormDropdownProp
       onBlur,
       leftIcon,
       loading = false,
+      allowFreeText = false,
+      className,
       ...inputProps
     },
     ref,
@@ -79,6 +88,33 @@ const FormProtocolDropdown = React.forwardRef<HTMLInputElement, FormDropdownProp
     const [search, setSearch] = React.useState(
       selectedOption?.label ?? value ?? "",
     );
+    const [isEditingChip, setIsEditingChip] = React.useState(false);
+    const [draftText, setDraftText] = React.useState("");
+    const finishedRef = React.useRef(false);
+
+    const displayLabel =
+      (displayValue && displayValue.trim()) ||
+      selectedOption?.label ||
+      (value && value.trim()) ||
+      "";
+    const isEdited =
+      Boolean(displayValue && selectedOption && displayValue.trim() !== selectedOption.label.trim()) ||
+      Boolean(value && selectedOption && value.trim() !== selectedOption.label.trim() && value.trim() !== selectedOption.value.trim());
+
+    const finishEdit = (save: boolean) => {
+      if (finishedRef.current) return;
+      finishedRef.current = true;
+      if (save) {
+        const trimmed = draftText.trim();
+        if (trimmed) {
+          if (onEditValue) onEditValue(trimmed);
+          else onValueChange?.(trimmed);
+          setSearch(trimmed);
+        }
+      }
+      setIsEditingChip(false);
+    };
+
     const [coords, setCoords] = React.useState<{
       top: number;
       left: number;
@@ -105,13 +141,29 @@ const FormProtocolDropdown = React.forwardRef<HTMLInputElement, FormDropdownProp
           !listRef.current.contains(target)
         ) {
           setOpen(false);
-          setSearch(selectedOption?.label ?? value ?? "");
+          if (isEditingChip) {
+            finishEdit(true);
+          }
+          const t = search.trim();
+          if (!editableChip && (allowFreeText || Boolean(onCreateOption)) && t) {
+            const matched = normalized.find(
+              (o) => o.label.toLowerCase() === t.toLowerCase() || o.value.toLowerCase() === t.toLowerCase()
+            );
+            if (matched) {
+              onValueChange?.(matched.value);
+              setSearch(matched.label);
+            } else {
+              onValueChange?.(t);
+            }
+          } else if (!editableChip) {
+            setSearch(selectedOption?.label ?? value ?? "");
+          }
         }
       }
 
       document.addEventListener("mousedown", handleClickOutside);
       return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, [open, selectedOption, value]);
+    }, [open, selectedOption, value, isEditingChip, draftText, editableChip]);
 
     const filtered = React.useMemo(() => {
       const query = search.trim().toLowerCase();
@@ -156,6 +208,10 @@ const FormProtocolDropdown = React.forwardRef<HTMLInputElement, FormDropdownProp
         handleSelect(filtered[0]);
       } else if (event.key === "Enter" && canCreate && filtered.length === 0) {
         handleCreate();
+      } else if (event.key === "Enter" && allowFreeText) {
+        setOpen(false);
+        const t = search.trim();
+        if (t) onValueChange?.(t);
       }
     }
 
@@ -204,55 +260,194 @@ const FormProtocolDropdown = React.forwardRef<HTMLInputElement, FormDropdownProp
 
     return (
       <div ref={containerRef} className="relative w-full">
-        <div className="relative">
-          {leftIcon ? (
-            <div className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-              {leftIcon}
-            </div>
-          ) : null}
-          <input
-            {...inputProps}
-            ref={handleMergeRefs}
-            role="combobox"
-            aria-expanded={open}
-            aria-controls={listId}
-            aria-autocomplete="list"
-            autoComplete="off"
-            disabled={disabled || loading}
-            placeholder={placeholder}
-            value={search}
-            className="w-full h-9 pl-3 pr-8 bg-[#f8fafc] border border-[#dde4ec] rounded-[11px] text-[13.5px] text-[#17212e] placeholder:text-[#a7b2bf] outline-none transition-all duration-150 hover:border-[#c7d2dd] hover:bg-[#f5f8fb] focus:border-[#12335c] focus:bg-white focus:ring-3 focus:ring-[#12335c]/15 disabled:bg-[#f1f3f5] disabled:text-[#9aa5b1] disabled:cursor-not-allowed"
-            onFocus={(event) => {
-              openDropdown();
-              onFocus?.(event);
-            }}
-            onClick={openDropdown}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              if (!open) openDropdown();
-            }}
-            onKeyDown={handleKeyDown}
-            onBlur={onBlur}
-          />
-          {loading ? (
-            <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
-          ) : (
-            <button
-              type="button"
-              disabled={disabled}
-              tabIndex={-1}
-              onClick={() => (open ? setOpen(false) : openDropdown())}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 transition-colors focus:outline-none"
+        {editableChip && displayLabel ? (
+          isEditingChip ? (
+            <div
+              className={cn(
+                "relative flex h-9 w-full items-center rounded-[11px] border border-[#12335c] bg-white px-2.5 text-[13.5px] ring-3 ring-[#12335c]/15",
+                className
+              )}
             >
-              <ChevronDown
+              <span
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="inline-flex items-center rounded-full bg-white px-2 py-0.5 ring-1 ring-blue-500 shadow-xs"
+              >
+                <input
+                  type="text"
+                  value={draftText}
+                  autoFocus
+                  maxLength={120}
+                  onChange={(e) => setDraftText(e.target.value)}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      finishEdit(true);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      finishEdit(false);
+                    }
+                  }}
+                  onBlur={() => finishEdit(true)}
+                  className="border-0 bg-transparent p-0 text-xs text-gray-900 focus:outline-none focus:ring-0 min-w-[140px]"
+                />
+              </span>
+            </div>
+          ) : (
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => {
+                if (!disabled && !loading) {
+                  if (open) setOpen(false);
+                  else openDropdown();
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  if (!disabled && !loading) {
+                    e.preventDefault();
+                    if (open) setOpen(false);
+                    else openDropdown();
+                  }
+                }
+              }}
+              className={cn(
+                "relative flex h-9 w-full cursor-pointer items-center justify-between rounded-[11px] border border-[#dde4ec] bg-[#f8fafc] px-2.5 text-[13.5px] transition-all hover:border-[#c7d2dd] hover:bg-[#f5f8fb]",
+                open && "border-[#12335c] ring-3 ring-[#12335c]/15 bg-white",
+                disabled && "bg-[#f1f3f5] cursor-not-allowed opacity-70",
+                className
+              )}
+            >
+              <span
+                onClick={(e) => e.stopPropagation()}
                 className={cn(
-                  "h-4 w-4 transition-transform duration-200",
-                  open && "rotate-180",
+                  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium max-w-[calc(100%-2rem)]",
+                  isEdited
+                    ? "bg-amber-50 text-amber-800 ring-1 ring-amber-200"
+                    : "bg-blue-50 text-blue-700"
                 )}
-              />
-            </button>
-          )}
-        </div>
+              >
+                {isEdited && (
+                  <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                )}
+                <span className="truncate max-w-[200px]" title={displayLabel}>
+                  {displayLabel}
+                </span>
+                {!disabled && (
+                  <button
+                    type="button"
+                    aria-label={`Edit ${displayLabel}`}
+                    title={`Edit ${displayLabel}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      finishedRef.current = false;
+                      setDraftText(displayLabel);
+                      setIsEditingChip(true);
+                    }}
+                    className="inline-flex cursor-pointer items-center justify-center text-blue-600 hover:text-blue-900 transition-colors p-0.5"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                )}
+                {!disabled && (
+                  <button
+                    type="button"
+                    aria-label={`Remove ${displayLabel}`}
+                    title={`Remove ${displayLabel}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onValueChange?.("");
+                      setSearch("");
+                      setOpen(false);
+                    }}
+                    className="inline-flex cursor-pointer items-center justify-center text-blue-500 hover:text-blue-800 transition-colors p-0.5"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </span>
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+              ) : (
+                <ChevronDown
+                  className={cn(
+                    "h-4 w-4 text-gray-400 transition-transform duration-200",
+                    open && "rotate-180"
+                  )}
+                />
+              )}
+            </div>
+          )
+        ) : (
+          <div className="relative">
+            {leftIcon ? (
+              <div className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                {leftIcon}
+              </div>
+            ) : null}
+            <input
+              {...inputProps}
+              ref={handleMergeRefs}
+              role="combobox"
+              aria-expanded={open}
+              aria-controls={listId}
+              aria-autocomplete="list"
+              autoComplete="off"
+              disabled={disabled || loading}
+              placeholder={placeholder}
+              value={search}
+              className={cn(
+                "w-full h-9 pl-3 pr-8 bg-[#f8fafc] border border-[#dde4ec] rounded-[11px] text-[13.5px] text-[#17212e] placeholder:text-[#a7b2bf] outline-none transition-all duration-150 hover:border-[#c7d2dd] hover:bg-[#f5f8fb] focus:border-[#12335c] focus:bg-white focus:ring-3 focus:ring-[#12335c]/15 disabled:bg-[#f1f3f5] disabled:text-[#9aa5b1] disabled:cursor-not-allowed",
+                className
+              )}
+              onFocus={(event) => {
+                openDropdown();
+                onFocus?.(event);
+              }}
+              onClick={openDropdown}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                if (!open) openDropdown();
+              }}
+              onKeyDown={handleKeyDown}
+              onBlur={(event) => {
+                if ((allowFreeText || Boolean(onCreateOption)) && search.trim()) {
+                  const t = search.trim();
+                  const matched = normalized.find(
+                    (o) => o.label.toLowerCase() === t.toLowerCase() || o.value.toLowerCase() === t.toLowerCase()
+                  );
+                  if (matched) {
+                    onValueChange?.(matched.value);
+                    setSearch(matched.label);
+                  } else {
+                    onValueChange?.(t);
+                  }
+                }
+                onBlur?.(event);
+              }}
+            />
+            {loading ? (
+              <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
+            ) : (
+              <button
+                type="button"
+                disabled={disabled}
+                tabIndex={-1}
+                onClick={() => (open ? setOpen(false) : openDropdown())}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 transition-colors focus:outline-none"
+              >
+                <ChevronDown
+                  className={cn(
+                    "h-4 w-4 transition-transform duration-200",
+                    open && "rotate-180",
+                  )}
+                />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* "+ Add" chip - sits directly under the input box and appears only
             when the typed text matches no option. The option list below is
@@ -289,6 +484,21 @@ const FormProtocolDropdown = React.forwardRef<HTMLInputElement, FormDropdownProp
                 }}
                 className="z-[9999] mt-1 max-h-64 slim-scrollbar overflow-y-auto rounded-[11px] border border-[#dde4ec] bg-white py-1 text-[#17212e] shadow-[0_20px_50px_-12px_rgba(0,0,0,0.1)] origin-top"
               >
+                {editableChip && (
+                  <div className="p-2 border-b border-[#dde4ec] bg-[#f8fafc]">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+                      <input
+                        type="text"
+                        value={search}
+                        autoFocus
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Type to filter..."
+                        className="w-full h-7 pl-7 pr-2 text-xs bg-white border border-[#dde4ec] rounded-[8px] outline-none focus:border-[#12335c]"
+                      />
+                    </div>
+                  </div>
+                )}
                 {filtered.length === 0 ? (
                   <p className="px-4 py-3 text-center text-sm text-[#8a97a6]">
                     {emptyMessage}

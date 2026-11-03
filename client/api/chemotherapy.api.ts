@@ -43,6 +43,8 @@ export interface DischargeInstruction {
   discharge_instruction_id: string;
   protocol_id: string;
   medicine_id: string | null;
+  medicine_name?: string | null;
+  generic_name?: string | null;
   drug_brand_name?: string | null;
   drug_sequence: number | null;
   drug_from: string | null;
@@ -57,12 +59,14 @@ export interface DischargeInstruction {
   comment: string | null;
   source_resource_id: string | null;
   active_status: number | null;
-  medicine_master: { medicine_name: string | null } | null;
+  medicine_master: { medicine_name: string | null; generic_name?: string | null } | null;
 }
 
 export interface DischargeInstructionInput {
   discharge_instruction_id?: string;
   medicine_id?: string | null;
+  medicine_name?: string | null;
+  generic_name?: string | null;
   drug_brand_name?: string | null;
   drug_sequence?: number | null;
   drug_from?: string | null;
@@ -99,7 +103,7 @@ export interface RegimenProtocolItem {
   administration_detail: string | null;
   previous_toxicity: string | null;
   remarks: string | null;
-  medicine_master: { medicine_name: string | null } | null;
+  medicine_master: { medicine_name: string | null; generic_name?: string | null } | null;
   chemotherapy_protocol_dilutions?: RegimenProtocolDilution[] | null;
 }
 
@@ -135,6 +139,8 @@ export interface RegimenProtocol {
 
 export interface RegimenProtocolItemInput {
   medicine_id?: string;
+  medicine_name?: string | null;
+  generic_name?: string | null;
   drug_role?: string;
   drug_type?: string | null;
   drug_sequence: number;
@@ -905,6 +911,21 @@ export const chemotherapyApi = {
     API.delete<{ success: boolean; message: string; data: RegimenProtocol }>(
       `/chemotherapy/regimen-protocols/${protocolId}`
     ),
+  catalogMedicineGeneric: (
+    medicineIdOrName: string,
+    genericName: string,
+    meta?: { form?: string | null; drugRole?: string | null }
+  ) =>
+    API.post<{
+      success: boolean;
+      message: string;
+      data: { medicine_id: string; generic_id: string; generic_name: string; dosage_form?: string | null };
+    }>("/chemotherapy/medicines/catalog-generic", {
+      medicineIdOrName,
+      genericName,
+      form: meta?.form,
+      drugRole: meta?.drugRole,
+    }),
   addRegimenProtocolItem: (
     protocolId: string,
     payload: RegimenProtocolItemInput & { medicine_id: string }

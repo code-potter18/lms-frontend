@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import CalendarPicker from "@/components/hms/Calender";
@@ -318,40 +319,38 @@ export default function PatientsManagement() {
 
   // Real patients fetched from the backend. No dummy fallback — an
   // empty/failed fetch just shows an empty state.
-  const [realPatients, setRealPatients] = useState<PatientRecord[] | null>(null);
-  const [isPatientsLoading, setIsPatientsLoading] = useState(true);
-
-  const fetchPatients = useCallback(async () => {
-    setIsPatientsLoading(true);
-    try {
-      const res = await patientApi.getAll({
-        branchId: isAllBranches ? undefined : selectedBranchId,
-      });
-      const patients = res.data?.data?.patients || [];
-      setRealPatients(patients);
-      if (patients.length === 0) {
-        toast({
-          title: "No patient records found",
-          description: "The patients API returned no records.",
+  // Real patients fetched from backend with React Query (5-minute memory cache)
+  const {
+    data: realPatients = null,
+    isLoading: isPatientsLoading,
+    refetch: fetchPatients,
+  } = useQuery<PatientRecord[]>({
+    queryKey: ["patients", isAllBranches ? "all" : selectedBranchId],
+    queryFn: async () => {
+      try {
+        const res = await patientApi.getAll({
+          branchId: isAllBranches ? undefined : selectedBranchId,
         });
+        const patients = res.data?.data?.patients || [];
+        if (patients.length === 0) {
+          toast({
+            title: "No patient records found",
+            description: "The patients API returned no records.",
+          });
+        }
+        return patients;
+      } catch (err: any) {
+        console.error("[Patients Page] Error:", err);
+        toast({
+          title: "Failed to load patients",
+          description: err.response?.data?.message || "Couldn't reach the patients API.",
+          variant: "destructive",
+        });
+        return [];
       }
-    } catch (err: any) {
-      console.error("[Patients Page] Error:", err);
-      toast({
-        title: "Failed to load patients",
-        description: err.response?.data?.message || "Couldn't reach the patients API.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsPatientsLoading(false);
-    }
-  }, [toast, selectedBranchId, isAllBranches]);
-
-  useEffect(() => {
-    fetchPatients();
-  }, [fetchPatients]);
-
-
+    },
+    staleTime: 5 * 60 * 1000,
+  });
 
   const patientAgeData = useMemo(() => {
     if (!realPatients) return [];
@@ -364,50 +363,39 @@ export default function PatientsManagement() {
 
   const { getCriticalInfo } = useCriticalPatients(patientAgeData);
 
-  // Assigned Doctor (list view) — derived from the same branch's appointment
-  // history, not from GET /patients (which has no doctor join). Purely
-  // supplementary: a failed fetch here must never block the patients list
-  // itself, so it fails silently into an empty map (every row just falls
-  // back to "Unassigned") instead of throwing/toasting.
-  const [assignedDoctors, setAssignedDoctors] = useState<Record<string, AssignedDoctor>>({});
+  // Assigned Doctor (list view) — derived from appointment history, cached with React Query
+  const { data: assignedDoctors = {}, refetch: fetchAssignedDoctors } = useQuery<Record<string, AssignedDoctor>>({
+    queryKey: ["patients-assigned-doctors", isAllBranches ? "all" : selectedBranchId],
+    queryFn: async () => {
+      try {
+        const PAGE_SIZE = 100;
+        const MAX_PAGES = 20;
+        const allAppointments: AppointmentRecord[] = [];
 
-  const fetchAssignedDoctors = useCallback(async () => {
-    try {
-      // GET /appointments caps limit at 100 (appointment.validation.ts) —
-      // requesting more 400s the whole call. Page through it for real
-      // instead, capped at 20 pages (2,000 appointments) as a sane ceiling.
-      const PAGE_SIZE = 100;
-      const MAX_PAGES = 20;
-      const allAppointments: AppointmentRecord[] = [];
+        let page = 1;
+        let totalPages = 1;
+        do {
+          const res = await appointmentApi.getAll({
+            branchId: isAllBranches ? undefined : selectedBranchId,
+            dateFrom: format(new Date(), "yyyy-MM-dd"),
+            limit: PAGE_SIZE,
+            page,
+            sortBy: "appointment_date",
+            sortOrder: "asc",
+          });
+          allAppointments.push(...(res.data?.data?.appointments || []));
+          totalPages = res.data?.data?.totalPages || 1;
+          page += 1;
+        } while (page <= totalPages && page <= MAX_PAGES);
 
-      let page = 1;
-      let totalPages = 1;
-      do {
-        const res = await appointmentApi.getAll({
-          branchId: isAllBranches ? undefined : selectedBranchId,
-          // Only "assigned" appointments matter here — never spend the
-          // page budget on past ones just to filter them out client-side.
-          dateFrom: format(new Date(), "yyyy-MM-dd"),
-          limit: PAGE_SIZE,
-          page,
-          sortBy: "appointment_date",
-          sortOrder: "asc",
-        });
-        allAppointments.push(...(res.data?.data?.appointments || []));
-        totalPages = res.data?.data?.totalPages || 1;
-        page += 1;
-      } while (page <= totalPages && page <= MAX_PAGES);
-
-      setAssignedDoctors(buildAssignedDoctorMap(allAppointments));
-    } catch (err) {
-      console.error("[Patients Page] Failed to load assigned doctors:", err);
-      setAssignedDoctors({});
-    }
-  }, [selectedBranchId, isAllBranches]);
-
-  useEffect(() => {
-    fetchAssignedDoctors();
-  }, [fetchAssignedDoctors]);
+        return buildAssignedDoctorMap(allAppointments);
+      } catch (err) {
+        console.error("[Patients Page] Failed to load assigned doctors:", err);
+        return {};
+      }
+    },
+    staleTime: 5 * 60 * 1000,
+  });
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("");

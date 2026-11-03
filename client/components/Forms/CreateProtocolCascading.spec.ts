@@ -194,5 +194,43 @@ describe("CreateProtocol Cascading & Grouping Logic", () => {
     expect(parsedLegacy.dose).toBe("150");
     expect(parsedLegacy.unit).toBe("MG");
   });
+
+  it("should safely update per-day maps across all protocol days without corrupting arrays or creating uniterable functions", () => {
+    let chemoPlansByDay: Record<number, Array<{ medication: string; medicineName: string; form?: string }>> = {
+      1: [{ medication: "MED000076", medicineName: "Avastin" }],
+      2: [{ medication: "MED000076", medicineName: "Avastin" }],
+    };
+
+    const updateDayMap = <T extends { medication?: string; medicineName?: string; form?: string }>(
+      map: Record<number, T[]>
+    ): Record<number, T[]> => {
+      const updated: Record<number, T[]> = {};
+      for (const [day, rows] of Object.entries(map)) {
+        updated[Number(day)] = (rows || []).map((row) =>
+          row.medication === "MED000076"
+            ? { ...row, medicineName: "Bevacizumab", form: "Injection" }
+            : row
+        );
+      }
+      return updated;
+    };
+
+    chemoPlansByDay = updateDayMap(chemoPlansByDay);
+
+    // Verify all days remain proper arrays
+    expect(Array.isArray(chemoPlansByDay[1])).toBe(true);
+    expect(Array.isArray(chemoPlansByDay[2])).toBe(true);
+    expect(chemoPlansByDay[1][0].medicineName).toBe("Bevacizumab");
+    expect(chemoPlansByDay[2][0].medicineName).toBe("Bevacizumab");
+
+    // Verify that iterating chemoPlansByDay (as done in allAvailableDilutionMeds) does not throw TypeError
+    expect(() => {
+      for (const dayNum of Object.keys(chemoPlansByDay)) {
+        for (const row of chemoPlansByDay[Number(dayNum)] ?? []) {
+          expect(row.medication).toBe("MED000076");
+        }
+      }
+    }).not.toThrow();
+  });
 });
 
