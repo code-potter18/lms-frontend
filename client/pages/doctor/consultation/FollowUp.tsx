@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom";
 import API from "../../../api/axios";
 import { getUser } from "../../../utils/token";
 import { encounterApi } from "../../../api/encounter.api";
+import { chemotherapyApi } from "../../../api/chemotherapy.api";
 import { Calendar } from "../../../components/ui/calendar";
 import {
   Popover,
@@ -17,14 +18,15 @@ import type {
   RegimenProtocolDetail,
 } from "./types";
 import {
-  computeProtocolNextVisitDate,
   findActiveEncounter,
   formatPickedDate,
   dmyToIsoStrict,
   parsePickedDate,
-  resolveEffectiveStartDate,
   fetchScheduledDate,
   dateOnlyDMY,
+  FOLLOW_UP_BLOCK_PATTERN,
+  followUpAdviceLines,
+  parseFollowUpAdvice,
 } from "./helpers";
 import {
   ArrowLeftIcon,
@@ -46,6 +48,9 @@ import {
 ============================================================ */
 
 type FollowUpStep = 1 | 2 | 3;
+
+/* The Next Cycle value when no cycle day of the plan is left. */
+const TREATMENT_ENDS = "Treatment ends";
 
 const FollowUp: React.FC<{
   embedded?: boolean;
@@ -72,200 +77,175 @@ const FollowUp: React.FC<{
   const [avatarLoading, setAvatarLoading] = useState<boolean>(() => !localStorage.getItem("user_photo"));
 
   const [activeStep, setActiveStep] = useState<FollowUpStep>(1);
+  const visitEncounterNo = encounterNo || stateEncounterNo;
   const [nextVisitDate, setNextVisitDate] = useState("");
-  /* The follow-up date already saved on this visit's encounter (from the
-     Consultation's Advice or an earlier Follow Up save). It is the one
-     Next Visit Date: the protocol / schedule calculation never replaces it. */
-  const savedFollowUpRef = useRef("");
-
-  useEffect(() => {
-    const visitEncounterNo = encounterNo || stateEncounterNo;
-    if (!visitEncounterNo) return;
-    let cancelled = false;
-    encounterApi
-      .getByNumber(visitEncounterNo)
-      .then((response) => {
-        const saved = dateOnlyDMY(response.data?.data?.follow_up_date);
-        if (cancelled || !saved) return;
-        savedFollowUpRef.current = saved;
-        setNextVisitDate(saved);
-        if (resolvedPatientId) {
-          localStorage.setItem(`hms_next_cycle_date_${resolvedPatientId}`, saved);
-        }
-      })
-      .catch((error) => console.error("Failed to load the saved follow-up date:", error));
-    return () => {
-      cancelled = true;
-    };
-  }, [encounterNo, stateEncounterNo, resolvedPatientId]);
+  /* The Next Visit Date was saved on the visit or set by the doctor: the
+     chosen cycle day's planned date no longer replaces it (picking another
+     Next Cycle re-derives it). */
+  const dateTouchedRef = useRef(false);
   const [nextCycle, setNextCycle] = useState("");
-  const [cycleOptions, setCycleOptions] = useState<string[]>([]);
+  /* The plan's cycle days ("Cycle N / Day M"), completed ones disabled,
+     then "Treatment ends". */
+  const [cycleOptions, setCycleOptions] = useState<{ value: string; completed: boolean }[]>([]);
+  const [optionsLoading, setOptionsLoading] = useState(false);
   const [plan, setPlan] = useState("");
   const [notes, setNotes] = useState("");
+  const [newVisit, setNewVisit] = useState("");
   const [submittingFollowUp, setSubmittingFollowUp] = useState(false);
   const [followUpError, setFollowUpError] = useState("");
-  const [protocolCycles, setProtocolCycles] = useState<number | null>(null);
-  const [protocolDays, setProtocolDays] = useState<number | null>(null);
-  const [newVisit, setNewVisit] = useState("");
-// Cycle/day parser and treatment end checker
-const parseCycleDay = (value: string) => {
-  const match = value.match(/Cycle\s*(\d+)(?:\s*\/\s*Day\s*(\d+))?/i);
-  if (!match) return null;
-  return { cycle: Number(match[1]), day: match[2] ? Number(match[2]) : null };
-};
 
-const treatmentEnds = React.useMemo(() => {
-  if (!protocolCycles || !protocolDays) return false;
-  const parsed = parseCycleDay(nextCycle);
-  if (!parsed) return false;
-  if (parsed.cycle > protocolCycles) return true;
-  if (parsed.cycle === protocolCycles && parsed.day !== null && protocolDays && parsed.day >= protocolDays) return true;
-  return false;
-}, [nextCycle, protocolCycles, protocolDays]);
+  const treatmentEnds = nextCycle === TREATMENT_ENDS;
 
-// Decide options to display
-const displayedOptions = treatmentEnds ? ["Treatment ends"] : cycleOptions;
-const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
-
-  useEffect(() => {
-    if (!resolvedPatientId) return;
-
-    const storedCycle = localStorage.getItem(
-      `hms_next_cycle_${resolvedPatientId}`
-    );
-    const storedDate = localStorage.getItem(
-      `hms_next_cycle_date_${resolvedPatientId}`
-    );
-
-    if (storedDate) {
-      setNextVisitDate(storedDate);
-    }
-
-    let normalizedCycle = storedCycle ?? "";
-    if (storedCycle) {
-      // Preserve the full cycle/day label (e.g. "Cycle 2 / Day 2") so the
-      // next cycle shown reflects the intra-cycle day from the chemo order.
-      normalizedCycle = storedCycle;
-      setNextCycle(normalizedCycle);
-    }
-
-    const savedProtocolId = localStorage.getItem(
-      `hms_selected_protocol_id_${resolvedPatientId}`
-    );
-    if (!savedProtocolId) return;
-
-    API.get<{ success: boolean; data: RegimenProtocolDetail }> (
-      `/chemotherapy/regimen-protocols/${savedProtocolId}`
-    )
-      .then((response) => {
-        const protocol = response.data.data;
-
-        /* The protocol's actual medication days (from the flat items'
-           administration_day). This honours protocols where some cycles
-           have more than 6 days, some fewer, or exactly 6 - and skips
-           rest days that carry no drugs. */
-        const availableDays = [
-          ...new Set(
-            (protocol.chemotherapy_regimen_protocol_items ?? [])
-              .map((item) => Number(item.administration_day))
-              .filter((d) => Number.isFinite(d) && d > 0)
-          ),
-        ].sort((a, b) => a - b);
-
-        const total =
-          protocol.standard_cycles && protocol.standard_cycles > 0
-            ? protocol.standard_cycles
-            : 6;
-        const daysPerCycle =
-          protocol.no_of_days && protocol.no_of_days > 0
-            ? protocol.no_of_days
-            : availableDays.length > 0
-            ? Math.max(...availableDays)
-            : 6;
-        setProtocolCycles(total);
-        setProtocolDays(daysPerCycle);
-
-        /* The stored hms_next_cycle (written by the Chemo Order tab) is
-           ALREADY the next scheduled cycle/day - e.g. selecting "Cycle 2 /
-           Day 1" in the chemo order stores "Cycle 2 / Day 2". Display it
-           verbatim so the Follow-Up mirrors exactly what the Chemo Order
-           computed (rest-day aware, protocol-driven, rolls to the next
-           cycle's Day 1 once a cycle completes). */
-        const nextCycleValue = normalizedCycle;
-
-        const options: string[] = [];
-        for (let c = 1; c <= total; c++) {
-          (availableDays.length > 0 ? availableDays : 
-            Array.from({ length: daysPerCycle }, (_, i) => i + 1)
-          ).forEach((d) => {
-            options.push(`Cycle ${c} / Day ${d}`);
-          });
-        }
-        if (nextCycleValue && !options.includes(nextCycleValue)) {
-          options.unshift(nextCycleValue);
-        }
-        if (!options.includes("Treatment ends")) {
-          options.push("Treatment ends");
-        }
-        setCycleOptions(options);
-
-        /* Next Visit Date derives from the selected protocol's cycle
-           interval and the treatment start date stated in the Treatment
-           Plan / Chemo Order so it stays in sync when the protocol or
-           date changes. */
-        const statedStartDate = resolveEffectiveStartDate(
-          resolvedPatientId,
-          protocol.cycle_interval_days
-        );
-        const protocolNextVisit = computeProtocolNextVisitDate(
-          statedStartDate,
-          protocol.cycle_interval_days
-        );
-        if (protocolNextVisit && !savedFollowUpRef.current) {
-          localStorage.setItem(
-            `hms_next_cycle_date_${resolvedPatientId}`,
-            protocolNextVisit
-          );
-          setNextVisitDate(protocolNextVisit);
-        }
-        /* The plan's schedule wins: the next cycle/day's planned date. */
-        void applyScheduledVisitDate(normalizedCycle);
-      })
-      .catch((error) => {
-        console.error("Failed to load follow-up protocol:", error);
-      });
-  }, [resolvedPatientId]);
-
-  /* The Next Visit Date of a cycle/day: its planned date in the plan's
-     schedule (kept for the Summary too). Nothing changes when the plan
-     has no schedule for it. */
-  const applyScheduledVisitDate = async (cycleLabel: string) => {
-    if (!resolvedPatientId || !cycleLabel) return;
-    const scheduled = await fetchScheduledDate(resolvedPatientId, cycleLabel);
-    if (scheduled && !savedFollowUpRef.current) {
-      localStorage.setItem(`hms_next_cycle_date_${resolvedPatientId}`, scheduled);
-      setNextVisitDate(scheduled);
+  const applyVisitDate = (value: string) => {
+    setNextVisitDate(value);
+    if (resolvedPatientId && value) {
+      localStorage.setItem(`hms_next_cycle_date_${resolvedPatientId}`, value);
     }
   };
 
-  /* Picking another next cycle/day shows that day's planned date. */
-  useEffect(() => {
-    void applyScheduledVisitDate(displayedValue);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayedValue, resolvedPatientId]);
-
-  /* Keep the stored next cycle in sync with this selection so the Summary
-     step (which reads localStorage on mount) shows the same value -
-     including "Treatment ends" instead of the stale cycle label. */
+  /* The patient's plan (its cycle days and orders) and this visit's saved
+     Follow Up values. The next cycle day defaults to the one after the
+     cycle day ordered in this visit. */
   useEffect(() => {
     if (!resolvedPatientId) return;
-    if (displayedValue.trim()) {
-      localStorage.setItem(
-        `hms_next_cycle_${resolvedPatientId}`,
-        displayedValue
-      );
-    }
-  }, [displayedValue, resolvedPatientId]);
+    let cancelled = false;
+    setOptionsLoading(true);
+
+    const load = async () => {
+      const [planResult, encounterResult] = await Promise.allSettled([
+        chemotherapyApi.getLatestPlanForPatient(resolvedPatientId),
+        visitEncounterNo ? encounterApi.getByNumber(visitEncounterNo) : Promise.resolve(null),
+      ]);
+      const chemoPlan = planResult.status === "fulfilled" ? planResult.value.data?.data ?? null : null;
+      const encounter = encounterResult.status === "fulfilled" ? encounterResult.value?.data?.data ?? null : null;
+      const saved = parseFollowUpAdvice(encounter?.advice);
+
+      const orders = chemoPlan?.plan_orders ?? [];
+      const statusOf = (cycle: number, day: number) =>
+        orders.find((order) => order.cycle_number === cycle && order.cycle_day === day)?.order_status;
+
+      /* Cycle days: the plan's schedule (medication days, or days with an
+         order); without one, the protocol's cycles x medication days. */
+      let days = (chemoPlan?.chemotherapy_plan_schedule ?? [])
+        .filter((row) => row.medication_day !== false || statusOf(row.cycle_number, row.cycle_day))
+        .map((row) => ({ cycle: row.cycle_number, day: row.cycle_day }));
+      if (days.length === 0) {
+        const protocolId =
+          (chemoPlan as { source_protocol_id?: string | null } | null)?.source_protocol_id ||
+          chemoPlan?.chemotherapy_regimen_protocol?.protocol_id ||
+          localStorage.getItem(`hms_selected_protocol_id_${resolvedPatientId}`) ||
+          "";
+        if (protocolId) {
+          try {
+            const protocol = (
+              await API.get<{ success: boolean; data: RegimenProtocolDetail }>(
+                `/chemotherapy/regimen-protocols/${encodeURIComponent(protocolId)}`
+              )
+            ).data.data;
+            const medicationDays = [
+              ...new Set(
+                (protocol.chemotherapy_regimen_protocol_items ?? [])
+                  .map((item) => Number(item.administration_day ?? item.cycle_day))
+                  .filter((d) => Number.isFinite(d) && d > 0)
+              ),
+            ].sort((a, b) => a - b);
+            const perCycle =
+              medicationDays.length > 0
+                ? medicationDays
+                : Array.from({ length: protocol.no_of_days && protocol.no_of_days > 0 ? protocol.no_of_days : 1 }, (_, i) => i + 1);
+            const cycles = chemoPlan?.planned_cycles || protocol.standard_cycles || 1;
+            for (let cycle = 1; cycle <= cycles; cycle += 1) {
+              perCycle.forEach((day) => days.push({ cycle, day }));
+            }
+          } catch (error) {
+            console.error("Failed to load the follow-up protocol:", error);
+          }
+        }
+      }
+      days = days.sort((a, b) => a.cycle - b.cycle || a.day - b.day);
+      const labelOf = (entry: { cycle: number; day: number }) => `Cycle ${entry.cycle} / Day ${entry.day}`;
+
+      /* This visit's cycle day: its own order, else the one in progress. */
+      const current =
+        orders.find((order) => visitEncounterNo && order.encounter_no === visitEncounterNo) ??
+        [...orders].reverse().find((order) => order.order_status === "IN_ADMINISTRATION" || order.order_status === "ORDERED");
+      let followingDay = "";
+      if (current) {
+        const after = days.find(
+          (entry) =>
+            entry.cycle > current.cycle_number ||
+            (entry.cycle === current.cycle_number && entry.day > current.cycle_day)
+        );
+        followingDay = after ? labelOf(after) : TREATMENT_ENDS;
+      }
+
+      const options = days.map((entry) => ({
+        value: labelOf(entry),
+        completed: statusOf(entry.cycle, entry.day) === "COMPLETED",
+      }));
+      const isOption = (value: string) => value === TREATMENT_ENDS || options.some((option) => option.value === value);
+      const stored = localStorage.getItem(`hms_next_cycle_${resolvedPatientId}`) ?? "";
+      const picked =
+        saved.nextCycle ||
+        followingDay ||
+        (stored && isOption(stored) ? stored : "") ||
+        options.find((option) => !option.completed)?.value ||
+        "";
+      if (picked && !isOption(picked)) options.unshift({ value: picked, completed: false });
+      options.push({ value: TREATMENT_ENDS, completed: false });
+
+      if (cancelled) return;
+      setCycleOptions(options);
+      const savedDate = dateOnlyDMY(encounter?.follow_up_date) || saved.nextVisit;
+      if (savedDate) {
+        dateTouchedRef.current = true;
+        applyVisitDate(savedDate);
+      }
+      setNextCycle(picked);
+      setPlan(saved.plan || (picked === TREATMENT_ENDS ? "Complete Treatment" : "Continue Treatment"));
+      setNewVisit(saved.newVisit);
+      setNotes(saved.notes);
+    };
+
+    load()
+      .catch((error) => console.error("Failed to load the follow-up details:", error))
+      .finally(() => {
+        if (!cancelled) setOptionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedPatientId, visitEncounterNo]);
+
+  /* The chosen cycle day's planned date becomes the Next Visit Date (it
+     follows an edited Start Date) - unless the date was saved / set. */
+  useEffect(() => {
+    if (!resolvedPatientId || !nextCycle || treatmentEnds || dateTouchedRef.current) return;
+    let cancelled = false;
+    fetchScheduledDate(resolvedPatientId, nextCycle).then((scheduled) => {
+      if (!cancelled && scheduled && !dateTouchedRef.current) applyVisitDate(scheduled);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nextCycle, resolvedPatientId]);
+
+  /* Keep the stored next cycle in sync with this selection - other steps
+     (Summary, the next visit's Chemotherapy Order) read it. */
+  useEffect(() => {
+    if (!resolvedPatientId || !nextCycle.trim()) return;
+    localStorage.setItem(`hms_next_cycle_${resolvedPatientId}`, nextCycle);
+  }, [nextCycle, resolvedPatientId]);
+
+  const changeNextCycle = (value: string) => {
+    /* Picking a cycle day re-derives its date. */
+    dateTouchedRef.current = false;
+    setNextCycle(value);
+    if (value === TREATMENT_ENDS && plan === "Continue Treatment") setPlan("Complete Treatment");
+    if (value !== TREATMENT_ENDS && plan === "Complete Treatment") setPlan("Continue Treatment");
+  };
 
   const handleBack = () => {
     window.history.back();
@@ -281,7 +261,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
       return;
     }
 
-    const hasAnyData = nextVisitDate.trim() || nextCycle || plan || notes.trim();
+    const hasAnyData = nextVisitDate.trim() || nextCycle || notes.trim();
 
     if (!hasAnyData) {
       setFollowUpError(
@@ -294,7 +274,6 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
     setSubmittingFollowUp(true);
 
     try {
-      const visitEncounterNo = encounterNo || stateEncounterNo;
       const encounter = visitEncounterNo
         ? (await encounterApi.getByNumber(visitEncounterNo)).data?.data
         : (await findActiveEncounter(resolvedPatientId)).encounter;
@@ -305,16 +284,16 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
         // review date, so the discharge details show the same date.
         const hasReviewDate = nextVisitDate.trim();
 
-        const followUpLines: string[] = [];
-        if (hasReviewDate) followUpLines.push(`Next Visit: ${nextVisitDate}`);
-        if (nextCycle) followUpLines.push(`Next Cycle: ${nextCycle}`);
-        if (plan.trim()) followUpLines.push(`Plan: ${plan}`);
-        if (notes.trim()) followUpLines.push(`Notes: ${notes}`);
+        const followUpLines = followUpAdviceLines({
+          nextVisit: nextVisitDate,
+          nextCycle,
+          plan,
+          newVisit: treatmentEnds ? newVisit : "",
+          notes,
+        });
 
         const existingAdvice = encounter.advice ?? "";
-        const cleanedAdvice = existingAdvice
-          .replace(/\n*\[Follow Up\][\s\S]*$/, "")
-          .trimEnd();
+        const cleanedAdvice = existingAdvice.replace(FOLLOW_UP_BLOCK_PATTERN, "").trimEnd();
         const parts = [cleanedAdvice];
         if (followUpLines.length > 0) {
           parts.push("[Follow Up]", ...followUpLines);
@@ -529,9 +508,10 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
                       id="nextVisitDate"
                       type="text"
                       value={nextVisitDate}
-                      onChange={(event) =>
-                        setNextVisitDate(event.target.value)
-                      }
+                      onChange={(event) => {
+                        dateTouchedRef.current = true;
+                        applyVisitDate(event.target.value);
+                      }}
                       className="block w-full rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-[10px] text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                     />
 
@@ -546,7 +526,8 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
                     selected={parsePickedDate(nextVisitDate)}
                     onSelect={(date) => {
                       if (date instanceof Date) {
-                        setNextVisitDate(formatPickedDate(date));
+                        dateTouchedRef.current = true;
+                        applyVisitDate(formatPickedDate(date));
                       }
                     }}
                   />
@@ -566,21 +547,18 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
 <div className="relative">
           <select
             id="nextCycle"
-            value={displayedValue}
-            onChange={(event) =>
-              setNextCycle(event.target.value)
-            }
+            value={nextCycle}
+            onChange={(event) => changeNextCycle(event.target.value)}
             className="block w-full cursor-pointer appearance-none rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-[10px] text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
           >
-            {displayedOptions.length === 0 ? (
-              <option value="">Select Next Cycle</option>
-            ) : (
-              displayedOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))
-            )}
+            <option value="">
+              {optionsLoading ? "Loading cycles..." : cycleOptions.length > 1 ? "Select Next Cycle" : "No planned cycles"}
+            </option>
+            {cycleOptions.map((option) => (
+              <option key={option.value} value={option.value} disabled={option.completed}>
+                {option.completed ? `${option.value} (Completed)` : option.value}
+              </option>
+            ))}
 </select>
           <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
             <ChevronDownIcon />
@@ -607,6 +585,7 @@ const displayedValue = treatmentEnds ? "Treatment ends" : nextCycle;
                   }
                   className="block w-full cursor-pointer appearance-none rounded-lg border border-gray-300 bg-white py-3 pl-4 pr-10 text-[10px] text-gray-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
                 >
+                  <option value="">Select Plan</option>
                   <option>Continue Treatment</option>
                   <option>Complete Treatment</option>
                   <option>Hold Treatment</option>

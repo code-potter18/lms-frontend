@@ -8,6 +8,8 @@ import {
   Loader2,
   ArrowRightLeft,
   LogOut,
+  Users,
+  Calendar,
 } from "lucide-react";
 import HmsTable, { type HmsColumn } from "@/components/hms/HmsTable";
 import { getDepartmentColors } from "@/components/hms/DepartmentBadge";
@@ -43,6 +45,8 @@ import { CriticalWrapper, CriticalCorner, CriticalDot } from "@/components/hms/C
 import { AdmissionActionMenu } from "@/components/hms/AdmissionActionMenu";
 import { AdmitBedDialog, type AdmitBedDialogMode } from "@/components/hms/AdmitBedDialog";
 import { AssignDoctorDialog } from "@/components/hms/AssignDoctorDialog";
+import { AllocateCareTeamDialog } from "@/components/hms/AllocateCareTeamDialog";
+import { WardShiftAllocationDialog } from "@/components/hms/WardShiftAllocationDialog";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
 
 import {
@@ -82,7 +86,16 @@ const InpatientAdmissions: React.FC = () => {
   const { can } = usePermission();
   // Nurses can discharge directly (with the clinical fields); admins only
   // confirm what the doctor saved in the consultation.
-  const isNurseRole = String(getUser()?.role ?? "").toUpperCase() === "NURSE";
+  const userRole = String(getUser()?.role ?? "").toUpperCase();
+  const isNurseRole = userRole === "NURSE";
+  // Doctors and nurses get a one-click "My Patients" view (consultant, duty
+  // doctor or nurse of the admission).
+  const isClinicianRole = userRole === "DOCTOR" || isNurseRole;
+  // Re-rostering a whole ward is for a charge nurse or an admin (the server
+  // enforces the same roles).
+  const canRosterWard =
+    can("admission.care_team") &&
+    ["HEAD_ADMIN", "SUPER_ADMIN", "BRANCH_ADMIN", "ADMIN", "NURSE"].includes(userRole);
   const { selectedBranchId } = useBranchFilter();
 
   // ---------------------------------------------------------------
@@ -148,6 +161,10 @@ const InpatientAdmissions: React.FC = () => {
   // Admitted patient whose doctor is being assigned / changed (emergencies
   // can be admitted before a doctor is known).
   const [assignDoctorFor, setAssignDoctorFor] = useState<AdmissionRecord | null>(null);
+  // Duty doctor / nurse allocation: one patient, or a whole ward at once.
+  const [careTeamFor, setCareTeamFor] = useState<AdmissionRecord | null>(null);
+  const [wardRosterOpen, setWardRosterOpen] = useState(false);
+  const [assignedToMe, setAssignedToMe] = useState(false);
   const [submittingPlanned, setSubmittingPlanned] = useState(false);
 
   // Critical-patient indicators for the IPD patient column, mirroring how the
@@ -238,6 +255,7 @@ const InpatientAdmissions: React.FC = () => {
         status: statusFilter.length ? statusFilter.join(",") : undefined,
         date: ipdDateFilter ? format(ipdDateFilter, "yyyy-MM-dd") : undefined,
         search: ipdSearch.trim() || undefined,
+        assignedToMe: assignedToMe || undefined,
         page: ipdPage,
         limit: ipdRowsPerPage,
         sortField: ipdSortField,
@@ -258,7 +276,7 @@ const InpatientAdmissions: React.FC = () => {
     } finally {
       setAdmissionsLoading(false);
     }
-  }, [effectiveBranchId, ipdAppliedStatus, ipdDateFilter, ipdSearch, ipdPage, ipdRowsPerPage, ipdSortField, ipdSortDirection, toast]);
+  }, [effectiveBranchId, ipdAppliedStatus, ipdDateFilter, ipdSearch, assignedToMe, ipdPage, ipdRowsPerPage, ipdSortField, ipdSortDirection, toast]);
 
   useEffect(() => {
     fetchWards();
@@ -686,6 +704,54 @@ const InpatientAdmissions: React.FC = () => {
       },
     },
     {
+      key: "care_team",
+      label: "CARE TEAM",
+      sortable: false,
+      className: "!whitespace-normal",
+      render: (row) => {
+        // Duty doctor / nurse only exist while the patient is admitted.
+        if (row.status !== "ADMITTED") {
+          return <span className="text-gray-400 font-semibold pl-2">—</span>;
+        }
+        const canAllocate = can("admission.care_team");
+        const slot = (
+          label: string,
+          person: { first_name: string; middle_name?: string | null; last_name: string } | null | undefined,
+          prefix = "",
+        ) =>
+          person ? (
+            <div className="flex items-baseline gap-1.5 leading-tight">
+              <span className="text-[10px] font-semibold uppercase text-slate-400 w-10 shrink-0">{label}</span>
+              <span className="hms-name-text capitalize">
+                {prefix}
+                {[person.first_name, person.middle_name, person.last_name].filter(Boolean).join(" ")}
+              </span>
+            </div>
+          ) : canAllocate ? (
+            <button
+              type="button"
+              onClick={() => setCareTeamFor(row)}
+              className="flex items-baseline gap-1.5 leading-tight text-left group"
+              title={`Assign ${label.toLowerCase()}`}
+            >
+              <span className="text-[10px] font-semibold uppercase text-slate-400 w-10 shrink-0">{label}</span>
+              <span className="text-[11px] font-semibold text-blue-600 group-hover:underline">+ Assign</span>
+            </button>
+          ) : (
+            <div className="flex items-baseline gap-1.5 leading-tight">
+              <span className="text-[10px] font-semibold uppercase text-slate-400 w-10 shrink-0">{label}</span>
+              <span className="text-[11px] text-slate-400">Unassigned</span>
+            </div>
+          );
+        return (
+          <div className="flex flex-col gap-1">
+            {slot("Duty", row.assigned_doctor, "Dr. ")}
+            {slot("Nurse", row.assigned_nurse)}
+          </div>
+        );
+      },
+    },
+    {
       key: "status",
       label: "STATUS",
       className: "!whitespace-normal",
@@ -732,6 +798,14 @@ const InpatientAdmissions: React.FC = () => {
           hasReservation={hasReservation(row)}
           onAssignDoctor={() => setAssignDoctorFor(row)}
           hasDoctor={Boolean(row.employee_id)}
+          onAllocateCareTeam={() => setCareTeamFor(row)}
+          dutyNurseName={
+            row.assigned_nurse
+              ? [row.assigned_nurse.first_name, row.assigned_nurse.middle_name, row.assigned_nurse.last_name]
+                  .filter(Boolean)
+                  .join(" ")
+              : undefined
+          }
           patientId={row.patient_id}
           encounterNo={row.encounter_no}
           onVitalsSaved={fetchAdmissions}
@@ -764,6 +838,23 @@ const InpatientAdmissions: React.FC = () => {
 
 
             <div className="flex items-center gap-3">
+              <button
+                onClick={() => navigate("/inpatient/duty-roster")}
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-[#004785] rounded-lg text-[#004785] text-xs font-semibold shadow-sm hover:bg-[#F2F4F6] transition-colors"
+              >
+                <Calendar className="w-4 h-4" />
+                Duty Roster
+              </button>
+
+              {canRosterWard && (
+                <button
+                  onClick={() => setWardRosterOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-[#004785] rounded-lg text-[#004785] text-xs font-semibold shadow-sm hover:bg-[#F2F4F6] transition-colors"
+                >
+                  <Users className="w-4 h-4" />
+                  Ward Handoff
+                </button>
+              )}
               {can("appointment.create") && (
                 <button
                   onClick={() =>
@@ -827,6 +918,24 @@ const InpatientAdmissions: React.FC = () => {
                   >
                     All Active{ipdShowActiveCount ? ` (${ipdTotal})` : ""}
                   </button>
+
+                  {isClinicianRole && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAssignedToMe((v) => !v);
+                        setIpdPage(1);
+                      }}
+                      title="Only patients where you are the consultant, duty doctor or nurse"
+                      className={`flex items-center h-[27px] px-3 rounded-lg text-xs font-semibold border transition-colors duration-150 ${
+                        assignedToMe
+                          ? "bg-[#D6E3FF] border-[#D6E3FF] text-[#00488D]"
+                          : "bg-white border-[#E5E7EB] text-[#6B7280] hover:bg-[#F2F4F6]"
+                      }`}
+                    >
+                      My Patients
+                    </button>
+                  )}
 
                   <div className="flex items-center">
                     <button
@@ -1320,6 +1429,28 @@ const InpatientAdmissions: React.FC = () => {
           });
           fetchAdmissions();
         }}
+      />
+
+      {/* ======================================================== */}
+      {/* CARE TEAM: DUTY DOCTOR / NURSE + HANDOVER                */}
+      {/* ======================================================== */}
+      <AllocateCareTeamDialog
+        open={!!careTeamFor}
+        onOpenChange={(v) => {
+          if (!v) setCareTeamFor(null);
+        }}
+        admission={careTeamFor}
+        onDone={() => {
+          toast({ title: "Care team updated", description: `${careTeamFor?.ip_number ?? "Admission"} care team saved.` });
+          fetchAdmissions();
+        }}
+      />
+
+      <WardShiftAllocationDialog
+        open={wardRosterOpen}
+        onOpenChange={setWardRosterOpen}
+        branchId={effectiveBranchId}
+        onDone={fetchAdmissions}
       />
 
       {/* ======================================================== */}

@@ -32,6 +32,8 @@ export interface EncounterRecord {
   encounter_id: string;
   encounter_no: string;
   patient_id: string;
+  /* The visit's patient_history row - lab orders / prescriptions hang off it. */
+  patient_history_id?: string | null;
   branch_id: string;
   department_id: string | null;
   appointment_id: string;

@@ -218,7 +218,9 @@ export interface AddScheduleSlotResponse {
 
 export interface GetEmployeesParams {
   roleType?: string;
+  role_type?: string;
   branchId?: string;
+  branch_id?: string;
   department?: string;
   status?: boolean;
   includeDeleted?: boolean;
@@ -279,7 +281,14 @@ export const employeeApi = {
     API.post<CreateEmployeeResponse>("/employees/create", data),
 
   getAll: (params?: GetEmployeesParams) => {
-    return API.get<{ success: boolean; data: { employees: EmployeeRecord[]; total: number; page: number; limit: number; totalPages: number } }>("/employees", { params }).catch(err => {
+    const normalizedParams = params
+      ? {
+          ...params,
+          roleType: params.roleType || params.role_type,
+          branchId: params.branchId || params.branch_id,
+        }
+      : undefined;
+    return API.get<{ success: boolean; data: { employees: EmployeeRecord[]; total: number; page: number; limit: number; totalPages: number } }>("/employees", { params: normalizedParams }).catch(err => {
       if (err?.response?.status === 403) {
         return { data: { success: true, data: { employees: [], total: 0, page: 1, limit: params?.limit ?? 1000, totalPages: 0 } } } as any;
       }

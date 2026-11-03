@@ -1,4 +1,5 @@
 import type { EncounterRecord } from "../../../api/encounter.api";
+import type { ChemoPlanOrderHeader, ChemoPlanScheduleRow } from "../../../api/chemotherapy.api";
 
 /* ============================================================
    PATIENT DETAILS - shared types
@@ -61,6 +62,7 @@ export type SummaryPlan = {
   staging_detail_id?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  employee_id?: string | null;
   employees?: {
     first_name?: string | null;
     last_name?: string | null;
@@ -74,6 +76,7 @@ export type SummaryPlan = {
     next_cycle_date?: string | null;
     cycle_status?: string | null;
     completion_status?: string | null;
+    rescheduled_date?: string | null;
     remarks?: string | null;
     chemotherapy_administration?: {
       administration_day?: number | null;
@@ -85,6 +88,9 @@ export type SummaryPlan = {
   }[] | null;
   chemotherapy_plan_items: SummaryPlanItem[] | null;
   current_order?: { chemotherapy_plan_items?: SummaryPlanItem[] | null } | null;
+  /* Every saved cycle day order (header) and the plan's day-by-day schedule. */
+  plan_orders?: ChemoPlanOrderHeader[] | null;
+  chemotherapy_plan_schedule?: ChemoPlanScheduleRow[] | null;
   oncology_staging_detail: StagingDetailRecord | null;
   doctor_name?: string | null;
 };
@@ -197,6 +203,9 @@ export interface StagingDetailRecord {
   m_stage?: string | null;
   metastasis_sites?: unknown;
   laterality?: string | null;
+  site?: string | null;
+  grade?: string | null;
+  grade_system?: string | null;
   performance_status?: number | null;
   employee_id?: string | null;
   branch_id?: string | null;

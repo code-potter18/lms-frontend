@@ -96,6 +96,62 @@ export interface AdmissionTransferLog {
   transferred_at: string;
 }
 
+export type CareTeamRole = "ASSIGNED_DOCTOR" | "PRIMARY_NURSE";
+
+/** Employee shown for the duty doctor / nurse on the roster. */
+export interface CareTeamEmployee {
+  employee_id: string;
+  first_name: string;
+  middle_name?: string | null;
+  last_name: string;
+  specialization?: string | null;
+  designation?: string | null;
+}
+
+/** One allocation row (active or closed) of an admission's care-team log. */
+export interface CareTeamEntry {
+  assignment_id: string;
+  role_in_team: CareTeamRole;
+  employee_id: string;
+  employee_name: string;
+  designation?: string | null;
+  specialization?: string | null;
+  /** Stamped automatically when the row is saved. */
+  start_time: string;
+  /** Stamped automatically when replaced / removed / discharged; null while on duty. */
+  end_time: string | null;
+  is_active: boolean;
+  /** HANDOVER | DISCHARGE | REMOVED */
+  end_reason: string | null;
+  handover_notes: string | null;
+  assigned_by: string | null;
+  assigned_by_name: string | null;
+}
+
+export interface CareTeamResponse {
+  admission_id: string;
+  ip_number: string;
+  status: string;
+  consultant: (CareTeamEmployee & { employee_name: string }) | null;
+  current: { assigned_doctor: CareTeamEntry | null; nurse: CareTeamEntry | null };
+  history: CareTeamEntry[];
+}
+
+/** Omit a field to leave that role unchanged; null clears it. */
+export interface AllocateCareTeamPayload {
+  assigned_doctor_id?: string | null;
+  nurse_id?: string | null;
+  handover_notes?: string;
+  /** Emergency override for staff who are not on the current roster (reason required in handover_notes). */
+  roster_override?: boolean;
+}
+
+export interface BulkAllocateCareTeamPayload extends AllocateCareTeamPayload {
+  ward_id: string;
+  branch_id: string;
+  admission_ids: string[];
+}
+
 export interface AdmissionRecord {
   id: string | number;
   admission_id: string;
@@ -177,6 +233,11 @@ export interface AdmissionRecord {
     reserved_until?: string | null;
   } | null;
   admission_transfer_log?: AdmissionTransferLog[];
+  /** Current duty doctor / primary nurse (null until allocated). */
+  current_assigned_doctor_id?: string | null;
+  current_nurse_id?: string | null;
+  assigned_doctor?: CareTeamEmployee | null;
+  assigned_nurse?: CareTeamEmployee | null;
 }
 
 export interface WardRecord {
@@ -275,6 +336,8 @@ export interface GetAdmissionsParams {
   patientId?: string;
   date?: string;
   search?: string;
+  /** Only admissions where the caller is the consultant, duty doctor or nurse. */
+  assignedToMe?: boolean;
   page?: number;
   limit?: number;
   sortField?: string;
@@ -435,5 +498,19 @@ export const ipdApi = {
 
   updateBedStatus: (bedId: string, data: UpdateBedStatusPayload) =>
     API.patch<{ success: boolean; message: string; data: BedRecord }>(`/ipd/beds/${bedId}/status`, data),
+
+  // Care team: current duty doctor / nurse plus the handover history.
+  getCareTeam: (id: string) =>
+    API.get<{ success: boolean; data: CareTeamResponse }>(`/ipd/${id}/care-team`),
+
+  allocateCareTeam: (id: string, data: AllocateCareTeamPayload) =>
+    API.post<{ success: boolean; message: string; data: CareTeamResponse }>(`/ipd/${id}/care-team/allocate`, data),
+
+  bulkAllocateCareTeam: (data: BulkAllocateCareTeamPayload) =>
+    API.post<{
+      success: boolean;
+      message: string;
+      data: { ward_id: string; requested: number; updated: number; unchanged: number };
+    }>("/ipd/care-team/bulk-allocate-ward", data),
 };
 

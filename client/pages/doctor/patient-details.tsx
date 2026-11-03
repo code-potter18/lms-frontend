@@ -218,10 +218,6 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
 
   const patientPhoto = patient?.patient_photo_url || "";
 
-  const patientAgeSex = patient
-    ? `${patient.patient_age ?? "—"}Y / ${patient.patient_gender ?? ""}`
-    : "";
-
   const patientDob = (() => {
     const dob = patient?.patient_dob;
     if (!dob) return "—";
@@ -233,6 +229,10 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
     if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age--;
     return `${age}`;
   })();
+
+  const patientAgeSex = patient
+    ? `Y:${patientDob}/${patient.patient_gender ?? ""}`
+    : "";
 
   const patientDisplayId = patient?.patient_id || "";
 
@@ -274,20 +274,19 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
 {/* BEGIN: Main Content */}
 <main className="relative flex min-w-0 flex-1 flex-col bg-[#f8fafc]">
 <div className="sticky top-0 z-30 bg-white">
-{/* BEGIN: Top Header */}
-<header className="h-[72px] bg-white border-b border-[#e2e8f0] flex items-center justify-between px-6 shrink-0">
-<div className="flex items-center gap-4">
-{onBack && (
-<button type="button" aria-label="Go back" onClick={onBack} className="flex h-9 w-9 items-center justify-center rounded-full transition hover:bg-slate-100">
+{/* BEGIN: Patient Banner */}
+<section className="w-full bg-white border-b border-[#e2e8f0] px-5 pt-3 pb-4">
+{/* Top row: back arrow (left) | bell + profile (right) */}
+<div className="flex items-center justify-between mb-3">
+{onBack ? (
+<button type="button" aria-label="Go back" onClick={onBack} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:bg-slate-100">
 <svg viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
 <path d="M19 12H5" />
 <path d="m12 19-7-7 7-7" />
 </svg>
 </button>
-)}
-
-</div>
-<div className="flex items-center space-x-4">
+) : <div />}
+<div className="flex items-center gap-3">
 <BellNotificationButton size="md" />
 <UserProfileDropdown
   userName={getUser()?.username || "Doctor"}
@@ -299,13 +298,11 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
   notificationsPath="/doctor/notifications"
 />
 </div>
-</header>
-{/* END: Top Header */}
-{/* BEGIN: Patient Banner */}
-<section className="w-full bg-white border-b border-[#e2e8f0] px-5 py-4">
-<div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-4 lg:flex-nowrap">
+</div>
+{/* Content row: photo + info | vitals + intent */}
+<div className="flex w-full flex-wrap items-center gap-x-4 gap-y-4 lg:flex-nowrap">
 <div className="flex items-center">
-<img alt={patientName} className="w-20 h-20 rounded-full border-4 border-white shadow-sm object-cover" src={patientPhoto}/>
+<img alt={patientName} className="w-20 h-20 rounded-full border-4 border-white shadow-sm object-cover shrink-0" src={patientPhoto}/>
 <div className="ml-6">
 <div className="flex items-center space-x-3 mb-1">
 <h2 className="text-[10px] font-bold text-[#1e293b]">{patientName}</h2>
@@ -314,13 +311,11 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
 <div className="text-[10px] text-[#64748b] flex items-center space-x-3">
 <span>{patientAgeSex}</span>
 <span className="w-1 h-1 rounded-full bg-slate-300"></span>
-<span><span className="text-[#64748b]">Age:</span> <span className="text-[#1e293b] font-semibold">{patientDob}</span></span>
-<span className="w-1 h-1 rounded-full bg-slate-300"></span>
 <span className="text-[#1d4ed8] font-semibold">{recentDiagnosis}</span>
 </div>
 </div>
 </div>
-<div className="flex items-center gap-8 overflow-x-auto hide-scrollbar min-w-0">
+<div className="flex flex-wrap items-start gap-4 min-w-0 lg:flex-nowrap lg:items-center lg:gap-8 lg:overflow-x-auto lg:hide-scrollbar">
 {(() => {
   const v = latestVitals.vitals;
   const TONE: Record<string, string> = {
@@ -361,23 +356,37 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
     { key: "spo2",   label: "SPO2",           Icon: Activity,      tone: "success", value: v.spo2 != null ? `${v.spo2}%` : "—", sev: v.spo2 != null ? (v.spo2 < 90 ? "critical" : v.spo2 < 95 ? "moderate" : "normal") : undefined },
     ...(v.painScore != null ? [{ key: "pain", label: "Pain Score", Icon: Activity, tone: "purple", value: `${v.painScore}/10`, sev: v.painScore >= 7 ? "critical" : v.painScore >= 4 ? "moderate" : "normal" } as Tile] : []),
   ];
-  return (
-    <div className="grid grid-cols-3 gap-x-6 gap-y-4 border-r border-[#e2e8f0] pr-8">
-      {tiles.map((t) => (
-        <div key={t.key} className="flex items-start gap-2">
-          <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${t.sev ? SEV_BADGE[t.sev] : TONE[t.tone]}`}>
-            <t.Icon className="h-3.5 w-3.5" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-[10px] text-slate-500 mb-0.5">{t.label}</p>
-            <p className={`text-[10px] font-semibold truncate ${t.sev ? SEV_TEXT[t.sev] : "text-slate-900"}`}>{t.value}</p>
-          </div>
-        </div>
-      ))}
+  const renderTile = (t: Tile) => (
+    <div key={t.key} className="flex items-start gap-2 shrink-0">
+      <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${t.sev ? SEV_BADGE[t.sev] : TONE[t.tone]}`}>
+        <t.Icon className="h-3.5 w-3.5" />
+      </div>
+      <div>
+        <p className="text-[11px] uppercase text-slate-600 mb-0.5">{t.label}</p>
+        <p className={`text-[10px] font-semibold whitespace-nowrap ${t.sev ? SEV_TEXT[t.sev] : "text-slate-900"}`}>{t.value}</p>
+      </div>
     </div>
   );
+  const desktopRow1 = tiles.filter(t => !["spo2","pain"].includes(t.key));
+  const desktopRow2 = tiles.filter(t => ["spo2","pain"].includes(t.key));
+  const tabletRow1 = tiles.filter(t => !["spo2","pain","temp"].includes(t.key));
+  const tabletRow2 = tiles.filter(t => ["spo2","pain","temp"].includes(t.key));
+  return (
+    <>
+      {/* Tablet: temp moves to row2 */}
+      <div className="flex flex-col gap-3 border-r border-[#e2e8f0] pr-6 overflow-x-auto hide-scrollbar lg:hidden">
+        <div className="flex items-start gap-5">{tabletRow1.map(renderTile)}</div>
+        {tabletRow2.length > 0 && <div className="flex items-start gap-5">{tabletRow2.map(renderTile)}</div>}
+      </div>
+      {/* Desktop: temp in row1, unchanged */}
+      <div className="hidden lg:flex flex-col gap-3 border-r border-[#e2e8f0] pr-8">
+        <div className="flex items-start gap-6">{desktopRow1.map(renderTile)}</div>
+        {desktopRow2.length > 0 && <div className="flex items-start gap-6">{desktopRow2.map(renderTile)}</div>}
+      </div>
+    </>
+  );
 })()}
-<div className="bg-blue-50/50 border border-blue-100 rounded-[12px] p-4 w-[220px]">
+<div className="bg-blue-50/50 border border-blue-100 rounded-[12px] p-4 w-[220px] shrink-0">
 <div className="text-[10px] font-bold text-[#1d4ed8] uppercase tracking-wider mb-1.5">INTENT: {orderIntent || "—"}</div>
 <div className="text-[10px] font-bold text-[#1d4ed8] mb-2.5">{orderTherapy || "—"}</div>
 <div className="flex items-center text-[10px] text-[#64748b] font-medium">
@@ -411,7 +420,7 @@ function HMSPatientPortal({ onBack }: { onBack?: () => void }) {
 <div className="border-b border-[#e2e8f0] bg-white px-6">
 <nav className="flex space-x-8">
 {PATIENT_DETAIL_TABS.map((tab) => (
-<button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`px-1 py-3 border-b-2 text-[10px] font-medium transition-colors ${activeTab === tab ? "border-[#1d4ed8] text-[#1d4ed8] font-semibold" : "border-transparent text-[#64748b] hover:text-[#1e293b] hover:border-slate-300"}`}>
+<button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`px-1 py-3 border-b text-[10px] font-medium transition-colors ${activeTab === tab ? "border-[#1d4ed8] text-[#1d4ed8] font-semibold" : "border-transparent text-[#64748b] hover:text-[#1e293b] hover:border-slate-300"}`}>
 {tab}
 </button>
 ))}

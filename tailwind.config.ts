@@ -14,6 +14,7 @@ export default {
     },
     extend: {
       fontFamily: {
+        sans: ["Manrope", "-apple-system", "Roboto", "Helvetica", "sans-serif"],
         manrope: ["Manrope", "-apple-system", "Roboto", "Helvetica", "sans-serif"],
       },
       colors: {

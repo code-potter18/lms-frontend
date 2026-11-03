@@ -41,13 +41,14 @@ import type {
   InvestigationOrderDetail,
   MeasurementValues,
 } from "./consultation/types";
-import { findActiveEncounter, formatDateDMY } from "./consultation/helpers";
+import { findActiveEncounter, formatDateDMY, otherInvestigationsOf } from "./consultation/helpers";
+import { labOrderItemApi } from "../../api/labOrder.api";
 
 type ToastMessage = string;
 
 const StepCheckLogo = ({ active = false }: { active?: boolean }) => (
   <svg
-    className="h-6 w-6"
+    className="h-4 w-4"
     viewBox="0 0 24 24"
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
@@ -285,15 +286,27 @@ const Consultation: React.FC = () => {
     "SUMMARY",
   ];
 
+  /* Steps that open without completing the earlier ones. The Summary is
+     one of them: a review or new visit without chemotherapy still needs its
+     summary and printout. */
   const DIRECT_ACCESS_STEPS = [
     "DISCHARGE MEDICATION",
     "CHEMOTHERAPY ORDER",
     "FOLLOW UP",
     "DIAGNOSIS",
+    "SUMMARY",
   ];
 
+  /* Opening straight on the Chemotherapy Order (a chemo plan in progress):
+     its Diagnosis and Treatment Plan already exist, so every step stays
+     reachable from there. */
   const [completedSteps, setCompletedSteps] = useState<Set<string>>(
-    () => new Set(["CONSULTATION", "LAB REPORT REVIEW"])
+    () =>
+      new Set(
+        entryState?.initialStep === "CHEMOTHERAPY ORDER"
+          ? ["CONSULTATION", "LAB REPORT REVIEW", "DIAGNOSIS", "TREATMENT PLAN"]
+          : ["CONSULTATION", "LAB REPORT REVIEW"]
+      )
   );
 
   const markStepCompleted = (stepName: string): Set<string> => {
@@ -511,10 +524,6 @@ const Consultation: React.FC = () => {
 
   const patientPhoto = patient?.patient_photo_url || "";
 
-  const patientAgeSex = patient
-    ? `${patient.patient_age ?? ""} Y / ${patient.patient_gender ?? ""}`
-    : "";
-
   const patientDob = (() => {
     const dob = patient?.patient_dob;
     if (!dob) return "—";
@@ -526,6 +535,10 @@ const Consultation: React.FC = () => {
     if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age--;
     return `${age}`;
   })();
+
+  const patientAgeSex = patient
+    ? `Y:${patientDob}/${patient.patient_gender ?? ""}`
+    : "";
 
   const patientDisplayId = patient?.patient_id || "";
 
@@ -670,6 +683,66 @@ const Consultation: React.FC = () => {
     });
   }, []);
 
+  /* Investigations typed by the doctor (not lab tests) - kept on the
+     visit's lab order by Lab Review. */
+  const otherInvestigations = selectedInvestigations.filter(
+    (name) => !labTests.some((test) => test.test_name === name)
+  );
+
+  /* A reopened visit: the investigations saved on its lab orders come back
+     into the Consultation (and the Summary), already marked as ordered so
+     Lab Review never orders them twice. */
+  const visitAppointmentId = consultationState?.appointmentId;
+  useEffect(() => {
+    if (!visitAppointmentId) return;
+    let cancelled = false;
+    labOrderItemApi
+      .getAll({ appointmentId: visitAppointmentId })
+      .then((response) => {
+        if (cancelled) return;
+        const isCancelled = (value?: string | null) => String(value ?? "").toLowerCase() === "cancelled";
+        const items = (response.data.data ?? []).filter(
+          (item) => !isCancelled(item.item_status) && !isCancelled(item.lab_order?.order_status)
+        );
+        if (items.length === 0) return;
+        const orders = [...new Map(items.map((item) => [item.lab_order_id, item.lab_order])).values()];
+        const testNames = items
+          .map((item) => item.lab_test_master?.test_name)
+          .filter((name): name is string => Boolean(name));
+        const typedNames = orders.flatMap((order) => otherInvestigationsOf(order?.lab_description));
+        const savedInstructions =
+          orders.map((order) => order?.clinical_notes?.trim() ?? "").find(Boolean) ?? "";
+
+        setSelectedInvestigations((current) =>
+          current.length > 0 ? current : [...new Set([...testNames, ...typedNames])]
+        );
+        setInvestigationDetails((current) => {
+          const next = { ...current };
+          items.forEach((item) => {
+            const name = item.lab_test_master?.test_name;
+            if (!name || next[name]) return;
+            next[name] = {
+              notes: item.clinical_notes ?? "",
+              priority: item.priority === "Urgent" ? "Urgent" : "Normal",
+              targetDate: item.target_date ? formatDateDMY(item.target_date) : "",
+              method: (item.method ?? "") as InvestigationOrderDetail["method"],
+            };
+          });
+          return next;
+        });
+        setInvestigationInstructions((current) => current || savedInstructions);
+        setOrderedTestIds((current) => {
+          const next = new Set(current);
+          items.forEach((item) => next.add(item.lab_test_id));
+          return next;
+        });
+      })
+      .catch((error) => console.error("Failed to load the visit's investigations:", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [visitAppointmentId]);
+
   /* ============================================================
      STEPS
   ============================================================ */
@@ -749,71 +822,42 @@ const Consultation: React.FC = () => {
             <div className="sticky top-0 z-30">
 
               {/* ==================================================
-                  HEADER
-              ================================================== */}
-
-              <header className="z-30 flex h-16 w-full shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6">
-
-                <div className="flex items-center gap-4">
-
-                  <button
-                    onClick={goBack}
-                    className="flex h-9 w-9 items-center justify-center rounded-full bg-transparent p-2 transition hover:bg-slate-50"
-                  >
-
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="#334155"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="h-5 w-5"
-                    >
-                      <path d="M19 12H5" />
-                      <path d="m12 19-7-7 7-7" />
-                    </svg>
-
-                  </button>
-
-                  <div className="text-lg font-bold leading-7 text-slate-800">
-                    Patients
-                  </div>
-
-                </div>
-
-                <div className="flex items-center gap-6">
-
-                  {/* NOTIFICATION (Global) */}
-
-                  <BellNotificationButton size="md" />
-
-                  {/* USER */}
-
-                  <UserProfileDropdown
-                    userName={getUser()?.username || "Doctor"}
-                    userSubtext={getUser()?.role || "Doctor"}
-                    userAvatar={userAvatarUrl || undefined}
-                    avatarLoading={avatarLoading}
-                    onLogout={() => { localStorage.clear(); window.location.href = '/login'; }}
-                    profilePath="/doctor/profile"
-                    notificationsPath="/doctor/notifications"
-                  />
-
-                </div>
-
-              </header>
-
-              {/* ==================================================
                   PATIENT HEADER
               ================================================== */}
 
-              <section className="w-full bg-slate-50">
+              <section className="w-full bg-white">
 
-                <div className="flex w-full flex-col gap-5">
+                  <section className="flex w-full flex-col gap-3 bg-white px-5 pt-3 pb-2">
 
-                  <section className="flex w-full flex-col gap-5 bg-white p-5">
+                    {/* Top row: back arrow (left) | bell + profile (right) */}
+                    <div className="flex items-center justify-between">
 
+                      <button
+                        onClick={goBack}
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-transparent p-2 transition hover:bg-slate-50"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+                          <path d="M19 12H5" />
+                          <path d="m12 19-7-7 7-7" />
+                        </svg>
+                      </button>
+
+                      <div className="flex items-center gap-4">
+                        <BellNotificationButton size="md" />
+                        <UserProfileDropdown
+                          userName={getUser()?.username || "Doctor"}
+                          userSubtext={getUser()?.role || "Doctor"}
+                          userAvatar={userAvatarUrl || undefined}
+                          avatarLoading={avatarLoading}
+                          onLogout={() => { localStorage.clear(); window.location.href = '/login'; }}
+                          profilePath="/doctor/profile"
+                          notificationsPath="/doctor/notifications"
+                        />
+                      </div>
+
+                    </div>
+
+                    {/* Content row: photo, name, vitals */}
                     <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-4 lg:flex-nowrap">
 
                       <div className="relative shrink-0">
@@ -827,9 +871,9 @@ const Consultation: React.FC = () => {
                         )}
                       </div>
 
-                      <div className="min-w-0">
+                      <div>
 
-                        <div className="mb-1 flex min-w-0 items-center space-x-2">
+                        <div className="mb-1 flex items-center space-x-2">
 
                           <h2 className="text-xs font-bold leading-5 text-[#1e293b]">
                             {patientName}
@@ -844,15 +888,10 @@ const Consultation: React.FC = () => {
 
                         </div>
 
-                        <div className="flex min-w-0 items-center space-x-2 text-[10px] leading-4 text-[#64748b]">
+                        <div className="flex items-center space-x-2 text-[10px] leading-4 text-[#64748b]">
 
-                          <span className="truncate">{patientAgeSex}</span>
+                          <span>{patientAgeSex}</span>
 
-                          <span className="h-1 w-1 shrink-0 rounded-full bg-slate-300" />
-
-                          <span className="shrink-0">
-                            <span className="text-[#64748b]">Age:</span> <span className="font-semibold text-[#1e293b]">{patientDob}</span>
-                          </span>
 
                         </div>
 
@@ -876,7 +915,7 @@ const Consultation: React.FC = () => {
 
                         <div className="flex flex-col">
 
-                          <div className="text-[9px] font-bold leading-[14px] tracking-[0.5px] text-slate-400">
+                          <div className="text-[11px] uppercase leading-[14px] tracking-[0.5px] text-slate-600">
                             PHONE
                           </div>
 
@@ -912,7 +951,7 @@ const Consultation: React.FC = () => {
 
                         <div className="flex flex-col">
 
-                          <div className="text-[9px] font-bold leading-[14px] tracking-[0.5px] text-slate-400">
+                          <div className="text-[11px] uppercase leading-[14px] tracking-[0.5px] text-slate-600">
                             EMAIL
                           </div>
 
@@ -946,7 +985,7 @@ const Consultation: React.FC = () => {
                                 <Icon className="h-4 w-4" />
                               </div>
                               <div className="min-w-0">
-                                <p className="mb-1 text-[10px] text-slate-500">
+                                <p className="mb-1 text-[11px] uppercase text-slate-600">
                                   {tile.label}
                                 </p>
                                 <p
@@ -986,8 +1025,6 @@ const Consultation: React.FC = () => {
 
                   </section>
 
-                </div>
-
               </section>
 
               {/* ==================================================
@@ -1013,34 +1050,28 @@ const Consultation: React.FC = () => {
                       className="relative h-[88.5px] w-[298.66px] shrink-0 bg-white"
                     >
 
-                      {/* ICON */}
+                      {/* ICON + LABEL */}
 
-                      <div className="absolute left-1/2 top-0 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full bg-white">
+                      <div className="flex flex-col items-center gap-1 pt-3">
 
-                        {typeof step.icon === "string" ? (
-                          <img
-                            src={step.icon}
-                            alt=""
-                            className="h-6 w-6"
-                          />
-                        ) : (
-                          <StepCheckLogo active={step.active} />
-                        )}
+                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-white">
+                          {typeof step.icon === "string" ? (
+                            <img src={step.icon} alt="" className="h-4 w-4" />
+                          ) : (
+                            <StepCheckLogo active={step.active} />
+                          )}
+                        </div>
 
-                      </div>
-
-                      {/* LABEL */}
-
-                      <div className="absolute left-1/2 top-[47px] -translate-x-1/2 whitespace-nowrap text-[10px] font-bold uppercase leading-[16.5px] tracking-[1.1px] text-gray-800">
-
-                        {step.name}
+                        <div className="whitespace-nowrap text-[10px] font-bold uppercase leading-[16.5px] tracking-[1.1px] text-gray-800">
+                          {step.name}
+                        </div>
 
                       </div>
 
                       {/* BAR */}
 
                       <div
-                        className={`absolute left-0 right-0 top-[80.5px] h-2 rounded-full ${
+                        className={`absolute left-0 right-0 top-[80.5px] h-1 rounded-full ${
                           step.active
                             ? "bg-green-500"
                             : "bg-white"
@@ -1123,6 +1154,7 @@ const Consultation: React.FC = () => {
                     pendingTests={pendingLabTests}
                     testDetails={investigationDetails}
                     instructions={investigationInstructions}
+                    otherInvestigations={otherInvestigations}
                     onOrdered={handleTestsOrdered}
                     onNext={() => { selectStep("DIAGNOSIS", markStepCompleted("LAB REPORT REVIEW")); }}
                   />
@@ -1180,6 +1212,9 @@ const Consultation: React.FC = () => {
                     appointmentId={consultationState?.appointmentId}
                     encounterNo={encounter?.encounter_no}
                     measurements={measurements}
+                    investigations={selectedInvestigations}
+                    investigationDetails={investigationDetails}
+                    investigationInstructions={investigationInstructions}
                   />
                 ) : null}
 

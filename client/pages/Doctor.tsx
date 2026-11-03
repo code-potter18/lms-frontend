@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import CalendarPicker from "@/components/hms/Calender";
 import { format, isToday, isTomorrow, isYesterday, addDays, subDays } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -263,6 +263,8 @@ function mapEmployeeToDoctorData(emp: EmployeeRecord, index: number) {
 // ============================================================
 export default function Doctor() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusParam = searchParams.get("status");
   const { toast } = useToast();
   const { can } = usePermission();
   const { selectedBranchId, isAllBranches, branches } = useBranchFilter();
@@ -338,7 +340,18 @@ export default function Doctor() {
     handleChange: handleFilterChange,
     handleApply: handleApplyFilter,
     handleClear: handleClearFilter,
+    setAppliedFilter,
   } = useFilterPanel(doctorFilterFields);
+
+  useEffect(() => {
+    if (statusParam) {
+      setAppliedFilter("status", [statusParam]);
+    }
+  }, [statusParam, setAppliedFilter]);
+
+  const isStatusParamActive = Boolean(
+    statusParam && Array.isArray(appliedValues.status) && appliedValues.status.includes(statusParam)
+  );
 
   const fetchDoctors = useCallback(async () => {
     setIsDoctorsLoading(true);
@@ -819,7 +832,29 @@ useEffect(() => {
                 <RefreshButton onClick={fetchDoctors} isLoading={isDoctorsLoading} />
               </div>
             </div>
- 
+
+            {isStatusParamActive && (
+              <div className="mb-4 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50/80 px-4 py-2.5 text-sm text-amber-900 transition-all">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2.5 w-2.5 rounded-full bg-amber-500" />
+                  <span className="font-semibold">Filtered by Doctor Status: {statusParam}</span>
+                  <span className="text-amber-700 text-xs">
+                    (Showing {displayData.length} doctor{displayData.length === 1 ? "" : "s"} on {statusParam})
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    searchParams.delete("status");
+                    setSearchParams(searchParams);
+                    handleClearFilter();
+                  }}
+                  className="inline-flex items-center gap-1 rounded bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-200 hover:text-amber-900 transition-colors"
+                >
+                  Clear Status Filter
+                </button>
+              </div>
+            )}
+
             {/* ================================================================ */}
             {/* BODY: LIST VIEW (table via HmsTable)                            */}
             {/* ================================================================ */}

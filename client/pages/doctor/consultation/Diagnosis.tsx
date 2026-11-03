@@ -273,7 +273,7 @@ const DiagnosisAddRows: React.FC<{
             key={cancerType || "_"}
             className="rounded-md bg-blue-50 p-2 text-[10px] text-blue-800"
           >
-            <div className="mb-1.5 font-medium">
+            <div className="mb-1.5 text-[10px] font-medium">
               Add “{text}”{cancerType ? ` to ${cancerType}` : ""}
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -4058,13 +4058,13 @@ const Diagnosis: React.FC<{
                         <table className="w-full text-left text-[10px]">
                           <thead>
                             <tr className="text-gray-500">
-                              <th className="whitespace-nowrap py-1 pr-3 font-semibold">
+                              <th className="whitespace-nowrap py-1 pr-3 text-[10px] font-semibold">
                                 Date
                               </th>
                               {panel.parameters.map((parameter) => (
                                 <th
                                   key={parameter.parameter_id}
-                                  className="whitespace-nowrap py-1 pr-3 font-semibold"
+                                  className="whitespace-nowrap py-1 pr-3 text-[10px] font-semibold"
                                 >
                                   {parameter.parameter_name}
                                 </th>

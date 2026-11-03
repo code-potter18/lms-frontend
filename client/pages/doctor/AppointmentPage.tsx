@@ -1396,7 +1396,7 @@ export default function AppointmentPage() {
         <main className="flex flex-col gap-6">
 
           {/* ==================== HEADER ==================== */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between">
+          <div className="flex flex-col md:flex-row md:items-center justify-between px-4 pt-4 pb-2 lg:px-0 lg:pt-0 lg:pb-0">
             <div>
               <h1 className="hms-heading">Appointment</h1>
               <p className="hms-subheading">Real-time doctor appointments and patients.</p>

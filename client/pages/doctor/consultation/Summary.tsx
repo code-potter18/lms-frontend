@@ -7,11 +7,16 @@ import type { Styles } from 'jspdf-autotable';
 import API, { getActiveBranchId } from "../../../api/axios";
 import { appointmentApi } from "../../../api/appointment.api";
 import { getUser } from "../../../utils/token";
-import { clinicalDetailsApi } from "../../../api/clinicalDetails.api";
+import { clinicalDetailsApi, type EncounterClinicalDetails } from "../../../api/clinicalDetails.api";
 import { patientApi } from "../../../api/patient.api";
 import { employeeApi } from "../../../api/employee.api";
 import { branchApi } from "../../../api/branch.api";
-import { encounterApi } from "../../../api/encounter.api";
+import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
+import { MultiSelectDropdown } from "../../../components/ui/multi-select-dropdown";
+import {
+  formatDaysDuration,
+  formatDuration,
+} from "../../../utils/duration";
 import {
   chemotherapyApi,
   isChemoPlanClosed,
@@ -22,8 +27,10 @@ import {
 import {
   consultationApi,
   type PersonalHistoryItem,
+  type FamilyHistoryRecord,
   type EncounterReportRecord,
   type EncounterPastTreatmentRecord,
+  type EncounterMolecularTestRecord,
 } from "../../../api/consultation.api";
 import {
   labTestMasterApi,
@@ -33,6 +40,7 @@ import { UserProfileDropdown } from "../../../components/ui/User_profile_dropdow
 import type {
   ConsultationState,
   DischargeMedicineRecord,
+  InvestigationOrderDetail,
   MeasurementValues,
   RegimenProtocolDetail,
 } from "./types";
@@ -47,7 +55,17 @@ import {
   protocolDayDilutions,
   resolveEffectiveStartDate,
   fetchScheduledDate,
+  parseFollowUpAdvice,
+  type FollowUpValues,
 } from "./helpers";
+import { adviceMedicinesOf, findAdvicePrescription } from "./AdviceSection";
+import {
+  buildMedicineSentence,
+  groupMedicinesByType,
+  medicineName,
+  patientDoseText,
+  protocolDoseText,
+} from "./printMedicines";
 
 /* ============================================================
    SUMMARY COMPONENT
@@ -147,6 +165,12 @@ type PrescriptionMedicinePayload = {
   route?: string;
   frequency?: string;
   instruction?: string;
+  /* The planned cycle day / order this row belongs to. */
+  chemotherapy_plan_id?: string;
+  plan_order_id?: string;
+  plan_item_id?: string;
+  cycle_number?: number;
+  cycle_day?: number;
 };
 
 type StagingDetailRecord = {
@@ -159,6 +183,16 @@ type StagingDetailRecord = {
   diagnosis_date?: string | null;
   cancer_types?: { cancer_type?: string | null } | null;
   derived_fields?: { ajcc_stage?: string | null } | null;
+  cancer_subtypes?: { subtype_name?: string | null } | null;
+  histopathology?: string | null;
+  pre_diagnosis?: string | null;
+  t_stage?: string | null;
+  n_stage?: string | null;
+  m_stage?: string | null;
+  grade?: string | null;
+  site?: string | null;
+  disease_status?: string | null;
+  notes?: string | null;
 };
 
 type SummaryPlan = {
@@ -208,26 +242,8 @@ type SummaryPlanOrder = ChemoPlanOrderHeader & {
   chemotherapy_plan_hydration?: ChemoPlanHydration[] | null;
 };
 
-/* A plan item's display name: its medicine, else the typed name. */
-const planItemName = (item: SummaryPlanItem) =>
-  item.medicine_master?.medicine_name ||
-  item.medicine_master?.generic_name ||
-  item.drug_name ||
-  "";
-
-/* "297.5 mg": the Dose Cal result (chemotherapy drugs only), "" if none. */
-const patientDoseLabel = (item: SummaryPlanItem) =>
-  item.calculated_dose != null && item.calculated_dose !== ""
-    ? `${Number(item.calculated_dose)} ${
-        item.calculated_dose_unit || item.protocol_dose_unit || ""
-      }`.trim()
-    : "";
-
-/* "175 mg/m²": the protocol (ordered) dose, "" if none. */
-const protocolDoseLabel = (item: SummaryPlanItem) =>
-  item.protocol_dose != null
-    ? `${Number(item.protocol_dose)} ${item.protocol_dose_unit ?? ""}`.trim()
-    : "";
+/* Medicine naming and dose text are shared with the printed summary
+   (see printMedicines.ts). */
 
 type ChemoOrderRow = {
   drug: string;
@@ -252,6 +268,8 @@ type DilutionRow = {
 /* A row of the printed Pharmacy Slip. */
 type PharmacySlipRow = {
   drug: string;
+  form: string;
+  patientDose: string;
   brand: string;
   dosage: string;
   quantity: string;
@@ -331,18 +349,124 @@ const volumeLabel = (
   return unit ? `${value} ${unit}` : value;
 };
 
+/* ============================================================
+   VISIT SECTIONS
+   What the doctor recorded for the visit (Consultation, Diagnosis, Advice,
+   Follow Up), as headings with their values. The same list fills the
+   Summary on screen, the "Add To Print" choices and the printout.
+   ============================================================ */
+type VisitBlock =
+  | { kind: "fields"; items: { label: string; value: string }[] }
+  | { kind: "text"; label: string; value: string }
+  | { kind: "list"; label: string; items: string[] }
+  | { kind: "table"; label?: string; head: string[]; rows: string[][] };
+
+type VisitSection = { key: string; title: string; blocks: VisitBlock[] };
+
+const filled = (value?: string | number | null) =>
+  value !== null && value !== undefined && String(value).trim() !== "";
+
+/* Only the blocks (and sections) that have something in them. */
+const visitSection = (key: string, title: string, blocks: (VisitBlock | null)[]): VisitSection | null => {
+  const kept = blocks.filter((block): block is VisitBlock => {
+    if (!block) return false;
+    if (block.kind === "fields") return block.items.some((item) => filled(item.value));
+    if (block.kind === "text") return filled(block.value);
+    if (block.kind === "list") return block.items.some((item) => filled(item));
+    return block.rows.length > 0;
+  }).map((block) =>
+    block.kind === "fields"
+      ? { ...block, items: block.items.filter((item) => filled(item.value)) }
+      : block.kind === "list"
+        ? { ...block, items: block.items.filter((item) => filled(item)) }
+        : block
+  );
+  return kept.length > 0 ? { key, title, blocks: kept } : null;
+};
+
+function VisitSectionView({ section }: { section: VisitSection }) {
+  return (
+    <section>
+      <h3 className="mb-4 text-xs font-medium text-indigo-900">{section.title}</h3>
+      <div className="flex flex-col gap-6">
+        {section.blocks.map((block, index) => {
+          if (block.kind === "fields") {
+            return (
+              <div key={index} className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 lg:grid-cols-3">
+                {block.items.map((item) => (
+                  <div key={item.label}>
+                    <p className="mb-2 text-[10px] font-medium text-slate-900">{item.label}</p>
+                    <p className="whitespace-pre-line text-xs text-slate-500">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+            );
+          }
+          if (block.kind === "text" || block.kind === "list") {
+            return (
+              <div key={index}>
+                <p className="mb-2 text-[10px] font-medium text-slate-900">{block.label}</p>
+                <p className="whitespace-pre-line text-xs text-slate-500">
+                  {block.kind === "text" ? block.value : block.items.join(", ")}
+                </p>
+              </div>
+            );
+          }
+          return (
+            <div key={index}>
+              {block.label && <p className="mb-2 text-[10px] font-medium text-slate-900">{block.label}</p>}
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[560px] text-left text-xs">
+                  <thead>
+                    <tr>
+                      {block.head.map((header) => (
+                        <th key={header} className="pb-3 pr-4 text-[10px] font-medium text-slate-900">
+                          {header}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="text-slate-800">
+                    {block.rows.map((row, rowIndex) => (
+                      <tr key={rowIndex} className="border-t border-slate-100 align-top">
+                        {row.map((cell, cellIndex) => (
+                          <td key={cellIndex} className="py-3 pr-4 text-slate-600">
+                            {cell || "—"}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 const Summary: React.FC<{
   embedded?: boolean;
   patientId?: string;
   appointmentId?: string;
   encounterNo?: string;
   measurements?: MeasurementValues;
+  /* The Consultation's investigations / scans (held by the consultation
+     page, ordered by Lab Review). */
+  investigations?: string[];
+  investigationDetails?: Record<string, InvestigationOrderDetail>;
+  investigationInstructions?: string;
 }> = ({
   embedded = false,
   patientId,
   appointmentId,
   encounterNo,
   measurements = { height: "", weight: "", bsa: "", bmi: "", bp: "", pulse: "", temp: "", spo2: "", painScore: "" },
+  investigations,
+  investigationDetails,
+  investigationInstructions,
 }) => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -354,20 +478,27 @@ const Summary: React.FC<{
   const [userAvatarUrl, setUserAvatarUrl] = useState<string>(() => localStorage.getItem("user_photo") || "");
   const [avatarLoading, setAvatarLoading] = useState<boolean>(() => !localStorage.getItem("user_photo"));
 
-  const [nextVisitDate, setNextVisitDate] = useState(() =>
+  /* Fallbacks for a visit whose Follow Up wasn't saved yet: the next cycle
+     kept by the Chemo Order / Follow Up steps and its scheduled date. */
+  const [fallbackVisitDate, setNextVisitDate] = useState(() =>
     resolvedPatientId
       ? (localStorage.getItem(
           `hms_next_cycle_date_${resolvedPatientId}`
         ) ?? "")
       : ""
   );
-  const [nextCycle] = useState(() =>
+  const [fallbackCycle] = useState(() =>
     resolvedPatientId
       ? (localStorage.getItem(
           `hms_next_cycle_${resolvedPatientId}`
         ) ?? "")
       : ""
   );
+  /* What the Follow Up step saved on this visit's encounter (its
+     follow_up_date and the [Follow Up] advice block) - shown as entered. */
+  const [savedFollowUp, setSavedFollowUp] = useState<FollowUpValues | null>(null);
+  const nextVisitDate = savedFollowUp?.nextVisit || fallbackVisitDate;
+  const nextCycle = savedFollowUp?.nextCycle || fallbackCycle;
 
   const [plan, setPlan] = useState<SummaryPlan | null>(null);
   /* The cycle day order(s) saved in this visit's encounter. */
@@ -412,6 +543,8 @@ const Summary: React.FC<{
     PersonalHistoryItem[]
   >([]);
   const [summaryDietType, setSummaryDietType] = useState("");
+  const [summaryFamilyHistory, setSummaryFamilyHistory] =
+    useState<FamilyHistoryRecord | null>(null);
   const [summaryReports, setSummaryReports] = useState<EncounterReportRecord[]>(
     []
   );
@@ -436,6 +569,15 @@ const Summary: React.FC<{
   const [encounterCheckIn, setEncounterCheckIn] = useState("");
   /* The visit's pharmacy slips (pharmacy_slip / pharmacy_slip_item). */
   const [pharmacySlips, setPharmacySlips] = useState<PharmacySlipRecord[]>([]);
+  /* The visit's saved consultation: its encounter, clinical details,
+     molecular tests, Advice medicines and diagnosis. */
+  const [visitEncounter, setVisitEncounter] = useState<EncounterRecord | null>(null);
+  const [summaryClinical, setSummaryClinical] = useState<EncounterClinicalDetails | null>(null);
+  const [molecularTests, setMolecularTests] = useState<EncounterMolecularTestRecord[]>([]);
+  const [adviceMedicines, setAdviceMedicines] = useState<ReturnType<typeof adviceMedicinesOf>>([]);
+  const [visitDiagnosis, setVisitDiagnosis] = useState<StagingDetailRecord | null>(null);
+  /* "Add To Print": the headings picked for the printout. */
+  const [printSections, setPrintSections] = useState<string[]>([]);
 
   useEffect(() => {
     if (!appointmentId) return;
@@ -468,6 +610,7 @@ const Summary: React.FC<{
           );
           if (cancelled) return;
           const data = response.data?.data;
+          setSummaryClinical(data ?? null);
           setSummaryAllergies(
             (data?.allergies ?? []).map((allergy) => allergy.substanceName)
           );
@@ -519,6 +662,11 @@ const Summary: React.FC<{
           : await encounterApi.getByAppointment(appointmentId!);
         if (cancelled) return;
         const enc = response.data?.data;
+        setVisitEncounter(enc ?? null);
+        /* An inpatient encounter has no appointment: its own copy. */
+        const encounterReason = (enc as { appointment_history?: { reason_for_visit?: string | null } | null } | undefined)
+          ?.appointment_history?.reason_for_visit;
+        if (encounterReason) setSummaryReasonForVisit((current) => current || encounterReason);
         const rawNotes = enc?.clinical_notes ?? "";
         const markerIndex = rawNotes.indexOf(PAST_HISTORY_MARKER);
         setSummaryDiscussion(
@@ -529,9 +677,7 @@ const Summary: React.FC<{
         setSummaryHopi(
           enc?.history_of_present_illness ?? enc?.symptoms ?? ""
         );
-        setSummaryClinicalFindings(
-          enc?.clinical_findings ?? enc?.chief_complaint ?? ""
-        );
+        setSummaryClinicalFindings(enc?.clinical_findings ?? "");
         setSummaryCns(enc?.cns_examination ?? "");
         setSummaryCvs(enc?.cvs_examination ?? "");
         setSummaryPerAbdomen(enc?.per_abdomen_examination ?? "");
@@ -552,6 +698,11 @@ const Summary: React.FC<{
           ].filter(Boolean)
         );
         setSummaryPreviousReports(enc?.previous_reports ?? "");
+        const followUp = parseFollowUpAdvice(enc?.advice);
+        setSavedFollowUp({
+          ...followUp,
+          nextVisit: dateOnlyDMY(enc?.follow_up_date) || followUp.nextVisit,
+        });
         setResolvedSummaryEncounterNo(enc?.encounter_no ?? "");
         setEncounterCheckIn(enc?.encounter_ts ?? enc?.created_at ?? "");
       } catch (error) {
@@ -577,6 +728,7 @@ const Summary: React.FC<{
         setSummaryImmunization(record?.immunization ?? []);
         setSummaryDrugConsumption(record?.drug_consumption ?? []);
         setSummaryDietType(record?.diet_type ?? "");
+        setSummaryFamilyHistory(record?.family_history ?? null);
       })
       .catch((error) =>
         console.error("Failed to load summary personal history:", error)
@@ -604,9 +756,33 @@ const Summary: React.FC<{
         if (!cancelled) setSummaryReportsLoading(false);
       });
 
+    consultationApi
+      .getMolecularTests(targetEncounterNo)
+      .then((response) => {
+        if (!cancelled) setMolecularTests(response.data.data ?? []);
+      })
+      .catch((error) => console.error("Failed to load summary molecular tests:", error));
+
+    findAdvicePrescription(targetEncounterNo, appointmentId || visitEncounter?.appointment_id)
+      .then((record) => {
+        if (!cancelled) setAdviceMedicines(adviceMedicinesOf(record));
+      })
+      .catch((error) => console.error("Failed to load the Advice medicines:", error));
+
+    if (resolvedPatientId) {
+      API.get<{ success: boolean; data: StagingDetailRecord[] }>("/oncology/staging-details", {
+        params: { patient_id: resolvedPatientId, encounter_no: targetEncounterNo, page: 1, limit: 1 },
+      })
+        .then((response) => {
+          if (!cancelled) setVisitDiagnosis(response.data.data?.[0] ?? null);
+        })
+        .catch((error) => console.error("Failed to load the visit's diagnosis:", error));
+    }
+
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolvedSummaryEncounterNo]);
 
   useEffect(() => {
@@ -988,18 +1164,18 @@ const Summary: React.FC<{
   const chemotherapyOrders: ChemoOrderRow[] = planItems
     .filter((item) => item.drug_role === "PRIMARY")
     .map((item) => ({
-      drug: planItemName(item),
+      drug: medicineName(item),
       form:
         item.formulation || item.medicine_master?.dosage_form || "",
       dose: item.protocol_dose != null ? String(Number(item.protocol_dose)) : "",
       unit: item.protocol_dose_unit || item.medicine_master?.unit || "",
-      patientDose: patientDoseLabel(item),
+      patientDose: patientDoseText(item),
     }));
 
   const premedications: PremedRow[] = planItems
     .filter((item) => item.drug_role === "PREMEDICATION")
     .map((item) => ({
-      drug: planItemName(item),
+      drug: medicineName(item),
       dose: item.protocol_dose != null ? String(item.protocol_dose) : "",
       route: item.administration_route || "",
       time: item.frequency || "",
@@ -1055,7 +1231,7 @@ const Summary: React.FC<{
   );
   const adminInstructionRows: AdminInstructionRow[] = sortedPlanItems
     .map((item) => ({
-      drug: planItemName(item),
+      drug: medicineName(item),
       category:
         DRUG_ROLE_CATEGORY[(item.drug_role ?? "").toUpperCase()] ?? item.drug_role ?? "",
       route: item.administration_route ?? "",
@@ -1082,7 +1258,7 @@ const Summary: React.FC<{
       .filter((item) => (item.drug_role ?? "").toUpperCase() === "DILUTION")
       .filter((item) => {
         const key = JSON.stringify([
-          item.medicine_id ?? planItemName(item).trim().toLowerCase(),
+          item.medicine_id ?? medicineName(item).trim().toLowerCase(),
           item.formulation || item.medicine_master?.dosage_form || "",
           item.protocol_dose ?? "",
           item.protocol_dose_unit ?? "",
@@ -1096,12 +1272,12 @@ const Summary: React.FC<{
       });
   })();
   const dilutionRows: DilutionRow[] = savedDilutionItems.some((item) =>
-    planItemName(item).trim()
+    medicineName(item).trim()
   )
     ? savedDilutionItems.map((item) => ({
-        drug: planItemName(item),
+        drug: medicineName(item),
         form: item.formulation || item.medicine_master?.dosage_form || "",
-        dose: protocolDoseLabel(item),
+        dose: protocolDoseText(item),
         diluent: item.dilution_solution ?? "",
         volume: item.dilution_volume ?? "",
         guidance: item.administration_detail ?? "",
@@ -1209,13 +1385,22 @@ const Summary: React.FC<{
             item.medicine_master?.medicine_name ||
             item.medicine_master?.generic_name ||
             "",
+          form:
+            item.dosage_form ||
+            item.medicine_master?.dosage_form ||
+            "",
+          patientDose: item.patient_dose || "",
           brand: item.brand_name || item.medicine_master?.brand_name || "",
           dosage: [item.dose, item.dose_unit].filter(Boolean).join(" "),
           quantity: item.quantity != null ? String(item.quantity) : "",
           type: slipTypeLabel(item.drug_role),
         }))
       : sortedPlanItems.map((item) => ({
-          drug: planItemName(item),
+          drug: medicineName(item),
+          form: item.medicine_master?.dosage_form || item.formulation || "",
+          patientDose: [item.calculated_dose ?? item.protocol_dose, item.calculated_dose_unit ?? item.protocol_dose_unit]
+            .filter(Boolean)
+            .join(" "),
           brand: "",
           dosage: "",
           quantity: "",
@@ -1286,6 +1471,248 @@ const Summary: React.FC<{
      sheets: the day's administration schedule + dilution table, the
      discharge advice, then the full drug list - each section with the
      patient header, the doctor's signature and the contact footer. */
+  /* ============================================================
+     VISIT SECTIONS - everything recorded for this visit, by heading
+     (Consultation, Diagnosis, Investigations, Advice, Follow Up). Shown
+     on the Summary, offered in "Add To Print" and printed.
+     ============================================================ */
+  const visitPastHistory = (() => {
+    const raw = visitEncounter?.clinical_notes ?? "";
+    const markerIndex = raw.indexOf(PAST_HISTORY_MARKER);
+    return markerIndex === -1 ? "" : raw.slice(markerIndex + PAST_HISTORY_MARKER.length).trim();
+  })();
+  const visitStaging = visitDiagnosis ?? plan?.oncology_staging_detail ?? null;
+  const visitDiagnosisName =
+    visitStaging?.histopathology ||
+    visitStaging?.cancer_subtypes?.subtype_name ||
+    visitStaging?.pre_diagnosis ||
+    visitStaging?.cancer_types?.cancer_type ||
+    "";
+  const ecog = summaryClinical?.performanceStatus
+    ? [summaryClinical.performanceStatus.code, summaryClinical.performanceStatus.description].filter(Boolean).join(" - ")
+    : "";
+  const respiratoryRate = visitEncounter?.respiratory_rate;
+
+  const visitSections: VisitSection[] = [
+    visitSection("vitals", "Vitals", [
+      {
+        kind: "fields",
+        items: [
+          { label: "Height", value: measurements.height },
+          { label: "Weight", value: measurements.weight },
+          { label: "BMI", value: measurements.bmi },
+          { label: "BSA", value: measurements.bsa },
+          { label: "Blood Pressure", value: measurements.bp },
+          { label: "Pulse", value: measurements.pulse },
+          { label: "Temperature", value: measurements.temp },
+          { label: "SpO2", value: measurements.spo2 },
+          { label: "Respiratory Rate", value: respiratoryRate != null ? `${respiratoryRate} /min` : "" },
+          { label: "Pain Score", value: measurements.painScore },
+        ],
+      },
+    ]),
+    visitSection("presenting", "Presenting Complaint", [
+      { kind: "text", label: "Chief Complaint", value: visitEncounter?.chief_complaint ?? "" },
+      { kind: "text", label: "Reason of Visit", value: summaryReasonForVisit },
+      { kind: "text", label: "History of Present Illness", value: summaryHopi },
+      { kind: "text", label: "Consultation Notes", value: summaryDiscussion },
+    ]),
+    visitSection("clinical", "Clinical Details", [
+      { kind: "fields", items: [{ label: "Performance Status (ECOG)", value: ecog }] },
+      {
+        kind: "table",
+        label: "Symptoms",
+        head: ["Symptom", "Severity", "Duration", "Notes"],
+        rows: (summaryClinical?.symptoms ?? []).map((symptom) => [
+          symptom.symptomName,
+          symptom.severity ?? "",
+          formatDaysDuration(symptom.durationDays, symptom.durationUnit),
+          symptom.clinicalNotes ?? "",
+        ]),
+      },
+      {
+        kind: "table",
+        label: "Allergies",
+        head: ["Allergen", "Severity", "Reaction", "Duration", "Command(s)"],
+        rows: (summaryClinical?.allergies ?? []).map((allergy) => [
+          allergy.substanceName,
+          allergy.severity ?? "",
+          allergy.reaction ?? "",
+          formatDuration(allergy.durationValue, allergy.durationUnit),
+          allergy.clinicalNotes ?? "",
+        ]),
+      },
+      {
+        kind: "table",
+        label: "Comorbidities",
+        head: ["Comorbidity", "Onset Date", "Duration", "Command(s)"],
+        rows: (summaryClinical?.comorbidities ?? []).map((item) => [
+          item.comorbidityName,
+          item.onsetDate ? formatDateDMY(item.onsetDate) : "",
+          formatDuration(item.durationValue, item.durationUnit),
+          item.clinicalNotes ?? "",
+        ]),
+      },
+    ]),
+    visitSection("personal", "Personal History", [
+      {
+        kind: "fields",
+        items: [
+          { label: "Immunization", value: summaryImmunization.map((item) => item.others || item.name).join(", ") },
+          { label: "Diet Type", value: summaryDietType },
+          {
+            label: "Family History",
+            value: summaryFamilyHistory
+              ? summaryFamilyHistory.status === "PRESENT"
+                ? "Present"
+                : "Not Present"
+              : "",
+          },
+        ],
+      },
+      {
+        kind: "table",
+        label: "Drug Consumption",
+        head: ["Drug", "Duration", "Command(s)"],
+        rows: summaryDrugConsumption.map((item) => [
+          item.others || item.name,
+          formatDuration(item.duration_value, item.duration_unit),
+          item.commands ?? "",
+        ]),
+      },
+      {
+        kind: "table",
+        label: "Family History - Relatives",
+        head: ["Relative", "Degree", "Condition", "Age at Diagnosis", "Remarks"],
+        rows:
+          summaryFamilyHistory?.status === "PRESENT"
+            ? summaryFamilyHistory.entries.map((entry) => [
+                entry.relative_type ?? "",
+                entry.degree ? `${entry.degree} Degree` : "",
+                entry.condition ?? "",
+                entry.age_at_diagnosis ?? "",
+                entry.remarks ?? "",
+              ])
+            : [],
+      },
+    ]),
+    visitSection("examination", "Examination", [
+      { kind: "list", label: "General Examination (positive findings)", items: summaryGenExam },
+      {
+        kind: "fields",
+        items: [
+          { label: "CNS", value: summaryCns },
+          { label: "CVS", value: summaryCvs },
+          { label: "Respiratory", value: summaryRespiratory },
+          { label: "Per Abdomen", value: summaryPerAbdomen },
+        ],
+      },
+      { kind: "text", label: "Clinical Findings", value: summaryClinicalFindings },
+    ]),
+    visitSection("pastHistory", "Past History", [
+      { kind: "text", label: "Past History", value: visitPastHistory },
+      {
+        kind: "table",
+        label: "Previous Treatment",
+        head: ["Treatment Type", "Date", "Brief Note", "Treatment Response"],
+        rows: summaryPastTreatments.map((treatment) => [
+          treatment.treatment_type ?? "",
+          treatment.treatment_date ? formatDateDMY(treatment.treatment_date) : "",
+          treatment.note ?? "",
+          treatment.treatment_response ?? "",
+        ]),
+      },
+    ]),
+    visitSection("previousReports", "Previous Reports", [
+      {
+        kind: "table",
+        head: ["Test", "Date", "Result", "Impression"],
+        rows: summaryReports.map((report) => [
+          report.lab_test_master?.test_name ?? report.test_name ?? "",
+          report.report_completed_date ? formatDateDMY(report.report_completed_date) : "",
+          report.result ?? "",
+          report.impression ?? "",
+        ]),
+      },
+      { kind: "text", label: "Report Notes", value: summaryPreviousReports },
+    ]),
+    visitSection("molecular", "Molecular Testing", [
+      {
+        kind: "table",
+        head: ["Test", "Date", "Result", "Impression"],
+        rows: molecularTests.map((test) => [
+          test.test_name,
+          test.test_date ? formatDateDMY(test.test_date) : "",
+          test.result ?? "",
+          test.impression ?? "",
+        ]),
+      },
+    ]),
+    visitSection("diagnosis", "Diagnosis", [
+      {
+        kind: "fields",
+        items: [
+          { label: "Diagnosis", value: visitDiagnosisName },
+          { label: "Cancer Type", value: visitStaging?.cancer_types?.cancer_type ?? "" },
+          { label: "Stage", value: visitStaging?.clinical_stage || visitStaging?.derived_fields?.ajcc_stage || "" },
+          { label: "TNM", value: [visitStaging?.t_stage, visitStaging?.n_stage, visitStaging?.m_stage].filter(Boolean).join(" ") },
+          { label: "Grade", value: visitStaging?.grade ?? "" },
+          { label: "Site", value: visitStaging?.site ?? "" },
+          { label: "Disease Status", value: visitStaging?.disease_status ?? "" },
+          { label: "Diagnosis Date", value: dateOnlyDMY(visitStaging?.diagnosis_date) },
+        ],
+      },
+      { kind: "text", label: "Notes", value: visitStaging?.notes ?? "" },
+    ]),
+    visitSection("investigations", "Investigations / Scans Advised", [
+      {
+        kind: "table",
+        head: ["Investigation", "Method", "Priority", "Target Date", "Clinical Notes"],
+        rows: (investigations ?? []).map((name) => {
+          const detail = investigationDetails?.[name];
+          return [name, detail?.method ?? "", detail?.priority ?? "", detail?.targetDate ?? "", detail?.notes ?? ""];
+        }),
+      },
+      { kind: "text", label: "Additional Instructions", value: investigationInstructions ?? "" },
+    ]),
+    visitSection("advice", "Advice", [
+      {
+        kind: "table",
+        label: "Medicines",
+        head: ["Form", "Drug", "Dosage", "Frequency", "Duration", "Instruction"],
+        rows: adviceMedicines.map((row) => [row.form, row.name, row.dosage, row.frequency, row.duration, row.instruction]),
+      },
+      { kind: "text", label: "Discussion", value: visitEncounter?.notes ?? "" },
+    ]),
+    visitSection("followUp", "Follow Up", [
+      {
+        kind: "fields",
+        items: [
+          { label: "Next Visit Date", value: nextVisitDate },
+          { label: "Next Cycle", value: plan ? nextCycle : "" },
+          { label: "Plan", value: savedFollowUp?.plan ?? "" },
+          { label: "New Visit", value: savedFollowUp?.newVisit ?? "" },
+        ],
+      },
+      { kind: "text", label: "Follow-up Notes", value: savedFollowUp?.notes ?? "" },
+    ]),
+  ].filter((section): section is VisitSection => section !== null);
+
+  /* On screen, Vitals sit in the side box, the reports table in its own
+     (editable) Reports section and Follow Up in the footer. */
+  const screenVisitSections = visitSections
+    .filter((section) => section.key !== "vitals" && section.key !== "followUp")
+    .map((section) =>
+      section.key === "previousReports"
+        ? { ...section, blocks: section.blocks.filter((block) => block.kind !== "table") }
+        : section
+    )
+    .filter((section) => section.blocks.length > 0);
+
+  /* "Add To Print": the headings picked for the printout. */
+  const printOptions = visitSections.map((section) => ({ label: section.title, value: section.key }));
+  const chosenPrintSections = visitSections.filter((section) => printSections.includes(section.key));
+
   const handleDownloadSummary = (mode: "download" | "print" = "download") => {
     const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -1297,6 +1724,13 @@ const Summary: React.FC<{
     const GREY: [number, number, number] = [100, 100, 100];
 
     const sheetTitle = protocol || "Chemotherapy Summary";
+    const chemoPrint = Boolean(plan);
+    const visitPrintSections = chosenPrintSections.length > 0
+      ? chosenPrintSections
+      : chemoPrint
+        ? []
+        : visitSections;
+    const visitTitle = "VISIT SUMMARY";
     const firstOrder = visitOrders[0];
     const cycleDay = firstOrder
       ? `${firstOrder.cycle_number}/${firstOrder.cycle_day}`
@@ -1312,6 +1746,7 @@ const Summary: React.FC<{
     /* Patient header. "full" adds intent / cycle / planned date / BSA /
        cancer type / diagnosis date (the first page of a section);
        continuation pages get name, UHID and the date of admission. */
+    let visitPages = false;
     const drawHeader = (title: string, full: boolean) => {
       let y = 50;
       doc.setFont("helvetica", "bold");
@@ -1328,10 +1763,15 @@ const Summary: React.FC<{
             ["Cancer Type", cancerType, "BSA", bsaLabel],
             ["Diagnosis Date", diagnosisDate, "", ""],
           ]
-        : [
-            ["Patient Name", patientLabel, "UHID", resolvedPatientId],
-            ["Date of Admission", doa, "", ""],
-          ];
+        : visitPages
+          ? [
+              ["Patient Name", patientLabel, "UHID", resolvedPatientId],
+              ["Visit Date", doa, "Consulted By", doctorInfo.name],
+            ]
+          : [
+              ["Patient Name", patientLabel, "UHID", resolvedPatientId],
+              ["Date of Admission", doa, "", ""],
+            ];
       doc.setFontSize(10);
       rows.forEach(([leftLabel, leftValue, rightLabel, rightValue]) => {
         doc.setFont("helvetica", "normal");
@@ -1343,6 +1783,20 @@ const Summary: React.FC<{
         if (rightLabel) doc.text(`:  ${rightValue || "-"}`, 430, y);
         y += 18;
       });
+
+      /* Safety line: only when the visit actually recorded allergies. */
+      if (full && summaryAllergies.length > 0) {
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...BLACK);
+        doc.text("Allergies:", marginX, y);
+        doc.setFont("helvetica", "normal");
+        const allergyLines = doc.splitTextToSize(
+          summaryAllergies.join(", "),
+          pageWidth - marginX * 2 - 70
+        ) as string[];
+        doc.text(allergyLines, marginX + 65, y);
+        y += allergyLines.length * 14 + 2;
+      }
       return y + 8;
     };
 
@@ -1414,8 +1868,78 @@ const Summary: React.FC<{
       return y + 12;
     };
 
+    /* ---------- Visit summary: the picked headings with their values ---------- */
+    const drawVisitSections = (sections: VisitSection[], firstPage: boolean) => {
+      if (sections.length === 0) return;
+      visitPages = true;
+      if (!firstPage) doc.addPage();
+      let vy = drawHeader(visitTitle, false);
+      const ensureVisitSpace = (needed: number) => {
+        if (vy + needed > contentBottom) {
+          doc.addPage();
+          vy = drawHeader(visitTitle, false);
+        }
+      };
+      const writeVisitText = (
+        value: string,
+        options: { bold?: boolean; size?: number; color?: [number, number, number]; gap?: number } = {}
+      ) => {
+        const lines = doc.splitTextToSize(value, pageWidth - marginX * 2) as string[];
+        lines.forEach((line) => {
+          ensureVisitSpace(14);
+          doc.setFont("helvetica", options.bold ? "bold" : "normal");
+          doc.setFontSize(options.size ?? 10);
+          doc.setTextColor(...(options.color ?? BLACK));
+          doc.text(line, marginX, vy);
+          vy += 14;
+        });
+        vy += options.gap ?? 4;
+      };
+
+      sections.forEach((visitSectionItem) => {
+        ensureVisitSpace(44);
+        vy = sectionHeading(visitSectionItem.title, vy + 10) + 6;
+        visitSectionItem.blocks.forEach((block) => {
+          if (block.kind === "fields") {
+            const pairs: string[][] = [];
+            for (let index = 0; index < block.items.length; index += 2) {
+              const left = block.items[index];
+              const right = block.items[index + 1];
+              pairs.push([left.label, left.value, right?.label ?? "", right?.value ?? ""]);
+            }
+            ensureVisitSpace(24);
+            autoTable(doc, {
+              theme: "plain",
+              startY: vy,
+              margin: { left: marginX, right: marginX, top: 132, bottom: 110 },
+              styles: { font: "helvetica", fontSize: 9.5, cellPadding: 3, textColor: BLACK, overflow: "linebreak" },
+              columnStyles: {
+                0: { textColor: GREY, cellWidth: 110 },
+                2: { textColor: GREY, cellWidth: 110 },
+              },
+              body: pairs,
+              didDrawPage: (data) => {
+                if (data.pageNumber > 1) drawHeader(visitTitle, false);
+              },
+            });
+            vy = ((doc as any).lastAutoTable?.finalY ?? vy) + 8;
+          } else if (block.kind === "table") {
+            if (block.label) writeVisitText(block.label, { bold: true, size: 9.5, color: GREY, gap: 2 });
+            ensureVisitSpace(40);
+            vy = drawTable(visitTitle, vy, block.head, block.rows) + 10;
+          } else {
+            writeVisitText(block.label, { bold: true, size: 9.5, color: GREY, gap: 0 });
+            writeVisitText(block.kind === "text" ? block.value : block.items.join(", "), { gap: 8 });
+          }
+        });
+      });
+    };
+
+    let consentStartPage = Number.POSITIVE_INFINITY;
+    let y = 0;
+    if (chemoPrint) {
     /* ---------- Section 1: day schedule + dilution ---------- */
-    let y = drawHeader(sheetTitle, true);
+    y = drawHeader(sheetTitle, true);
 
     const ensureSpace = (needed: number) => {
       if (y + needed > contentBottom) {
@@ -1457,99 +1981,126 @@ const Summary: React.FC<{
             !dilution.hydration_stage &&
             dilution.diluent &&
             ((medicineId && dilution.medicine_id === medicineId) ||
-              dilution.medicine_master?.medicine_name === planItemName(item))
+              dilution.medicine_master?.medicine_name === medicineName(item))
         )?.diluent ?? ""
       );
     };
-    const formPrefix = (item: SummaryPlanItem) => {
-      const form = item.formulation || item.medicine_master?.dosage_form || "";
-      return /inj/i.test(form) || !form ? "Inj." : `${form}.`;
-    };
-    const infusionLabel = (item: SummaryPlanItem) => {
-      const minutes = item.infusion_duration_minutes;
-      if (minutes == null) return "";
-      return minutes % 60 === 0
-        ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`
-        : `${minutes} mins`;
-    };
-
     /* Every drug of the day's order except the dilutions (their own table
-       below), in the order of the Chemotherapy Order tabs. */
+       below), grouped by medicine type. */
     const scheduleItems = sortedPlanItems.filter(
       (item) => (item.drug_role ?? "").toUpperCase() !== "DILUTION"
+    );
+    const medicineTypeSections = [
+      { role: "PREMEDICATION", label: "Premedication" },
+      { role: "PRIMARY", label: "Chemotherapy" },
+      { role: "SUPPORTIVE", label: "Supportive" },
+      { role: "POSTMEDICATION", label: "Post-Medication" },
+    ];
+    const scheduleGroups = groupMedicinesByType(
+      scheduleItems,
+      medicineTypeSections
     );
     const hydrationLine = (row: HydrationSummaryRow) =>
       [[row.agent, row.volume, row.diluent].filter(Boolean).join(" "), row.guidance]
         .filter(Boolean)
         .join(" - ");
-    /* A saved dilution volume may already carry its unit ("500 mL"). */
-    const volumeText = (volume: string) =>
-      /[a-z]/i.test(volume) ? volume : `${volume} ml`;
 
-    /* One readable sentence per drug, e.g. "2. Inj. Paclitaxel
-       (Chemotherapy) - protocol dose 175 mg/m², patient dose 297.5 mg,
-       given IV in 500 ml of NS over 3 hours as infusion, once." */
-    const drugSentence = (item: SummaryPlanItem, index: number) => {
-      const role = (item.drug_role ?? "").toUpperCase();
-      const category = DRUG_ROLE_CATEGORY[role] ?? item.drug_role ?? "";
-      const protocolDose = protocolDoseLabel(item);
-      const patientDose = patientDoseLabel(item);
-      const diluent = diluentFor(item);
-      const duration = infusionLabel(item);
-      const doses =
-        role === "PRIMARY"
-          ? [
-              protocolDose ? `protocol dose ${protocolDose}` : "",
-              patientDose ? `patient dose ${patientDose}` : "",
-            ]
-          : [protocolDose ? `dose ${protocolDose}` : ""];
-      const administration = [
-        item.administration_route ? `given ${item.administration_route}` : "",
-        item.dilution_volume
-          ? `in ${volumeText(item.dilution_volume)}${diluent ? ` of ${diluent}` : ""}`
-          : diluent
-            ? `in ${diluent}`
-            : "",
-        duration ? `over ${duration}` : "",
-        item.infusion_type ? `as ${item.infusion_type}` : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const details = [
-        ...doses,
-        administration,
-        item.frequency ?? "",
-        item.timing_relative_to_primary ?? "",
-      ]
-        .filter(Boolean)
-        .join(", ");
-      return sentence(
-        `${index + 1}. ${formPrefix(item)} ${planItemName(item)}${
-          category ? ` (${category})` : ""
-        }${details ? ` - ${details}` : ""}`
-      );
+    const entryIndent = 18;
+    /* Split with the same font the entry is drawn in, so the line breaks
+       match what the reader sees. */
+    const splitEntry = (text: string) => {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10.5);
+      return doc.splitTextToSize(
+        text,
+        pageWidth - marginX * 2 - entryIndent
+      ) as string[];
     };
 
-    hydrationRows
-      .filter((row) => row.stage === "PRE")
-      .forEach((row) => writeLines(hydrationLine(row)));
+    /* A medicine type sub-heading: bold label with a thin rule under it. */
+    const subHeading = (label: string, firstItemLines = 1) => {
+      ensureSpace(16 + Math.max(1, firstItemLines) * 15);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10.5);
+      doc.setTextColor(...BLACK);
+      doc.text(label, marginX, y);
+      doc.setDrawColor(220, 220, 220);
+      doc.setLineWidth(0.5);
+      doc.line(marginX, y + 4.5, pageWidth - marginX, y + 4.5);
+      y += 16;
+    };
 
-    scheduleItems.forEach((item, index) => {
-      const notes = [
-        item.administration_detail ? `Administration: ${sentence(item.administration_detail)}` : "",
-        item.remarks ? `Remarks: ${sentence(item.remarks)}` : "",
-      ].filter(Boolean);
-      writeLines(drugSentence(item, index), false, notes.length > 0 ? 0 : 8);
-      notes.forEach((note, noteIndex) =>
-        writeLines(note, false, noteIndex === notes.length - 1 ? 8 : 0, 16)
+    /* Space a type sub-heading away from the entry above it. */
+    let renderedGroup = false;
+    const startGroup = (label: string, firstItemLines = 1) => {
+      if (renderedGroup) y += 8;
+      subHeading(label, firstItemLines);
+      renderedGroup = true;
+    };
+
+    /* A numbered/bulleted entry. If it starts a fresh page, repeat the
+       type sub-heading so the reader never loses the category. */
+    const writeEntry = (
+      marker: string,
+      text: string,
+      groupLabel?: string,
+      gapAfter = 8
+    ) => {
+      const lines = splitEntry(text);
+      const pageBefore = doc.getNumberOfPages();
+      ensureSpace(lines.length * 15);
+      if (doc.getNumberOfPages() > pageBefore && groupLabel) {
+        subHeading(`${groupLabel} (continued)`, lines.length);
+      }
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10.5);
+      doc.setTextColor(...BLACK);
+      doc.text(marker, marginX, y);
+      doc.text(lines, marginX + entryIndent, y);
+      y += lines.length * 15 + gapAfter;
+    };
+
+    const writeHydration = (stage: "PRE" | "POST") => {
+      const texts = hydrationRows
+        .filter((row) => row.stage === stage)
+        .map(hydrationLine)
+        .filter(Boolean);
+      if (texts.length === 0) return;
+      startGroup(
+        stage === "PRE" ? "Pre-Hydration" : "Post-Hydration",
+        splitEntry(sentence(texts[0])).length
       );
+      texts.forEach((text) => {
+        writeEntry("-", sentence(text), undefined, 6);
+      });
+    };
+
+    let medicineNumber = 0;
+    writeHydration("PRE");
+
+    scheduleGroups.forEach((group) => {
+      const entries = group.items
+        .map((item) => ({
+          item,
+          text: buildMedicineSentence(item, { diluent: diluentFor(item) }),
+        }))
+        .filter((entry) => entry.text);
+      if (entries.length === 0) return;
+
+      startGroup(group.label, splitEntry(sentence(entries[0].text)).length);
+
+      entries.forEach(({ item, text }) => {
+        medicineNumber += 1;
+        writeEntry(`${medicineNumber}.`, sentence(text), group.label);
+        if (item.remarks) {
+          writeEntry("", `Note: ${sentence(item.remarks)}`, group.label);
+        }
+      });
     });
 
-    hydrationRows
-      .filter((row) => row.stage === "POST")
-      .forEach((row) => writeLines(hydrationLine(row)));
+    writeHydration("POST");
 
-    if (scheduleItems.length === 0) {
+    if (medicineNumber === 0) {
       writeLines("No chemotherapy ordered for this visit.");
     }
 
@@ -1557,7 +2108,7 @@ const Summary: React.FC<{
     if (dilutionRows.length > 0) {
       y += 14;
       ensureSpace(60);
-      y = sectionHeading("Dilution", y);
+      subHeading("Dilution");
       y = drawTable(
         sheetTitle,
         y,
@@ -1620,21 +2171,18 @@ const Summary: React.FC<{
       (item) => (item.drug_role ?? "").toUpperCase() === "POSTMEDICATION"
     );
     const postLines = [
-      ...postMeds.map((item, index) =>
-        [
-          `${index + 1}. ${planItemName(item)}`,
-          item.protocol_dose != null
-            ? `${item.protocol_dose} ${item.protocol_dose_unit ?? ""}`.trim()
-            : "",
-          item.frequency ? `- ${item.frequency}` : "",
-          item.administration_detail ? `(${item.administration_detail})` : "",
-        ]
-          .filter(Boolean)
-          .join(" ")
+      ...postMeds.map(
+        (item, index) =>
+          `${index + 1}. ${sentence(
+            buildMedicineSentence(item, { diluent: diluentFor(item) })
+          )}`
       ),
       nextVisitDate || nextCycle
         ? `Next visit: ${[nextVisitDate, nextCycle].filter(Boolean).join(" - ")}`
         : "",
+      savedFollowUp?.plan ? `Plan: ${savedFollowUp.plan}` : "",
+      savedFollowUp?.newVisit ? `New visit: ${savedFollowUp.newVisit}` : "",
+      savedFollowUp?.notes ? `Follow-up notes: ${savedFollowUp.notes.replace(/\s*\n\s*/g, " ")}` : "",
     ].filter(Boolean);
     if (postLines.length > 0) {
       y += 30;
@@ -1669,25 +2217,40 @@ const Summary: React.FC<{
     y = drawTable(
       slipTitle,
       y,
-      ["Sr.", "Drug Name", "Brand Name", "Dosage", "Quantity", "Type"],
+      [
+        "Sr.",
+        "Drug Name",
+        "Drug Form",
+        "Patient Dosage",
+        "Brand Name",
+        "Dosage",
+        "Quantity",
+        "Type",
+      ],
       pharmacySlipRows.length > 0
         ? pharmacySlipRows.map((row, index) => [
             String(index + 1),
             row.drug,
+            row.form,
+            row.patientDose,
             row.brand,
             row.dosage,
             row.quantity,
             row.type,
           ])
-        : [["", "No medicines ordered for this visit", "", "", "", ""]],
+        : [["", "No medicines ordered for this visit", "", "", "", "", "", ""]],
       { 0: { cellWidth: 32 } },
       /* No slip yet: only the order's names and types, other cells blank. */
       slipItems.length > 0 ? "-" : ""
     );
 
+    /* ---------- The headings picked in "Add To Print" ---------- */
+    drawVisitSections(visitPrintSections, false);
+    visitPages = false;
+
     /* ---------- Last page: chemotherapy consent ---------- */
     doc.addPage();
-    const consentStartPage = doc.getNumberOfPages();
+    consentStartPage = doc.getNumberOfPages();
     const consentTitle = "CONSENT FOR CHEMOTHERAPY TREATMENT";
     const drawConsentTitle = () => {
       doc.setFont("helvetica", "bold");
@@ -1805,6 +2368,19 @@ const Summary: React.FC<{
     });
     y += blockHeight;
 
+    } else {
+      /* No chemotherapy plan: the visit summary on its own. */
+      drawVisitSections(visitPrintSections, true);
+      if (visitPrintSections.length === 0) {
+        visitPages = true;
+        y = drawHeader(visitTitle, false);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10.5);
+        doc.setTextColor(...BLACK);
+        doc.text("No consultation details have been saved for this visit yet.", marginX, y + 10);
+      }
+    }
+
     /* Footer on every page: doctor's signature (not on the consent, which
        has its own blocks), contact strip + page x / n. */
     const pageCount = doc.getNumberOfPages();
@@ -1831,7 +2407,18 @@ const Summary: React.FC<{
       // Open the same PDF in a new tab with the print dialog triggered.
       doc.autoPrint();
       const printUrl = URL.createObjectURL(doc.output("blob"));
-      window.open(printUrl, "_blank");
+      const printWindow = window.open(printUrl, "_blank");
+      if (!printWindow) {
+        /* Popup blocked - download instead so the printout is not lost. */
+        const link = document.createElement("a");
+        link.href = printUrl;
+        link.download = `${chemoPrint ? "chemotherapy" : "visit"}-summary-${
+          resolvedPatientId || "patient"
+        }.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
       setTimeout(() => URL.revokeObjectURL(printUrl), 60_000);
       return;
     }
@@ -1840,7 +2427,7 @@ const Summary: React.FC<{
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `chemotherapy-summary-${resolvedPatientId || "patient"}.pdf`;
+    link.download = `${chemoPrint ? "chemotherapy" : "visit"}-summary-${resolvedPatientId || "patient"}.pdf`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -1870,7 +2457,10 @@ const Summary: React.FC<{
       const medicineId =
         item.medicine_id ?? item.medicine_master?.medicine_id ?? "";
       const drugName = medicineId ? "" : (item.drug_name ?? "").trim();
-      const drugKey = medicineId || `name:${drugName.toLowerCase()}`;
+      const role = (item.drug_role ?? "").toUpperCase();
+      /* The same drug may be planned under two roles on one day (e.g. as a
+         pre-medication and as supportive care), so dedupe on drug + role. */
+      const drugKey = `${medicineId || `name:${drugName.toLowerCase()}`}|${role}`;
       if ((!medicineId && !drugName) || seenDrugs.has(drugKey)) continue;
       seenDrugs.add(drugKey);
 
@@ -1899,6 +2489,17 @@ const Summary: React.FC<{
         ...(medicineId ? { medicine_id: medicineId } : { drug_name: drugName }),
         ...(item.drug_role ? { drug_role: item.drug_role } : {}),
         ...(item.drug_type ? { drug_type: item.drug_type } : {}),
+        ...(order
+          ? {
+              chemotherapy_plan_id: order.chemotherapy_plan_id,
+              plan_order_id: order.plan_order_id,
+              cycle_number: order.cycle_number,
+              cycle_day: order.cycle_day,
+            }
+          : {}),
+        ...(item.chemotherapy_plan_item_id
+          ? { plan_item_id: item.chemotherapy_plan_item_id }
+          : {}),
         ...(hasPatientDose
           ? { dosage: String(Number(item.calculated_dose)) }
           : item.protocol_dose != null
@@ -2117,6 +2718,43 @@ const Summary: React.FC<{
         return;
       }
 
+      /* No chemotherapy plan (review / new visit): the Advice prescription
+         was saved in the Consultation, so submitting completes the visit -
+         its encounter closes and the appointment becomes Completed. An
+         inpatient's admission encounter stays open (discharge closes it). */
+      if (!plan) {
+        const isInpatient = String(visitEncounter?.encounter_type ?? "").toUpperCase() === "IPD";
+
+        /* The Advice step saved the visit's prescription as DRAFT; submitting
+           the summary locks it (best-effort - the visit still completes). */
+        try {
+          const advice = await findAdvicePrescription(
+            targetEncounterNo,
+            appointmentId || visitEncounter?.appointment_id
+          );
+          if (advice?.prescription_id && advice.prescription_status === "DRAFT") {
+            await API.put(
+              `/prescriptions/${encodeURIComponent(advice.prescription_id)}`,
+              { status: "FINALIZED" }
+            );
+          }
+        } catch (finalizeError) {
+          console.error("Failed to finalize the Advice prescription:", finalizeError);
+        }
+
+        if (!isInpatient && String(visitEncounter?.status ?? "").toUpperCase() !== "CLOSED") {
+          await encounterApi.close(targetEncounterNo, "DOCTOR");
+        }
+        localStorage.removeItem(`hms_diagnosis_form_${resolvedPatientId}`);
+        setSummarySubmitted(true);
+        setSummarySubmitMessage(
+          isInpatient
+            ? "Visit summary submitted."
+            : "Visit summary submitted - the visit is completed."
+        );
+        return;
+      }
+
       const medicines = buildPrescriptionMedicines();
 
       if (medicines.length === 0) {
@@ -2131,6 +2769,13 @@ const Summary: React.FC<{
       await API.post("/prescriptions", {
         encounter_no: targetEncounterNo,
         ...(plan?.diagnosis_id ? { diagnosis_id: plan.diagnosis_id } : {}),
+        /* A separate prescription from the Advice one: the same visit can
+           carry both. finalize_encounter also locks the Advice prescription,
+           so one Submit leaves every prescription of the visit finalized and
+           re-submitting is a safe no-op. */
+        prescription_type: "CHEMOTHERAPY",
+        finalize: true,
+        finalize_encounter: true,
         medicines,
       });
 
@@ -2247,14 +2892,17 @@ const Summary: React.FC<{
             )}
             {!planLoading && !planError && !plan && (
               <div className="mb-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-                No chemotherapy plan found for this patient yet.
+                No chemotherapy plan for this patient - this summary shows the visit's consultation,
+                diagnosis, investigations and advice.
               </div>
             )}
             <div className="flex flex-col gap-10 lg:flex-row">
               <div className="flex flex-1 flex-col gap-6">
+                {plan ? (
+                <>
                 <div className="grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
                   <div>
-                    <p className="mb-2 font-medium text-slate-900">
+                    <p className="mb-2 text-[10px] font-medium text-slate-900">
                       Cancer Type
                     </p>
                     <p className="text-xs text-slate-500">
@@ -2263,7 +2911,7 @@ const Summary: React.FC<{
                   </div>
 
                   <div>
-                    <p className="mb-2 font-medium text-slate-900">
+                    <p className="mb-2 text-[10px] font-medium text-slate-900">
                       Stage
                     </p>
 
@@ -2274,7 +2922,7 @@ const Summary: React.FC<{
                   </div>
 
                   <div>
-                    <p className="mb-2 font-medium text-slate-900">
+                    <p className="mb-2 text-[10px] font-medium text-slate-900">
                       Context
                     </p>
 
@@ -2284,7 +2932,7 @@ const Summary: React.FC<{
 
                 <div className="grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
                   <div>
-                    <p className="mb-2 font-medium text-slate-900">
+                    <p className="mb-2 text-[10px] font-medium text-slate-900">
                       Protocol
                     </p>
 
@@ -2295,7 +2943,7 @@ const Summary: React.FC<{
                   </div>
 
                   <div>
-                    <p className="mb-2 font-medium text-slate-900">
+                    <p className="mb-2 text-[10px] font-medium text-slate-900">
                       Duration
                     </p>
 
@@ -2305,7 +2953,7 @@ const Summary: React.FC<{
                   </div>
 
                   <div>
-                    <p className="mb-2 font-medium text-slate-900">
+                    <p className="mb-2 text-[10px] font-medium text-slate-900">
                       Current
                     </p>
 
@@ -2317,7 +2965,7 @@ const Summary: React.FC<{
 
                 <div className="grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
                   <div>
-                    <p className="mb-2 font-medium text-slate-900">
+                    <p className="mb-2 text-[10px] font-medium text-slate-900">
                       Diagnosis Date
                     </p>
 
@@ -2327,7 +2975,7 @@ const Summary: React.FC<{
                   </div>
 
                   <div>
-                    <p className="mb-2 font-medium text-slate-900">
+                    <p className="mb-2 text-[10px] font-medium text-slate-900">
                       Planned Date (Cycle / Day)
                     </p>
 
@@ -2337,7 +2985,7 @@ const Summary: React.FC<{
                   </div>
 
                   <div>
-                    <p className="mb-2 font-medium text-slate-900">
+                    <p className="mb-2 text-[10px] font-medium text-slate-900">
                       Date of Admission
                     </p>
 
@@ -2347,78 +2995,26 @@ const Summary: React.FC<{
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
-                  <div>
-                    <p className="mb-2 font-medium text-slate-900">
-                      Allergies
-                    </p>
-
-                    <p className="text-xs text-slate-500">
-                      {summaryAllergies.length > 0
-                        ? summaryAllergies.join(", ")
-                        : "No allergies recorded"}
-                    </p>
+                </>
+                ) : (
+                  <div className="grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
+                    {[
+                      ["Visit Date", admissionDate || "Not recorded"],
+                      ["Encounter No", visitEncounterNo || "Not recorded"],
+                      ["Diagnosis", visitDiagnosisName || "Not recorded"],
+                    ].map(([label, value]) => (
+                      <div key={label}>
+                        <p className="mb-2 text-[10px] font-medium text-slate-900">{label}</p>
+                        <p className="text-xs text-slate-500">{value}</p>
+                      </div>
+                    ))}
                   </div>
-
-                  <div>
-                    <p className="mb-2 font-medium text-slate-900">
-                      Symptoms
-                    </p>
-
-                    <p className="text-xs text-slate-500">
-                      {summarySymptoms.length > 0
-                        ? summarySymptoms.join(", ")
-                        : "No symptoms recorded"}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="mb-2 font-medium text-slate-900">
-                      Reason for Visit
-                    </p>
-
-                    <p className="text-xs text-slate-500">
-                      {summaryReasonForVisit || "No reason recorded"}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
-                  <div>
-                    <p className="mb-2 font-medium text-slate-900">
-                      Discussion
-                    </p>
-
-                    <p className="text-xs text-slate-500">
-                      {summaryDiscussion || "No discussion recorded"}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="mb-2 font-medium text-slate-900">
-                      HOPI
-                    </p>
-
-                    <p className="text-xs text-slate-500">
-                      {summaryHopi || "No HOPI recorded"}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="mb-2 font-medium text-slate-900">
-                      Clinical findings
-                    </p>
-
-                    <p className="text-xs text-slate-500">
-                      {summaryClinicalFindings || "No clinical findings recorded"}
-                    </p>
-                  </div>
-                </div>
+                )}
               </div>
 
               {/* Vitals box - same vitals as shown in the patient header */}
               <aside className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 p-5 lg:w-72">
-                <p className="mb-3 text-xs font-semibold text-slate-900">
+                <p className="mb-3 text-[10px] font-semibold text-slate-900">
                   Vitals
                 </p>
 
@@ -2452,164 +3048,15 @@ const Summary: React.FC<{
           <InpatientDischargeHistory patientId={patientId ?? ""} />
 
           {/* =================================================
-              GENERAL EXAMINATION
+              CONSULTATION - every heading recorded for the visit
           ================================================== */}
-          <section>
-            <h3 className="mb-4 text-xs font-medium text-indigo-900">
-              General Examination
-            </h3>
-
-            <div className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 lg:grid-cols-3">
-              <div>
-                <p className="mb-2 font-medium text-slate-900">CNS</p>
-                <p className="text-xs text-slate-500">
-                  {summaryCns || "Not recorded"}
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-2 font-medium text-slate-900">CVS</p>
-                <p className="text-xs text-slate-500">
-                  {summaryCvs || "Not recorded"}
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-2 font-medium text-slate-900">Respiratory</p>
-                <p className="text-xs text-slate-500">
-                  {summaryRespiratory || "Not recorded"}
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-2 font-medium text-slate-900">Per Abdomen</p>
-                <p className="text-xs text-slate-500">
-                  {summaryPerAbdomen || "Not recorded"}
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-2 font-medium text-slate-900">
-                  General Examination Findings
-                </p>
-                <p className="text-xs text-slate-500">
-                  {summaryGenExam.length > 0
-                    ? summaryGenExam.join(", ")
-                    : "No positive findings"}
-                </p>
-              </div>
+          {screenVisitSections.length === 0 ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+              No consultation details have been saved for this visit yet - save the Consultation step
+              (Proceed to Next) to see them here.
             </div>
-          </section>
-
-          {/* =================================================
-              PERSONAL HISTORY
-          ================================================== */}
-          <section>
-            <h3 className="mb-4 text-xs font-medium text-indigo-900">
-              Personal History
-            </h3>
-
-            <div className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 lg:grid-cols-3">
-              <div>
-                <p className="mb-2 font-medium text-slate-900">Immunization</p>
-                <p className="text-xs text-slate-500">
-                  {summaryImmunization.length > 0
-                    ? summaryImmunization
-                        .map((item) => item.others || item.name)
-                        .join(", ")
-                    : "Not recorded"}
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-2 font-medium text-slate-900">
-                  Drug Consumption
-                </p>
-                <p className="text-xs text-slate-500">
-                  {summaryDrugConsumption.length > 0
-                    ? summaryDrugConsumption
-                        .map((item) => item.others || item.name)
-                        .join(", ")
-                    : "Not recorded"}
-                </p>
-              </div>
-
-              <div>
-                <p className="mb-2 font-medium text-slate-900">Diet Type</p>
-                <p className="text-xs text-slate-500">
-                  {summaryDietType || "Not recorded"}
-                </p>
-              </div>
-            </div>
-          </section>
-
-          {/* =================================================
-              PAST HISTORY TREATMENT + PREVIOUS REPORTS
-          ================================================== */}
-          {(summaryPastTreatments.length > 0 || summaryPreviousReports) && (
-            <section>
-              {summaryPastTreatments.length > 0 && (
-                <>
-                  <h3 className="mb-4 text-xs font-medium text-indigo-900">
-                    Past History Treatment
-                  </h3>
-
-                  {summaryPastTreatments.map((treatment) => (
-                    <div
-                      key={treatment.encounter_past_treatment_id}
-                      className="mb-6 grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 lg:grid-cols-3"
-                    >
-                      <div>
-                        <p className="mb-2 font-medium text-slate-900">
-                          Treatment Type
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {treatment.treatment_type || "Not recorded"}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="mb-2 font-medium text-slate-900">Date</p>
-                        <p className="text-xs text-slate-500">
-                          {treatment.treatment_date
-                            ? treatment.treatment_date.slice(0, 10)
-                            : "Not recorded"}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="mb-2 font-medium text-slate-900">
-                          Brief Note
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {treatment.note || "Not recorded"}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="mb-2 font-medium text-slate-900">
-                          Treatment Response
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {treatment.treatment_response || "Not recorded"}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              )}
-
-              {summaryPreviousReports && (
-                <>
-                  <h3 className="mb-4 text-xs font-medium text-indigo-900">
-                    Previous Reports
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    {summaryPreviousReports}
-                  </p>
-                </>
-              )}
-            </section>
+          ) : (
+            screenVisitSections.map((section) => <VisitSectionView key={section.key} section={section} />)
           )}
 
           {/* =================================================
@@ -2632,16 +3079,16 @@ const Summary: React.FC<{
               <table className="w-full min-w-[650px] text-left text-xs">
                 <thead>
                   <tr>
-                    <th className="w-1/4 pb-3 font-medium text-slate-900">
+                    <th className="w-1/4 pb-3 text-[10px] font-medium text-slate-900">
                       Lab Test
                     </th>
-                    <th className="w-1/6 pb-3 font-medium text-slate-900">
+                    <th className="w-1/6 pb-3 text-[10px] font-medium text-slate-900">
                       Date
                     </th>
-                    <th className="w-1/5 pb-3 font-medium text-slate-900">
+                    <th className="w-1/5 pb-3 text-[10px] font-medium text-slate-900">
                       Result
                     </th>
-                    <th className="w-1/4 pb-3 font-medium text-slate-900">
+                    <th className="w-1/4 pb-3 text-[10px] font-medium text-slate-900">
                       Impression
                     </th>
                   </tr>
@@ -2676,6 +3123,8 @@ const Summary: React.FC<{
             </div>
           </section>
 
+          {plan && (
+          <>
           {/* =================================================
               CHEMOTHERAPY ORDERS
           ================================================== */}
@@ -2688,23 +3137,23 @@ const Summary: React.FC<{
               <table className="w-full min-w-[650px] text-left text-xs">
                 <thead>
                   <tr>
-                    <th className="w-1/4 pb-3 font-medium text-slate-900">
+                    <th className="w-1/4 pb-3 text-[10px] font-medium text-slate-900">
                       Drug Name
                     </th>
 
-                    <th className="w-1/5 pb-3 font-medium text-slate-900">
+                    <th className="w-1/5 pb-3 text-[10px] font-medium text-slate-900">
                       Form
                     </th>
 
-                    <th className="w-1/5 pb-3 font-medium text-slate-900">
+                    <th className="w-1/5 pb-3 text-[10px] font-medium text-slate-900">
                       Dose
                     </th>
 
-                    <th className="w-1/6 pb-3 font-medium text-slate-900">
+                    <th className="w-1/6 pb-3 text-[10px] font-medium text-slate-900">
                       Unit
                     </th>
 
-                    <th className="pb-3 font-medium text-slate-900">
+                    <th className="pb-3 text-[10px] font-medium text-slate-900">
                       Patient Dose
                     </th>
                   </tr>
@@ -2751,12 +3200,12 @@ const Summary: React.FC<{
                 <table className="w-full min-w-[760px] text-left text-xs">
                   <thead>
                     <tr>
-                      <th className="w-1/5 pb-3 font-medium text-slate-900">Drug Name</th>
-                      <th className="pb-3 font-medium text-slate-900">Form</th>
-                      <th className="pb-3 font-medium text-slate-900">Dose</th>
-                      <th className="pb-3 font-medium text-slate-900">Diluent</th>
-                      <th className="pb-3 font-medium text-slate-900">Dilution Volume</th>
-                      <th className="w-1/4 pb-3 font-medium text-slate-900">Guidance</th>
+                      <th className="w-1/5 pb-3 text-[10px] font-medium text-slate-900">Drug Name</th>
+                      <th className="pb-3 text-[10px] font-medium text-slate-900">Form</th>
+                      <th className="pb-3 text-[10px] font-medium text-slate-900">Dose</th>
+                      <th className="pb-3 text-[10px] font-medium text-slate-900">Diluent</th>
+                      <th className="pb-3 text-[10px] font-medium text-slate-900">Dilution Volume</th>
+                      <th className="w-1/4 pb-3 text-[10px] font-medium text-slate-900">Guidance</th>
                     </tr>
                   </thead>
 
@@ -2794,19 +3243,19 @@ const Summary: React.FC<{
               <table className="w-full min-w-[600px] text-left text-xs">
                 <thead>
                   <tr>
-                    <th className="w-1/4 pb-3 font-medium text-slate-900">
+                    <th className="w-1/4 pb-3 text-[10px] font-medium text-slate-900">
                       Drug Name
                     </th>
 
-                    <th className="w-1/5 pb-3 font-medium text-slate-900">
+                    <th className="w-1/5 pb-3 text-[10px] font-medium text-slate-900">
                       Dose
                     </th>
 
-                    <th className="w-1/5 pb-3 font-medium text-slate-900">
+                    <th className="w-1/5 pb-3 text-[10px] font-medium text-slate-900">
                       Route
                     </th>
 
-                    <th className="pb-3 font-medium text-slate-900">
+                    <th className="pb-3 text-[10px] font-medium text-slate-900">
                       Time
                     </th>
                   </tr>
@@ -2848,11 +3297,11 @@ const Summary: React.FC<{
                 <table className="w-full min-w-[700px] text-left text-xs">
                   <thead>
                     <tr>
-                      <th className="w-24 pb-3 font-medium text-slate-900">Stage</th>
-                      <th className="w-1/5 pb-3 font-medium text-slate-900">Agent</th>
-                      <th className="w-1/5 pb-3 font-medium text-slate-900">Diluent</th>
-                      <th className="w-1/6 pb-3 font-medium text-slate-900">Volume</th>
-                      <th className="pb-3 font-medium text-slate-900">Guidance</th>
+                      <th className="w-24 pb-3 text-[10px] font-medium text-slate-900">Stage</th>
+                      <th className="w-1/5 pb-3 text-[10px] font-medium text-slate-900">Agent</th>
+                      <th className="w-1/5 pb-3 text-[10px] font-medium text-slate-900">Diluent</th>
+                      <th className="w-1/6 pb-3 text-[10px] font-medium text-slate-900">Volume</th>
+                      <th className="pb-3 text-[10px] font-medium text-slate-900">Guidance</th>
                     </tr>
                   </thead>
 
@@ -2911,13 +3360,13 @@ const Summary: React.FC<{
                 <table className="w-full min-w-[960px] text-left text-xs">
                   <thead>
                     <tr>
-                      <th className="w-1/6 pb-3 font-medium text-slate-900">Drug Name</th>
-                      <th className="pb-3 font-medium text-slate-900">Route</th>
-                      <th className="pb-3 font-medium text-slate-900">Infusion</th>
-                      <th className="pb-3 font-medium text-slate-900">Frequency</th>
-                      <th className="pb-3 font-medium text-slate-900">Timing</th>
-                      <th className="w-1/5 pb-3 font-medium text-slate-900">Admin Detail</th>
-                      <th className="w-1/6 pb-3 font-medium text-slate-900">Remarks</th>
+                      <th className="w-1/6 pb-3 text-[10px] font-medium text-slate-900">Drug Name</th>
+                      <th className="pb-3 text-[10px] font-medium text-slate-900">Route</th>
+                      <th className="pb-3 text-[10px] font-medium text-slate-900">Infusion</th>
+                      <th className="pb-3 text-[10px] font-medium text-slate-900">Frequency</th>
+                      <th className="pb-3 text-[10px] font-medium text-slate-900">Timing</th>
+                      <th className="w-1/5 pb-3 text-[10px] font-medium text-slate-900">Admin Detail</th>
+                      <th className="w-1/6 pb-3 text-[10px] font-medium text-slate-900">Remarks</th>
                     </tr>
                   </thead>
 
@@ -2964,7 +3413,7 @@ const Summary: React.FC<{
 
             <div className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2">
               <div>
-                <p className="mb-2 font-medium text-slate-900">
+                <p className="mb-2 text-[10px] font-medium text-slate-900">
                   Post Chemo Instructions
                 </p>
                 <p className="whitespace-pre-line text-xs text-slate-500">
@@ -2973,7 +3422,7 @@ const Summary: React.FC<{
               </div>
 
               <div>
-                <p className="mb-2 font-medium text-slate-900">
+                <p className="mb-2 text-[10px] font-medium text-slate-900">
                   Additional Notes
                 </p>
                 <p className="whitespace-pre-line text-xs text-slate-500">
@@ -3013,23 +3462,23 @@ const Summary: React.FC<{
               <table className="w-full min-w-[700px] text-left text-xs">
                 <thead>
                   <tr>
-                    <th className="w-1/5 pb-3 font-medium text-slate-900">
+                    <th className="w-1/5 pb-3 text-[10px] font-medium text-slate-900">
                       Drug Name
                     </th>
 
-                    <th className="w-1/6 pb-3 font-medium text-slate-900">
+                    <th className="w-1/6 pb-3 text-[10px] font-medium text-slate-900">
                       Dose
                     </th>
 
-                    <th className="w-1/6 pb-3 font-medium text-slate-900">
+                    <th className="w-1/6 pb-3 text-[10px] font-medium text-slate-900">
                       Frequency
                     </th>
 
-                    <th className="w-1/4 pb-3 font-medium text-slate-900">
+                    <th className="w-1/4 pb-3 text-[10px] font-medium text-slate-900">
                       Instruction
                     </th>
 
-                    <th className="pb-3 font-medium text-slate-900">
+                    <th className="pb-3 text-[10px] font-medium text-slate-900">
                       Duration
                     </th>
                   </tr>
@@ -3050,27 +3499,50 @@ const Summary: React.FC<{
             </div>
           </section>
 
+          </>
+          )}
+
           {/* =================================================
               FOOTER DATES
           ================================================== */}
-          <section className="grid grid-cols-1 gap-6 border-t border-slate-100 pt-6 sm:grid-cols-2">
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-900">
-                Next Visit Date
-              </p>
+          <section className="border-t border-slate-100 pt-6">
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-900">
+                  Next Visit Date
+                </p>
+                <p className="text-slate-600">{nextVisitDate || "—"}</p>
+              </div>
 
-              <p className="text-slate-600">{nextVisitDate}</p>
+              <div>
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-900">
+                  Next Cycle
+                </p>
+                <p className="text-slate-600">{nextCycle || "—"}</p>
+              </div>
+
+              <div>
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-900">
+                  Plan
+                </p>
+                <p className="text-slate-600">{savedFollowUp?.plan || "—"}</p>
+              </div>
+
+              {savedFollowUp?.newVisit && (
+                <div>
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-900">
+                    New Visit
+                  </p>
+                  <p className="text-slate-600">{savedFollowUp.newVisit}</p>
+                </div>
+              )}
             </div>
 
-            <div className="sm:pl-8">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-900">
-                Next Cycle
+            <div className="mt-6">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-900">
+                Follow-up Notes
               </p>
-
-              <p className="flex items-center gap-2 text-slate-600">
-                {nextCycle}
-                <span className="text-slate-400"></span>
-              </p>
+              <p className="whitespace-pre-line text-slate-600">{savedFollowUp?.notes || "—"}</p>
             </div>
           </section>
         </div>
@@ -3088,14 +3560,41 @@ const Summary: React.FC<{
           {summarySubmitMessage}
         </div>
       )}
-      <div className="mb-8 flex flex-wrap items-center gap-4">
-        <button
-          type="button"
-          onClick={() => handleDownloadSummary("print")}
-          className="mr-auto rounded-md border border-[#5624D0] bg-white px-8 py-3 font-medium text-[#5624D0] shadow-sm transition-colors hover:bg-[#5624D0]/5"
-        >
-          Print
-        </button>
+      <div className="mb-8 flex flex-wrap items-end gap-4">
+        <div className="mr-auto flex flex-wrap items-end gap-3">
+          <button
+            type="button"
+            onClick={() => handleDownloadSummary("print")}
+            className="flex h-9 w-[213px] items-center justify-center gap-2 rounded-lg border-0 bg-blue-700 px-[25px] py-[9px] text-[10px] font-bold leading-5 text-white transition-colors hover:bg-blue-800"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-6 w-6"
+            >
+              <path d="M6 9V2h12v7" />
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+              <rect x="6" y="14" width="12" height="8" />
+            </svg>
+            <span>Print Summary</span>
+          </button>
+
+          {/* Add To Print: the headings to include in the printout. */}
+          <div className="w-full sm:w-[320px]">
+            <label className="mb-1 block text-[10px] font-semibold text-slate-700">Add To Print</label>
+            <MultiSelectDropdown
+              options={printOptions}
+              value={printSections.filter((key) => printOptions.some((option) => option.value === key))}
+              onValueChange={setPrintSections}
+              placeholder={printOptions.length > 0 ? "Select headings to print" : "No headings recorded yet"}
+              disabled={printOptions.length === 0}
+            />
+          </div>
+        </div>
 
         <button
           type="button"
@@ -3159,7 +3658,7 @@ const Summary: React.FC<{
             </div>
 
             <div>
-              <p className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
+              <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-400">
                 Phone
               </p>
 
@@ -3176,7 +3675,7 @@ const Summary: React.FC<{
             </div>
 
             <div>
-              <p className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
+              <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-400">
                 Email
               </p>
 
@@ -3190,28 +3689,28 @@ const Summary: React.FC<{
         {/* Vitals */}
         <div className="mb-6 grid grid-cols-2 gap-x-4 gap-y-6 p-6">
           <div>
-            <p className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
+            <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-400">
               Height
             </p>
             <p className="text-xs font-semibold text-slate-800">{measurements.height}</p>
           </div>
 
           <div>
-            <p className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
+            <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-400">
               Weight
             </p>
             <p className="text-xs font-semibold text-slate-800">{measurements.weight}</p>
           </div>
 
           <div>
-            <p className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
+            <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-400">
               BSA
             </p>
             <p className="text-xs font-semibold text-slate-800">{measurements.bsa}</p>
           </div>
 
           <div>
-            <p className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
+            <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-400">
               BMI
             </p>
             <p className="text-xs font-semibold text-slate-800">{measurements.bmi}</p>

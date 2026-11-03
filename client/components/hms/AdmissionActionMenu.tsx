@@ -26,6 +26,10 @@ interface AdmissionActionMenuProps {
   /** Assign / change the doctor of an admitted patient. */
   onAssignDoctor?: () => void;
   hasDoctor?: boolean;
+  /** Assign / hand over the duty doctor and nurse of an admitted patient. */
+  onAllocateCareTeam?: () => void;
+  /** Nurse on duty for this patient, shown as a hint in the vitals entry. */
+  dutyNurseName?: string;
   patientId?: string;
   encounterNo?: string | null;
   /** Fired after the vitals popover saved successfully so parents can refresh. */
@@ -48,6 +52,8 @@ export function AdmissionActionMenu({
   hasReservation = false,
   onAssignDoctor,
   hasDoctor = true,
+  onAllocateCareTeam,
+  dutyNurseName,
   patientId,
   encounterNo,
   onVitalsSaved,
@@ -178,6 +184,15 @@ export function AdmissionActionMenu({
             </DropdownMenuItem>
           )}
 
+          {isAdmitted && can("admission.care_team") && onAllocateCareTeam && (
+            <DropdownMenuItem
+              onSelect={() => onAllocateCareTeam()}
+              className="flex w-full cursor-pointer px-3 py-2 text-xs font-semibold text-left text-[#374151] focus:bg-[#F2F4F6]"
+            >
+              Care Team / Handover
+            </DropdownMenuItem>
+          )}
+
           {isAdmitted && can("admission.transfer") && (
             <DropdownMenuItem
               onSelect={() => onTransfer()}
@@ -214,6 +229,7 @@ export function AdmissionActionMenu({
         patientId={patientId}
         encounterType="Inpatient (IPD)"
         onSaved={onVitalsSaved}
+        dutyNurseName={dutyNurseName}
       />
     </>
   );

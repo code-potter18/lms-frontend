@@ -107,7 +107,7 @@ export function DepartmentAvatarText({
 
   return (
     <span
-      className={`inline-flex items-center justify-center w-7 h-7 rounded-xl text-xs font-semibold ${className}`}
+      className={`inline-flex items-center justify-center w-7 h-7 rounded-xl hms-avatar-text ${className}`}
       style={{ backgroundColor: bg, color: text }}
     >
       {label}

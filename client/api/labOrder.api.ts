@@ -53,6 +53,9 @@ export interface LabOrderRecord {
   branch_id?: string | null;
   user_id?: string | null;
   patient_history_id?: string | null;
+  /* Investigations advised at the visit that are not lab tests (typed by
+     the doctor), as "Other investigations: A, B". */
+  lab_description?: string | null;
   created_at?: string;
   updated_at?: string;
   patient_history?: {
@@ -100,10 +103,12 @@ export interface LabOrderItemRecord {
   net_amount?: number | string | null;
   item_status?: string | null;
   remarks?: string | null;
-  /* Doctor's per-test order details (Consultation > Investigations). */
+  /* Doctor's per-test order details (Consultation > Investigations).
+     `method` is the testing method for Molecular-category tests. */
   clinical_notes?: string | null;
   priority?: string | null;
   target_date?: string | null;
+  method?: string | null;
   barcode?: string | null;
   sample_id?: string | null;
   specimen_type?: string | null;
@@ -153,10 +158,22 @@ export const labOrderApi = {
     branch_id?: string;
     priority?: "Normal" | "Urgent" | "Stat";
     clinical_notes?: string;
+    /* The visit the order belongs to. */
+    appointment_id?: string;
+    lab_description?: string;
   }) => API.post<{ success: boolean; data: LabOrderRecord }>("/lab-order", payload),
 
-  getAll: () =>
-    API.get<{ success: boolean; data: LabOrderRecord[] }>("/lab-order"),
+  /* The latest orders - all, or a patient's / one visit's (appointment or
+     encounter). The filtered calls never return another patient's order. */
+  getAll: (params?: {
+    patientId?: string;
+    appointmentId?: string;
+    patientHistoryId?: string;
+    limit?: number;
+  }) =>
+    API.get<{ success: boolean; data: LabOrderRecord[] }>("/lab-order", {
+      params: params ?? {},
+    }),
 
   getById: (id: string) =>
     API.get<{ success: boolean; data: LabOrderRecord }>(
@@ -180,6 +197,8 @@ export const labOrderItemApi = {
     priority?: "Normal" | "Urgent" | "Stat";
     /* ISO date, YYYY-MM-DD. */
     target_date?: string;
+    /* Molecular-category tests only: the testing method. */
+    method?: string;
     branch_id?: string;
     user_id?: string;
   }) =>
@@ -188,8 +207,11 @@ export const labOrderItemApi = {
       payload,
     ),
 
-  getAll: () =>
-    API.get<{ success: boolean; data: LabOrderItemRecord[] }>("/lab-order-item"),
+  /* The latest items - all, or a patient's / one visit's (appointment). */
+  getAll: (params?: { patientId?: string; appointmentId?: string }) =>
+    API.get<{ success: boolean; data: LabOrderItemRecord[] }>("/lab-order-item", {
+      params: params ?? {},
+    }),
 
   getById: (id: string) =>
     API.get<{ success: boolean; data: LabOrderItemRecord }>(

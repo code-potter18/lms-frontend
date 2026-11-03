@@ -114,6 +114,18 @@ export function parseDate(dateStr: string | null | undefined): Date | null {
 }
 
 /**
+ * toLocalISODate - Format a Date as YYYY-MM-DD using its LOCAL calendar fields.
+ * Unlike `date.toISOString().slice(0, 10)`, this does not shift the day for
+ * timezones ahead of UTC (e.g. local Monday 00:00 in IST is Sunday in UTC).
+ */
+export function toLocalISODate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
  * calculateYearsSince - Calculate full completed years between a given date and today.
  * Returns 0 if the date is in the future, invalid, or missing.
  */

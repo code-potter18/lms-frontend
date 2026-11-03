@@ -11,7 +11,9 @@ import API from "../../../api/axios";
 import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
 import VoiceToText from "@/components/ui/voicetotext";
 import DateInputField from "./DateInputField";
-import { dateOnlyDMY, dmyToIsoStrict, targetDateError } from "./helpers";
+import { dateOnlyDMY, dmyToIsoStrict, readConsultationDraft, targetDateError } from "./helpers";
+import { ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 /* ============================================================
    ADVICE (OPD PRESCRIPTION)
@@ -66,7 +68,7 @@ interface MedicineSearchOption {
   route: string | null;
 }
 
-interface AdvicePrescriptionItemRecord {
+export interface AdvicePrescriptionItemRecord {
   prescription_item_id: string;
   medicine_id: string;
   dosage: string | null;
@@ -83,9 +85,10 @@ interface AdvicePrescriptionItemRecord {
   } | null;
 }
 
-interface AdvicePrescriptionRecord {
+export interface AdvicePrescriptionRecord {
   prescription_id: string;
   prescription_status: string | null;
+  prescription_type?: string | null;
   prescription_items?: AdvicePrescriptionItemRecord[];
 }
 
@@ -496,6 +499,77 @@ const adviceRowsFromPrescription = (
       };
       return { ...row, savedKey: adviceRowKey(row) };
     });
+
+/* The visit's saved Advice prescription: the one this browser saved for the
+   encounter, else the appointment's latest prescription with Advice items.
+   Shared with the Summary step. */
+export const findAdvicePrescription = async (
+  encounterNo: string,
+  appointmentId?: string | null
+): Promise<AdvicePrescriptionRecord | null> => {
+  const storedId = localStorage.getItem(adviceStorageKey(encounterNo));
+  if (storedId) {
+    try {
+      const response = await API.get<{
+        success: boolean;
+        data: AdvicePrescriptionRecord;
+      }>(`/prescriptions/${encodeURIComponent(storedId)}`);
+      const record = response.data.data;
+      if (
+        record &&
+        record.prescription_status !== "CANCELLED" &&
+        (!record.prescription_type || record.prescription_type === "ADVICE")
+      ) {
+        return record;
+      }
+    } catch (error) {
+      console.error("Failed to load the saved Advice prescription:", error);
+    }
+  }
+  if (!appointmentId) return null;
+  const response = await API.get<{
+    success: boolean;
+    data: { prescriptions: AdvicePrescriptionRecord[] };
+  }>("/prescriptions", {
+    params: {
+      appointmentId,
+      sortBy: "created_at",
+      sortOrder: "desc",
+      limit: 20,
+    },
+  });
+  const records = (response.data.data?.prescriptions ?? []).filter(
+    (record) => record.prescription_status !== "CANCELLED"
+  );
+  /* New rows carry the type; legacy rows only have their item roles. */
+  return (
+    records.find((record) => record.prescription_type === "ADVICE") ??
+    records.find((record) =>
+      (record.prescription_items ?? []).some(
+        (item) => item.drug_role === ADVICE_DRUG_ROLE
+      )
+    ) ??
+    null
+  );
+};
+
+/* The Advice medicines of a saved prescription, as printed. */
+export const adviceMedicinesOf = (record: AdvicePrescriptionRecord | null) =>
+  record
+    ? adviceRowsFromPrescription({
+        ...record,
+        prescription_items: (record.prescription_items ?? []).filter(
+          (item) => !item.drug_role || item.drug_role === ADVICE_DRUG_ROLE
+        ),
+      }).map((row) => ({
+        form: row.drugForm,
+        name: row.drugName,
+        dosage: row.dosage,
+        frequency: row.frequency,
+        duration: row.duration,
+        instruction: row.instruction,
+      }))
+    : [];
 
 const matchesEveryWord = (text: string, query: string) => {
   const haystack = text.toLowerCase();
@@ -942,6 +1016,10 @@ interface AdviceSectionProps {
   /* Unsaved draft rows are only restored for the patient they belong to. */
   patientId?: string;
   onToast: (message: string) => void;
+  /* Whether the section body is expanded. Defaults to false (collapsed). */
+  expanded?: boolean;
+  /* Toggles the section open/closed. */
+  onToggle?: () => void;
 }
 
 /* The Consultation step's Advice section: the medicines table and the
@@ -951,7 +1029,7 @@ const AdviceSection = forwardRef<
   AdviceSectionHandle,
   AdviceSectionProps
 >(function AdviceSection(
-  { encounter, patientId, onToast: showToast },
+  { encounter, patientId, onToast: showToast, expanded = false, onToggle },
   ref,
 ) {
   /* Advice (OPD prescription). The refs mirror what an in-flight save
@@ -1114,9 +1192,7 @@ const AdviceSection = forwardRef<
     let initial = saved;
     let initialFollowUp = savedFollowUp;
     try {
-      const draft = JSON.parse(
-        localStorage.getItem("hms_consultation_draft") ?? "{}"
-      );
+      const draft = readConsultationDraft(encounter.encounter_no, patientId);
       if (draft.patientId && draft.patientId === patientId) {
         if (!saved && typeof draft.adviceDiscussion === "string") {
           initial = draft.adviceDiscussion;
@@ -1146,45 +1222,7 @@ const AdviceSection = forwardRef<
     const appointmentId = encounter?.appointment_id;
     let cancelled = false;
 
-    const findSavedPrescription =
-      async (): Promise<AdvicePrescriptionRecord | null> => {
-        const storedId = localStorage.getItem(adviceStorageKey(encounterNo));
-        if (storedId) {
-          try {
-            const response = await API.get<{
-              success: boolean;
-              data: AdvicePrescriptionRecord;
-            }>(`/prescriptions/${encodeURIComponent(storedId)}`);
-            const record = response.data.data;
-            if (record && record.prescription_status !== "CANCELLED") {
-              return record;
-            }
-          } catch (error) {
-            console.error("Failed to load the saved Advice prescription:", error);
-          }
-        }
-        if (!appointmentId) return null;
-        const response = await API.get<{
-          success: boolean;
-          data: { prescriptions: AdvicePrescriptionRecord[] };
-        }>("/prescriptions", {
-          params: {
-            appointmentId,
-            sortBy: "created_at",
-            sortOrder: "desc",
-            limit: 20,
-          },
-        });
-        return (
-          (response.data.data?.prescriptions ?? []).find(
-            (record) =>
-              record.prescription_status !== "CANCELLED" &&
-              (record.prescription_items ?? []).some(
-                (item) => item.drug_role === ADVICE_DRUG_ROLE
-              )
-          ) ?? null
-        );
-      };
+    const findSavedPrescription = () => findAdvicePrescription(encounterNo, appointmentId);
 
     setAdviceLoading(true);
     findSavedPrescription()
@@ -1200,9 +1238,7 @@ const AdviceSection = forwardRef<
         }
         setAdvicePrescription("", encounterNo);
         try {
-          const draft = JSON.parse(
-            localStorage.getItem("hms_consultation_draft") ?? "{}"
-          );
+          const draft = readConsultationDraft(encounterNo, patientId);
           if (
             draft.patientId &&
             draft.patientId === patientId &&
@@ -1240,11 +1276,9 @@ const AdviceSection = forwardRef<
 
   /* ============================================================
      SAVE ADVICE PRESCRIPTION
-     First save creates the prescription (POST /prescriptions);
-     later saves sync its items so there is one prescription per
-     encounter. Unchanged leading rows are kept and everything from
-     the first changed row on is re-added, so the saved order
-     always matches the table.
+     First save creates the Advice prescription (POST /prescriptions);
+     later saves sync its items. It is independent of the visit's
+     chemotherapy prescription, which is created on Submit.
   ============================================================ */
 
   const runAdviceSave = async (
@@ -1355,6 +1389,7 @@ const AdviceSection = forwardRef<
           data: AdvicePrescriptionRecord;
         }>("/prescriptions", {
           encounter_no: encounterNo,
+          prescription_type: "ADVICE",
           medicines: linkedRows.map(buildAdviceItemPayload),
         });
         const record = response.data.data;
@@ -1492,8 +1527,9 @@ const AdviceSection = forwardRef<
   };
 
   /* Saves the whole section: the medicines as the encounter's
-     prescription, then the Discussion and the Follow-up Date. Serialised so overlapping calls
-     can never give one encounter two prescriptions. */
+     Advice prescription, then the Discussion and the Follow-up Date.
+     Serialised so overlapping calls can never give one encounter two
+     Advice prescriptions. */
   const saveAdviceSection = async (
     targetEncounter: EncounterRecord
   ): Promise<AdviceSaveResult> => {
@@ -1599,20 +1635,37 @@ const AdviceSection = forwardRef<
   return (
     <section className="flex w-full flex-col gap-4 rounded-xl border border-slate-200 bg-white p-5">
 
-      <div className="flex w-full items-center justify-between gap-4">
-
-        <div className="flex flex-col">
-          <div className="text-[10px] font-bold leading-4 text-slate-800">
+      {/* Toggle header */}
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-4 py-2 border-b border-slate-100 px-2"
+      >
+        <div className="flex items-center gap-2">
+          <div className="text-[14px] font-bold uppercase leading-7 text-slate-800">
             Advice
           </div>
-          <div className="text-[10px] leading-4 text-slate-500">
-            Medicines prescribed to the patient for this visit
-          </div>
+          {adviceFilledRows.length > 0 && (
+            <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-semibold leading-4 text-blue-700">
+              {adviceFilledRows.length}
+            </span>
+          )}
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 shrink-0 transition-transform duration-200",
+              expanded ? "rotate-180" : "",
+            )}
+          />
         </div>
-
+        <div className="text-[10px] leading-4 text-slate-500">
+          Medicines prescribed to the patient for this visit
+        </div>
         <button
           type="button"
-          onClick={addAdviceRow}
+          onClick={(event) => {
+            event.stopPropagation();
+            addAdviceRow();
+          }}
           disabled={adviceLoading}
           className="flex h-9 w-fit items-center justify-center gap-1.5 rounded-lg border border-blue-600 bg-white px-4 text-sm font-bold leading-5 text-blue-600 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -1630,199 +1683,215 @@ const AdviceSection = forwardRef<
           </svg>
           <span>Add Medicine</span>
         </button>
+      </button>
 
-      </div>
+      {expanded ? (
+        <>
+          {adviceLoading ? (
+            <div className="text-[10px] leading-5 text-slate-500">
+              Loading prescribed medicines...
+            </div>
+          ) : adviceRows.length === 0 ? (
+            <div className="flex w-full items-center justify-center rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-[10px] leading-5 text-slate-500">
+              No medicines prescribed yet. Click "Add Medicine" to prescribe.
+            </div>
+          ) : (
+            <table className="w-full table-fixed border-separate border-spacing-0 text-left">
 
-      {adviceLoading ? (
-        <div className="text-[10px] leading-5 text-slate-500">
-          Loading prescribed medicines...
-        </div>
-      ) : adviceRows.length === 0 ? (
-        <div className="flex w-full items-center justify-center rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-[10px] leading-5 text-slate-500">
-          No medicines prescribed yet. Click "Add Medicine" to prescribe.
-        </div>
-      ) : (
-        <table className="w-full table-fixed border-separate border-spacing-0 text-left">
+              <colgroup>
+                <col className="w-10" />
+                <col className="w-[11%]" />
+                <col />
+                <col className="w-[13%]" />
+                <col className="w-[13%]" />
+                <col className="w-[17%]" />
+                <col className="w-[12%]" />
+                <col className="w-11" />
+              </colgroup>
 
-          <colgroup>
-            <col className="w-10" />
-            <col className="w-[11%]" />
-            <col />
-            <col className="w-[13%]" />
-            <col className="w-[13%]" />
-            <col className="w-[17%]" />
-            <col className="w-[12%]" />
-            <col className="w-11" />
-          </colgroup>
-
-          <thead>
-            <tr>
-              {[
-                "#",
-                "Drug Form",
-                "Drug Name",
-                "Dosage",
-                "Frequency",
-                "Instruction",
-                "Duration",
-              ].map((heading) => (
-                <th
-                  key={heading}
-                  className="border-y border-slate-200 bg-slate-50 px-2 py-2 text-[10px] font-bold leading-4 text-slate-800 first:rounded-tl-md first:border-l"
-                >
-                  {heading}
-                </th>
-              ))}
-              <th className="rounded-tr-md border-y border-r border-slate-200 bg-slate-50 px-2 py-2">
-                <span className="sr-only">Remove</span>
-              </th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {adviceRows.map((row, index) => (
-              <tr key={row.rowId} className="align-top">
-
-                <td className="border-b border-slate-100 px-2 py-2 text-[10px] leading-[34px] text-slate-500">
-                  {index + 1}
-                </td>
-
-                <td className="border-b border-slate-100 px-2 py-2">
-                  {renderAdviceOptionField(row, "drugForm", "Drug form", "Tab")}
-                </td>
-
-                <td className="border-b border-slate-100 px-2 py-2">
-                  <AdviceDrugNameField
-                    row={row}
-                    onChange={(drugName, medicine) =>
-                      handleAdviceDrugChange(row, drugName, medicine)
-                    }
-                    onNotify={showToast}
-                  />
-                </td>
-
-                <td className="border-b border-slate-100 px-2 py-2">
-                  {renderAdviceOptionField(
-                    row,
-                    "dosage",
+              <thead>
+                <tr>
+                  {[
+                    "#",
+                    "Drug Form",
+                    "Drug Name",
                     "Dosage",
-                    "500 mg",
-                    expandNumberSuggestions(row.dosage, DOSAGE_UNIT_WORDS)
-                  )}
-                </td>
-
-                <td className="border-b border-slate-100 px-2 py-2">
-                  {renderAdviceOptionField(row, "frequency", "Frequency", "1-0-1")}
-                </td>
-
-                <td className="border-b border-slate-100 px-2 py-2">
-                  {renderAdviceOptionField(row, "instruction", "Instruction", "After food")}
-                </td>
-
-                <td className="border-b border-slate-100 px-2 py-2">
-                  {renderAdviceOptionField(
-                    row,
-                    "duration",
+                    "Frequency",
+                    "Instruction",
                     "Duration",
-                    "5 days",
-                    expandNumberSuggestions(row.duration, DURATION_UNIT_WORDS)
-                  )}
-                </td>
+                  ].map((heading) => (
+                    <th
+                      key={heading}
+                      className="border-y border-slate-200 bg-slate-50 px-2 py-2 text-[10px] font-bold leading-4 text-slate-800 first:rounded-tl-md first:border-l"
+                    >
+                      {heading}
+                    </th>
+                  ))}
+                  <th className="rounded-tr-md border-y border-r border-slate-200 bg-slate-50 px-2 py-2">
+                    <span className="sr-only">Remove</span>
+                  </th>
+                </tr>
+              </thead>
 
-                <td className="border-b border-slate-100 px-1 py-2 text-center">
+              <tbody>
+                {adviceRows.map((row, index) => (
+                  <tr key={row.rowId} className="align-top">
+
+                    <td className="border-b border-slate-100 px-2 py-2 text-[10px] leading-[34px] text-slate-500">
+                      {index + 1}
+                    </td>
+
+                    <td className="border-b border-slate-100 px-2 py-2">
+                      {renderAdviceOptionField(row, "drugForm", "Drug form", "Tab")}
+                    </td>
+
+                    <td className="border-b border-slate-100 px-2 py-2">
+                      <AdviceDrugNameField
+                        row={row}
+                        onChange={(drugName, medicine) =>
+                          handleAdviceDrugChange(row, drugName, medicine)
+                        }
+                        onNotify={showToast}
+                      />
+                    </td>
+
+                    <td className="border-b border-slate-100 px-2 py-2">
+                      {renderAdviceOptionField(
+                        row,
+                        "dosage",
+                        "Dosage",
+                        "500 mg",
+                        expandNumberSuggestions(row.dosage, DOSAGE_UNIT_WORDS)
+                      )}
+                    </td>
+
+                    <td className="border-b border-slate-100 px-2 py-2">
+                      {renderAdviceOptionField(row, "frequency", "Frequency", "1-0-1")}
+                    </td>
+
+                    <td className="border-b border-slate-100 px-2 py-2">
+                      {renderAdviceOptionField(row, "instruction", "Instruction", "After food")}
+                    </td>
+
+                    <td className="border-b border-slate-100 px-2 py-2">
+                      {renderAdviceOptionField(
+                        row,
+                        "duration",
+                        "Duration",
+                        "5 days",
+                        expandNumberSuggestions(row.duration, DURATION_UNIT_WORDS)
+                      )}
+                    </td>
+
+                    <td className="border-b border-slate-100 px-1 py-2 text-center">
+                      <button
+                        type="button"
+                        onClick={() => removeAdviceRow(row.rowId)}
+                        aria-label={`Remove medicine ${index + 1}`}
+                        title="Remove"
+                        className="inline-flex h-[34px] w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className="h-4 w-4"
+                        >
+                          <path d="M3 6h18" />
+                          <path d="M8 6V4h8v2" />
+                          <path d="M19 6l-1 14H6L5 6" />
+                          <path d="M10 11v6" />
+                          <path d="M14 11v6" />
+                        </svg>
+                      </button>
+                    </td>
+
+                  </tr>
+                ))}
+              </tbody>
+
+            </table>
+          )}
+
+          {/* FOLLOW-UP DATE + DISCUSSION
+              The Follow-up Date keeps a narrow track on the left and the
+              Discussion takes the rest of the row, so both are visible
+              together. Below the lg breakpoint they stack (date first). */}
+
+          <div className="grid w-full grid-cols-1 items-start gap-x-8 gap-y-5 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+
+            {/* FOLLOW-UP DATE */}
+
+            <div className="flex w-full flex-col gap-2">
+
+              <div className="flex items-center justify-between gap-2">
+                <label
+                  htmlFor="advice-follow-up-date"
+                  className="text-[10px] font-bold leading-4 text-slate-500"
+                >
+                  Follow-up Date
+                </label>
+                {followUpDate && (
                   <button
                     type="button"
-                    onClick={() => removeAdviceRow(row.rowId)}
-                    aria-label={`Remove medicine ${index + 1}`}
-                    title="Remove"
-                    className="inline-flex h-[34px] w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                    onClick={() => setFollowUpDate("")}
+                    className="text-[10px] font-medium text-slate-400 transition-colors hover:text-red-500"
                   >
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="h-4 w-4"
-                    >
-                      <path d="M3 6h18" />
-                      <path d="M8 6V4h8v2" />
-                      <path d="M19 6l-1 14H6L5 6" />
-                      <path d="M10 11v6" />
-                      <path d="M14 11v6" />
-                    </svg>
+                    Clear
                   </button>
-                </td>
+                )}
+              </div>
 
-              </tr>
-            ))}
-          </tbody>
+              <DateInputField
+                id="advice-follow-up-date"
+                value={followUpDate}
+                onChange={setFollowUpDate}
+                error={followUpError}
+                ariaLabel="Pick follow-up date"
+              />
 
-        </table>
-      )}
+              {!followUpError && (
+                <span className="text-[10px] leading-[14px] text-slate-400">
+                  {followUpDirty
+                    ? "Unsaved change - saved when you click Proceed to Next"
+                    : savedFollowUpDate
+                      ? "Saved for this visit"
+                      : "Type DD-MM-YYYY or pick from the calendar"}
+                </span>
+              )}
 
-      {/* FOLLOW-UP DATE */}
+            </div>
 
-      <div className="flex w-full flex-col gap-2 sm:max-w-xs">
+            {/* DISCUSSION */}
 
-        <div className="flex items-center justify-between gap-2">
-          <label
-            htmlFor="advice-follow-up-date"
-            className="text-[10px] font-bold leading-4 text-slate-500"
-          >
-            Follow-up Date
-          </label>
-          {followUpDate && (
-            <button
-              type="button"
-              onClick={() => setFollowUpDate("")}
-              className="text-[10px] font-medium text-slate-400 transition-colors hover:text-red-500"
-            >
-              Clear
-            </button>
+            <div className="flex w-full flex-col gap-2">
+
+              <label className="text-[10px] font-bold leading-4 text-slate-800">
+                Discussion
+              </label>
+
+              <VoiceToText
+                value={discussion}
+                onChange={(text) => setDiscussion(text)}
+                placeholder="Type the discussion with the patient..."
+              />
+
+            </div>
+
+          </div>
+
+          {!adviceLoading && adviceStatus && (
+            <div className="text-[10px] font-medium leading-4">
+              {adviceStatus}
+            </div>
           )}
-        </div>
-
-        <DateInputField
-          id="advice-follow-up-date"
-          value={followUpDate}
-          onChange={setFollowUpDate}
-          error={followUpError}
-          ariaLabel="Pick follow-up date"
-        />
-
-        {!followUpError && (
-          <span className="text-[10px] leading-[14px] text-slate-400">
-            {followUpDirty
-              ? "Unsaved change - saved when you click Proceed to Next"
-              : savedFollowUpDate
-                ? "Saved for this visit"
-                : "Type DD-MM-YYYY or pick from the calendar"}
-          </span>
-        )}
-
-      </div>
-
-      {/* DISCUSSION */}
-
-      <div className="flex w-full flex-col gap-2">
-
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
-          Discussion
-        </label>
-
-        <VoiceToText
-          value={discussion}
-          onChange={(text) => setDiscussion(text)}
-          placeholder="Type the discussion with the patient..."
-        />
-
-      </div>
-
-      {!adviceLoading && adviceStatus && (
-        <div className="text-[10px] font-medium leading-4">
-          {adviceStatus}
+        </>
+      ) : (
+        <div className="pt-4 text-[10px] leading-4 text-slate-500">
+          Section collapsed. Click the header to expand.
         </div>
       )}
 

@@ -2,7 +2,14 @@
 import API, { getActiveBranchId } from "../../../api/axios";
 import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
 import { getUser } from "../../../utils/token";
-import { chemoPlanCurrentItems, chemoPlanItemName } from "../../../api/chemotherapy.api";
+import {
+  chemoPlanCurrentItems,
+  chemoPlanItemName,
+  chemotherapyApi,
+  isChemoPlanClosed,
+  type ChemoPlanOrderHeader,
+  type ChemoPlanScheduleRow,
+} from "../../../api/chemotherapy.api";
 import { generatePrescriptionPdf } from "../../../utils/prescriptionPdf";
 import { BellNotificationButton } from "@/components/hms/BellNotificationButton";
 import {
@@ -29,7 +36,20 @@ import {
 } from "./api";
 import { useLatestPatientVitals } from "./hooks";
 import { consultationNotesOf } from "../consultation/helpers";
-import { CTCAE_GRADES } from "./adminFormat";
+import { CTCAE_GRADES, fmtDate } from "./adminFormat";
+import {
+  buildPlanCycleDays,
+  cycleDayLabel,
+  CycleDayPicker,
+  CycleDayStatusChip,
+  DAY_STATUS_STYLE,
+  MED_ROLE_BADGE,
+  MedicineStatusBadge,
+  sheetMedicineRows,
+  useCycleDaySheets,
+  type CycleDayStatus,
+  type PlanCycleDay,
+} from "./cycleDays";
 
 /* ============================================================
    HISTORY TAB
@@ -321,7 +341,7 @@ function TrendChartCard({ chart }: { chart: TrendChart }) {
         <table className="mt-2 w-full text-left text-[10px]">
           <thead>
             <tr className="border-b border-gray-100 text-gray-500">
-              <th className="py-1.5 pr-3 font-bold text-gray-900">Report date</th>
+              <th className="py-1.5 pr-3 text-[10px] font-bold text-gray-900">Report date</th>
               <th className="py-1.5 pr-3 text-right font-bold text-gray-900">Value</th>
               <th className="py-1.5 font-bold text-gray-900">Status</th>
             </tr>
@@ -863,29 +883,6 @@ const HistoryTab: React.FC<{
       b.cycle_number - a.cycle_number
   );
 
-  const currentCycleInfo = (() => {
-    if (!plan?.treatment_start_date || !plan?.cycle_interval_days) return null;
-    const start = new Date(plan.treatment_start_date);
-    if (Number.isNaN(start.getTime())) return null;
-    const interval = plan.cycle_interval_days || 1;
-    const planned = plan.planned_cycles || 1;
-    const daysElapsed = Math.floor(
-      (Date.now() - start.getTime()) / 86400000,
-    );
-    let cycle = daysElapsed < 0 ? 1 : Math.floor(daysElapsed / interval) + 1;
-    if (planned > 0 && cycle > planned) cycle = planned;
-    // Day-within-current-cycle: 1-based offset from this cycle's start,
-    // clamped to at least 1 (also valid pre-treatment).
-    const cycleStartOffset = (cycle - 1) * interval;
-    const day =
-      daysElapsed < cycleStartOffset
-        ? 1
-        : (daysElapsed - cycleStartOffset) % interval + 1;
-    const d = new Date(start);
-    d.setDate(d.getDate() + cycleStartOffset);
-    return { cycle, day, date: fmtHistoryDate(d.toISOString()) };
-  })();
-
   /* Cycle-history table rows: agent/dose come from the plan's
      PRIMARY items (or all items if not tagged); outcome is the real cycle_status. */
   const planDrugItems = chemoPlanCurrentItems<SummaryPlanItem>(plan);
@@ -989,25 +986,6 @@ const HistoryTab: React.FC<{
       status,
     };
   });
-
-  /* Medication history rows from the plan's saved items. */
-  const medicationRows = planDrugItems.map((item) => ({
-    medication: chemoPlanItemName(item) || "—",
-    start: fmtHistoryDate(plan?.treatment_start_date),
-    end:
-      (plan?.treatment_status ?? "").toUpperCase() === "COMPLETED"
-        ? fmtHistoryDate(plan?.expected_end_date) || "—"
-        : "Ongoing",
-    dosage:
-      item.protocol_dose != null
-        ? `${item.protocol_dose} ${item.protocol_dose_unit ?? ""}`.trim()
-        : item.formulation || "—",
-    route: item.administration_route || "—",
-    active:
-      (plan?.treatment_status ?? "").toUpperCase() === "COMPLETED"
-        ? false
-        : true,
-  }));
 
   /* Adverse events aggregated across the fetched cycles. */
   interface AdverseEventRow {
@@ -1200,325 +1178,145 @@ const HistoryTab: React.FC<{
     return "No treatment dates recorded";
   })();
 
-  /* Timeline entries straight from the patient's plan and saved cycles with clear status categories.
-     If a cycle spans multiple days, each day is rendered as its own distinct card
-     (e.g., CYCLE 01 DAY 01, CYCLE 01 DAY 02) to provide complete clarity. */
-  const timelineItems = (() => {
-    if (!plan && planCyclesSorted.length === 0 && !currentCycleInfo) {
-      return [];
-    }
+  /* ================= The plan's cycle days =================
+     From the plan's saved cycle day orders (what the doctor planned, with
+     ORDERED / IN_ADMINISTRATION / COMPLETED) and its day-by-day schedule.
+     A plan loaded without them (list fallback) fetches them once. */
+  const historyPlanId = plan?.chemotherapy_plan_id ?? "";
+  const [fetchedPlanDays, setFetchedPlanDays] = useState<{
+    planId: string;
+    orders: ChemoPlanOrderHeader[];
+    schedule: ChemoPlanScheduleRow[];
+  } | null>(null);
 
-    const isPlanCompleted =
-      (plan?.treatment_status ?? "").toUpperCase() === "COMPLETED" ||
-      (plan?.planned_cycles != null &&
-        plan?.completed_cycles != null &&
-        plan.completed_cycles >= plan.planned_cycles);
-
-    const inProgressCycle = planCyclesSorted.find(
-      (c) => (c.cycle_status ?? "").toUpperCase() === "IN_PROGRESS"
-    );
-    const activeCycleNum = isPlanCompleted
-      ? null
-      : inProgressCycle
-      ? inProgressCycle.cycle_number
-      : currentCycleInfo?.cycle ?? (plan?.completed_cycles ? plan.completed_cycles + 1 : 1);
-
-    const maxRecordedCycle = planCyclesSorted.reduce(
-      (max, c) => Math.max(max, c.cycle_number || 0),
-      0
-    );
-
-    const totalCycles = Math.max(
-      plan?.planned_cycles || (maxRecordedCycle > 0 ? maxRecordedCycle : 6),
-      plan?.completed_cycles || 0,
-      maxRecordedCycle,
-      activeCycleNum || 0,
-      1
-    );
-
-    const interval = plan?.cycle_interval_days || 21;
-    const startDate = plan?.treatment_start_date ? new Date(plan.treatment_start_date) : null;
-
-    const existingMap = new Map();
-    const existingDayMap = new Map();
-    planCyclesSorted.forEach((c) => {
-      if (c.cycle_number != null) {
-        existingMap.set(c.cycle_number, c);
-        const dayKey = `${c.cycle_number}-${c.cycle_day ?? 1}`;
-        if (!existingDayMap.has(dayKey)) {
-          existingDayMap.set(dayKey, c);
-        }
-      }
-    });
-
-    const getDaysForCycle = (cNum: number): number[] => {
-      const set = new Set<number>();
-      const explicitDays = Number(regimenProtocol?.no_of_days);
-      if (Number.isFinite(explicitDays) && explicitDays > 0) {
-        for (let d = 1; d <= explicitDays; d++) set.add(d);
-      }
-      (regimenProtocol?.chemotherapy_regimen_protocol_days ?? []).forEach((d: any) => {
-        const num = Number(d.day_number);
-        if (Number.isFinite(num) && num > 0) set.add(num);
-      });
-      (regimenProtocol?.chemotherapy_regimen_protocol_items ?? []).forEach((item: any) => {
-        const num = Number(item.administration_day ?? item.cycle_day);
-        if (Number.isFinite(num) && num > 0) set.add(num);
-      });
-      planDrugItems.forEach((item) => {
-        const num = Number(item.administration_day ?? item.cycle_day);
-        if (Number.isFinite(num) && num > 0) set.add(num);
-      });
-      const matchingCycles = planCyclesSorted.filter((c) => c.cycle_number === cNum);
-      matchingCycles.forEach((c) => {
-        if (c.cycle_day != null && Number(c.cycle_day) > 0) set.add(Number(c.cycle_day));
-        (c.chemotherapy_administration ?? []).forEach((adm: any) => {
-          if (adm.administration_day != null && Number(adm.administration_day) > 0) {
-            set.add(Number(adm.administration_day));
-          }
+  useEffect(() => {
+    if (!historyPlanId || plan?.plan_orders) return;
+    let cancelled = false;
+    chemotherapyApi
+      .getPlan(historyPlanId)
+      .then((response) => {
+        if (cancelled) return;
+        setFetchedPlanDays({
+          planId: historyPlanId,
+          orders: response.data?.data?.plan_orders ?? [],
+          schedule: response.data?.data?.chemotherapy_plan_schedule ?? [],
         });
-      });
-      const sorted = Array.from(set).sort((a, b) => a - b);
-      return sorted.length > 0 ? sorted : [1];
+      })
+      .catch((error) => console.error("Failed to load the plan's cycle days:", error));
+    return () => {
+      cancelled = true;
     };
+  }, [historyPlanId, plan?.plan_orders]);
 
-    const items: Array<{
-      id: string;
-      cycle: string;
-      date: string;
-      description: string;
-      final: boolean;
-      status: string;
-      category: "COMPLETED" | "CURRENT" | "UPCOMING";
-      cycleNumber: number;
-      dayNumber: number;
-    }> = [];
+  const planDaysSource = fetchedPlanDays?.planId === historyPlanId ? fetchedPlanDays : null;
+  const historyPlanOrders = plan?.plan_orders ?? planDaysSource?.orders ?? [];
+  const historyPlanSchedule = plan?.chemotherapy_plan_schedule ?? planDaysSource?.schedule ?? [];
+  const historyPlanClosed = isChemoPlanClosed(plan);
 
-    // Reverse order from totalCycles down to Cycle 1 (Cycle 6 at top, Cycle 1 at bottom)
-    for (let cNum = totalCycles; cNum >= 1; cNum--) {
-      const existing = existingMap.get(cNum);
-      const detail = existing
-        ? cycleDetails.find((d) => d.chemotherapy_cycle_id === existing.chemotherapy_cycle_id)
-        : null;
+  const planCycleDays = useMemo<PlanCycleDay[]>(
+    () =>
+      buildPlanCycleDays({
+        orders: historyPlanOrders,
+        schedule: historyPlanSchedule,
+        protocolItems: regimenProtocol?.chemotherapy_regimen_protocol_items,
+        plannedCycles: plan?.planned_cycles,
+        startDate: plan?.treatment_start_date,
+        intervalDays: plan?.cycle_interval_days,
+        planClosed: historyPlanClosed,
+      }),
+    [historyPlanOrders, historyPlanSchedule, historyPlanClosed, regimenProtocol, plan?.planned_cycles, plan?.treatment_start_date, plan?.cycle_interval_days]
+  );
 
-      const isCompleted =
-        isPlanCompleted ||
-        (existing && (existing.cycle_status ?? "").toUpperCase() === "COMPLETED") ||
-        (plan?.completed_cycles != null && cNum <= plan.completed_cycles) ||
-        (activeCycleNum != null && cNum < activeCycleNum);
-
-      const isCurrent =
-        !isCompleted &&
-        Boolean(
-          (existing && (existing.cycle_status ?? "").toUpperCase() === "IN_PROGRESS") ||
-            (activeCycleNum && cNum === activeCycleNum)
-        );
-
-      const cycleDaysAsc = getDaysForCycle(cNum);
-      const hasManyDays = cycleDaysAsc.length > 1;
-      const isFinalCycle = cNum === totalCycles;
-      const maxCycleDay = cycleDaysAsc[cycleDaysAsc.length - 1];
-      // Highest day on top and lowest day of the cycle at bottom
-      const cycleDaysDescending = [...cycleDaysAsc].sort((a, b) => b - a);
-
-      for (const dNum of cycleDaysDescending) {
-        const isFinalDay = dNum === maxCycleDay;
-        const isFinalCard = isFinalCycle && isFinalDay;
-
-        const specificCycleDay = existingDayMap.get(`${cNum}-${dNum}`);
-        const specificDetail = specificCycleDay
-          ? cycleDetails.find((d) => d.chemotherapy_cycle_id === specificCycleDay.chemotherapy_cycle_id)
-          : null;
-
-        // Determine category for this day
-        let dayCategory: "COMPLETED" | "CURRENT" | "UPCOMING" = "UPCOMING";
-        if (
-          isCompleted ||
-          (specificCycleDay && (specificCycleDay.cycle_status ?? "").toUpperCase() === "COMPLETED")
-        ) {
-          dayCategory = "COMPLETED";
-        } else if (activeCycleNum != null && cNum > activeCycleNum) {
-          dayCategory = "UPCOMING";
-        } else if (isCurrent) {
-          const dayAdmin = (detail?.chemotherapy_administration ?? existing?.chemotherapy_administration ?? []).find(
-            (adm: any) => Number(adm.administration_day) === dNum
-          );
-          if (
-            dayAdmin &&
-            (["Completed", "GIVEN"].includes(dayAdmin.administration_status) || dayAdmin.infusion_completed)
-          ) {
-            dayCategory = "COMPLETED";
-          } else if (currentCycleInfo?.day != null && hasManyDays) {
-            if (dNum < currentCycleInfo.day) {
-              dayCategory = "COMPLETED";
-            } else if (dNum === currentCycleInfo.day) {
-              dayCategory = "CURRENT";
-            } else {
-              dayCategory = "UPCOMING";
-            }
-          } else {
-            dayCategory = dNum === 1 || !hasManyDays ? "CURRENT" : "UPCOMING";
-          }
-        } else {
-          dayCategory = "UPCOMING";
-        }
-
-        // Dynamic real date for this day
-        let dayDateStr = "";
-        if (specificCycleDay?.actual_date || specificCycleDay?.planned_date) {
-          const act = fmtTimelineDate(specificDetail?.actual_date || specificCycleDay.actual_date);
-          const pln = fmtTimelineDate(specificDetail?.planned_date || specificCycleDay.planned_date);
-          if (act && pln && act !== pln) {
-            dayDateStr = `${pln} - ${act}`;
-          } else {
-            dayDateStr = act || pln || "";
-          }
-        }
-
-        if (!dayDateStr) {
-          const dayAdmin = (detail?.chemotherapy_administration ?? existing?.chemotherapy_administration ?? []).find(
-            (adm: any) => Number(adm.administration_day) === dNum
-          );
-          if (dayAdmin?.administration_date) {
-            dayDateStr = fmtTimelineDate(dayAdmin.administration_date);
-          }
-        }
-
-        if (!dayDateStr && (detail?.actual_date || existing?.actual_date || detail?.planned_date || existing?.planned_date)) {
-          const baseDateVal = detail?.actual_date || existing?.actual_date || detail?.planned_date || existing?.planned_date;
-          const baseDate = new Date(baseDateVal as string);
-          if (!Number.isNaN(baseDate.getTime())) {
-            if (dNum === 1 || !hasManyDays) {
-              const plannedStr = fmtTimelineDate(detail?.planned_date || existing?.planned_date);
-              const actualStr = fmtTimelineDate(detail?.actual_date || existing?.actual_date);
-              if (plannedStr && actualStr && plannedStr !== actualStr) {
-                dayDateStr = `${plannedStr} - ${actualStr}`;
-              } else {
-                dayDateStr = actualStr || plannedStr || fmtTimelineDate(baseDate);
-              }
-            } else {
-              const offsetDate = new Date(baseDate);
-              offsetDate.setDate(offsetDate.getDate() + (dNum - 1));
-              dayDateStr = fmtTimelineDate(offsetDate);
-            }
-          }
-        }
-
-        if (!dayDateStr && startDate && !Number.isNaN(startDate.getTime())) {
-          const d = new Date(startDate);
-          d.setDate(startDate.getDate() + (cNum - 1) * interval + (dNum - 1));
-          dayDateStr = fmtTimelineDate(d);
-        }
-
-        // Title: CYCLE 01 DAY 01, CYCLE 01 DAY 02 if multi-day, else CYCLE 01
-        let cycleTitle = hasManyDays
-          ? `CYCLE ${String(cNum).padStart(2, "0")} DAY ${String(dNum).padStart(2, "0")}`
-          : `CYCLE ${String(cNum).padStart(2, "0")}`;
-
-        if (isFinalCard) {
-          cycleTitle += " (FINAL)";
-        }
-
-        // Dynamic description from drugs scheduled for this day, remarks, or adverse events
-        const dayMedicines = planDrugItems
-          .filter((item) => {
-            if (!hasManyDays) return true;
-            const itemDay = Number(item.administration_day ?? item.cycle_day ?? 1);
-            return itemDay === dNum;
-          })
-          .map((item) => chemoPlanItemName(item))
-          .filter(Boolean);
-
-        let description = "";
-        if (dayMedicines.length > 0) {
-          description = `Administered: ${dayMedicines.join(", ")}.`;
-        }
-
-        const remarksText =
-          specificDetail?.remarks ||
-          detail?.remarks ||
-          specificCycleDay?.remarks ||
-          existing?.remarks;
-        if (remarksText?.trim()) {
-          description = description
-            ? `${description} ${remarksText.trim()}`
-            : remarksText.trim();
-        }
-
-        if (!description) {
-          /* A multi-day cycle's day card lists only that day's events
-             (events recorded before the day was stored stay on every day). */
-          const adverseEvents = (
-            (specificDetail?.chemotherapy_adverse_event ??
-              detail?.chemotherapy_adverse_event ??
-              existing?.chemotherapy_adverse_event ??
-              []) as ChemoAdverseEventEntry[]
-          ).filter(
-            (ae) => !hasManyDays || ae.cycle_day == null || ae.cycle_day === dNum
-          );
-          if (adverseEvents.length > 0) {
-            const names = adverseEvents
-              .map((ae) => {
-                const grade = ae.ctcae_grade || ae.reaction_grade || ae.severity;
-                return `${ae.adverse_event_name || "Adverse event"}${
-                  grade ? ` (Grade ${grade})` : ""
-                }`;
-              })
-              .join(", ");
-            description = `Adverse events: ${names}.`;
-          }
-        }
-
-        if (!description) {
-          const dayLabel = hasManyDays
-            ? `Day ${String(dNum).padStart(2, "0")}`
-            : "Cycle";
-          if (dayCategory === "CURRENT") {
-            description = plan?.regimen_name
-              ? `${dayLabel} in progress per ${plan.regimen_name} protocol.`
-              : `${dayLabel} in progress as scheduled.`;
-          } else if (dayCategory === "COMPLETED") {
-            const comp =
-              specificDetail?.completion_status ||
-              detail?.completion_status ||
-              existing?.completion_status;
-            description = comp
-              ? `${dayLabel} completed (${comp.replace(/_/g, " ")}).`
-              : isFinalCard
-              ? "Protocol completed. All planned cycles successfully administered."
-              : `${dayLabel} completed as scheduled.`;
-          } else {
-            description = hasManyDays
-              ? `Scheduled for Day ${String(dNum).padStart(2, "0")} administration per protocol.`
-              : "Scheduled per treatment protocol.";
-          }
-        }
-
-        const status = (
-          specificCycleDay?.cycle_status ||
-          (dayCategory === "COMPLETED"
-            ? "COMPLETED"
-            : dayCategory === "CURRENT"
-            ? "IN_PROGRESS"
-            : "SCHEDULED")
-        ).toUpperCase();
-
-        items.push({
-          id: `cycle-${cNum}-day-${dNum}`,
-          cycle: cycleTitle,
-          date: dayDateStr,
-          description,
-          final: isFinalCard,
-          status,
-          category: dayCategory,
-          cycleNumber: cNum,
-          dayNumber: dNum,
-        });
-      }
-    }
-
-    return items;
+  const cycleDaysRange = (() => {
+    const dates = planCycleDays.map((row) => row.date).filter(Boolean).sort();
+    if (dates.length === 0) return "";
+    const first = fmtDate(dates[0]);
+    const last = fmtDate(dates[dates.length - 1]);
+    return first === last ? first : `${first} - ${last}`;
   })();
+  const plannedDayCount = planCycleDays.filter((row) => row.status !== "SKIPPED").length;
+  const completedDayCount = planCycleDays.filter((row) => row.status === "COMPLETED").length;
+
+  /* ================= Medication History: one cycle day at a time =================
+     Opens on the day in administration; the arrows step through the planned
+     days, then the next scheduled day ("not planned yet"). */
+  const historyDays = useCycleDaySheets(historyPlanId, planCycleDays);
+  const {
+    slots: historySlots,
+    slotIndex: historySlotIndex,
+    slot: historySlot,
+    sheets: daySheets,
+    sheetDay: historySheetDay,
+    loading: historySheetLoading,
+    error: historySheetError,
+  } = historyDays;
+  const historyMedicineRows = sheetMedicineRows(historyDays.sheet, historySheetDay).map((row) => ({
+    ...row,
+    infusion: [row.infusion, row.frequency, row.timing].filter(Boolean).join(" · "),
+  }));
+
+  const selectHistoryDay = (key: string, scroll = false) => {
+    historyDays.select(key);
+    if (scroll) {
+      document.getElementById("medication-history-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+  /* Timeline cards, newest cycle day at the top. */
+  const timelineItems = [...planCycleDays].reverse().map((row) => {
+    const sheet = daySheets[row.key];
+    const summary =
+      sheet?.day && sheet.day.cycle_number === row.cycle && sheet.day.cycle_day === row.day
+        ? sheet.day.summary
+        : null;
+    const counts = summary
+      ? [
+          summary.given ? `${summary.given} given` : "",
+          summary.pending ? `${summary.pending} pending` : "",
+          summary.skipped ? `${summary.skipped} skipped` : "",
+          summary.cancelled ? `${summary.cancelled} cancelled` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : "";
+    const adverseEvents = cycleDetails
+      .filter((detail) => detail.cycle_number === row.cycle)
+      .flatMap((detail) => (detail.chemotherapy_adverse_event ?? []) as ChemoAdverseEventEntry[])
+      .filter((event) => event.cycle_day === row.day)
+      .map((event) => {
+        const grade = event.ctcae_grade || event.reaction_grade || event.severity;
+        return `${event.adverse_event_name || "Adverse event"}${grade ? ` (Grade ${grade})` : ""}`;
+      });
+
+    let description: string;
+    switch (row.status) {
+      case "COMPLETED":
+        description = `Completed${row.order?.completed_at ? ` on ${fmtDate(row.order.completed_at)}` : ""}${counts ? ` — ${counts}` : "."}`;
+        break;
+      case "IN_ADMINISTRATION":
+        description = `Sent for administration${counts ? ` — ${counts}` : "; medicines are being given."}`;
+        break;
+      case "CURRENT":
+        description = "Ordered — awaiting administration.";
+        break;
+      case "UPCOMING":
+        description = plan?.regimen_name ? `Scheduled per the ${plan.regimen_name} protocol.` : "Scheduled per the treatment protocol.";
+        break;
+      default:
+        description = "Not planned — this cycle day was skipped.";
+    }
+    if (adverseEvents.length > 0) description += ` Adverse events: ${adverseEvents.join(", ")}.`;
+
+    const isFinal = row.key === planCycleDays[planCycleDays.length - 1]?.key;
+    return {
+      id: row.key,
+      row,
+      title: `CYCLE ${String(row.cycle).padStart(2, "0")} · DAY ${String(row.day).padStart(2, "0")}${isFinal ? " (FINAL)" : ""}`,
+      date: row.date
+        ? `${row.status === "SKIPPED" ? "Was due" : "Planned"} ${fmtDate(row.date)}`
+        : "",
+      description,
+    };
+  });
 
   /* Treatment Trend: the Investigation Results the Diagnosis tab saved on
      each visit, as one trend per number test, grouped per cancer type. */
@@ -1656,8 +1454,8 @@ const HistoryTab: React.FC<{
       <div className="p-6 grid lg:grid-cols-3 gap-6 bg-slate-50/50">
         {/* LEFT */}
         <div className="lg:col-span-2">
-          <div id="treatment-timeline-section" className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-            <div className="flex items-center justify-between mb-6">
+          <div id="treatment-timeline-section" className="bg-white border border-gray-200 rounded-xl p-5 sm:p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <div className="flex items-center gap-2">
                 <i className="fa-solid fa-chart-line text-blue-600" />
 
@@ -1667,12 +1465,31 @@ const HistoryTab: React.FC<{
               </div>
 
               <span className="text-[10px] font-medium text-gray-500">
-                {historyTimelineRange || "No treatment dates recorded"}
+                {cycleDaysRange || historyTimelineRange || "No treatment dates recorded"}
               </span>
             </div>
 
+            {/* Status legend + progress */}
+            {timelineItems.length > 0 && (
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                  {(Object.keys(DAY_STATUS_STYLE) as CycleDayStatus[]).map((status) => (
+                    <span key={status} className="inline-flex items-center gap-1.5 text-[10px] font-medium text-gray-600">
+                      <span className={`flex h-4 w-4 items-center justify-center rounded-full ring-2 ${DAY_STATUS_STYLE[status].node}`}>
+                        <i className={`${DAY_STATUS_STYLE[status].icon} text-[7px]`} />
+                      </span>
+                      {DAY_STATUS_STYLE[status].label}
+                    </span>
+                  ))}
+                </div>
+                <span className="text-[10px] font-semibold text-gray-700">
+                  {completedDayCount} of {plannedDayCount} planned day{plannedDayCount === 1 ? "" : "s"} completed
+                </span>
+              </div>
+            )}
+
             {/* Timeline */}
-            <div className="relative pl-4 space-y-4 max-h-[560px] overflow-y-auto pr-2" style={{ scrollbarWidth: "thin", scrollbarColor: "#2563eb #f1f5f9" }}>
+            <div className="relative pl-4 space-y-3 max-h-[560px] overflow-y-auto pr-2" style={{ scrollbarWidth: "thin", scrollbarColor: "#2563eb #f1f5f9" }}>
               {timelineItems.length > 0 && (
                 <div
                   aria-hidden="true"
@@ -1683,103 +1500,54 @@ const HistoryTab: React.FC<{
               {timelineItems.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-[10px] text-gray-500">
                   No chemotherapy cycles found for this patient yet. Save a
-                  Treatment Plan and record cycles to build the timeline.
+                  Treatment Plan and order a cycle day to build the timeline.
                 </div>
               ) : (
                 timelineItems.map((item) => {
-                  const isCompleted = item.category === "COMPLETED";
-                  const isCurrent = item.category === "CURRENT";
-                  const isUpcoming = item.category === "UPCOMING";
+                  const style = DAY_STATUS_STYLE[item.row.status];
+                  const clickable = Boolean(item.row.order);
+                  const selected = historySlot?.kind === "planned" && historySlot.row.key === item.row.key;
 
                   return (
-                    <div
-                      key={item.id}
-                      className="relative flex items-start"
-                    >
-                      {/* Node circle on the vertical line with status colors */}
+                    <div key={item.id} className="relative flex items-start">
+                      {/* Status node on the vertical line */}
                       <div
-                        className={`absolute left-[11px] top-3.5 w-5 h-5 rounded-full flex items-center justify-center ring-4 z-10 shadow-sm ${
-                          isCompleted
-                            ? "bg-emerald-600 ring-white"
-                            : isCurrent
-                            ? "bg-blue-600 ring-blue-100"
-                            : "bg-slate-300 ring-white"
-                        }`}
+                        className={`absolute left-[11px] top-3.5 z-10 flex h-5 w-5 items-center justify-center rounded-full shadow-sm ring-4 ${style.node}`}
                       >
-                        {isCompleted ? (
-                          <i className="fa-solid fa-check text-white text-[10px]" />
-                        ) : isCurrent ? (
-                          <i className="fa-solid fa-play text-white text-[10px] ml-0.5" />
-                        ) : (
-                          <i className="fa-regular fa-calendar text-slate-600 text-[10px]" />
-                        )}
+                        <i className={`${style.icon} text-[9px] ${item.row.status === "CURRENT" ? "ml-0.5" : ""}`} />
                       </div>
 
-                      {/* Clean timeline card matching design with green/blue/grey colors */}
                       <div
-                        className={`ml-8 w-full rounded-xl p-4 transition hover:shadow-sm ${
-                          isCompleted
-                            ? "bg-white border border-emerald-200"
-                            : isCurrent
-                            ? "bg-blue-50/60 border border-blue-200"
-                            : "bg-slate-50/60 border border-dashed border-slate-200"
-                        }`}
+                        role={clickable ? "button" : undefined}
+                        tabIndex={clickable ? 0 : undefined}
+                        title={clickable ? "Show this cycle day's medicines" : undefined}
+                        onClick={clickable ? () => selectHistoryDay(item.row.key, true) : undefined}
+                        onKeyDown={
+                          clickable
+                            ? (event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  selectHistoryDay(item.row.key, true);
+                                }
+                              }
+                            : undefined
+                        }
+                        className={`ml-8 w-full rounded-xl p-3.5 sm:p-4 transition ${style.card} ${
+                          clickable ? "cursor-pointer hover:shadow-md hover:-translate-y-px" : ""
+                        } ${selected ? "ring-2 ring-blue-300" : ""}`}
                       >
-                        <div className="flex justify-between items-center mb-1.5 flex-wrap gap-2">
-                          <div className="flex items-center gap-2">
-                            <h3
-                              className={`font-bold text-[10px] ${
-                                isCompleted
-                                  ? "text-emerald-900"
-                                  : isCurrent
-                                  ? "text-blue-700"
-                                  : "text-slate-600"
-                              }`}
-                            >
-                              {item.cycle}
-                            </h3>
-
-                            <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${
-                                isCompleted
-                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                  : isCurrent
-                                  ? "bg-blue-100 text-blue-700 border-blue-200"
-                                  : "bg-slate-100 text-slate-500 border-slate-200"
-                              }`}
-                            >
-                              {isCompleted
-                                ? "Completed"
-                                : isCurrent
-                                ? "Current"
-                                : "Upcoming"}
-                            </span>
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className={`font-bold text-[10px] ${style.title}`}>{item.title}</h3>
+                            <CycleDayStatusChip status={item.row.status} />
                           </div>
 
-                          <span
-                            className={`text-[10px] sm:text-[10px] font-medium ${
-                              isCurrent
-                                ? "text-blue-600 font-semibold"
-                                : isCompleted
-                                ? "text-gray-500"
-                                : "text-slate-400"
-                            }`}
-                          >
+                          <span className={`text-[10px] font-medium ${item.row.status === "CURRENT" || item.row.status === "IN_ADMINISTRATION" ? "font-semibold text-gray-800" : "text-gray-500"}`}>
                             {item.date || "—"}
                           </span>
                         </div>
 
-                        <p
-                          className={`text-[10px] sm:text-[10px] leading-relaxed ${
-                            isCompleted
-                              ? "text-gray-600"
-                              : isCurrent
-                              ? "text-gray-700 font-medium"
-                              : "text-slate-500"
-                          }`}
-                        >
-                          {item.description}
-                        </p>
+                        <p className={`text-[10px] leading-relaxed ${style.text}`}>{item.description}</p>
                       </div>
                     </div>
                   );
@@ -2367,27 +2135,27 @@ const HistoryTab: React.FC<{
             <table className="w-full text-[10px] text-left">
               <thead className="text-[10px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-6 py-3 font-semibold">
+                  <th className="px-6 py-3 text-[10px] font-semibold">
                     Cycle
                   </th>
 
-                  <th className="px-6 py-3 font-semibold">
+                  <th className="px-6 py-3 text-[10px] font-semibold">
                     Dates
                   </th>
 
-                  <th className="px-6 py-3 font-semibold">
+                  <th className="px-6 py-3 text-[10px] font-semibold">
                     Agent
                   </th>
 
-                  <th className="px-6 py-3 font-semibold">
+                  <th className="px-6 py-3 text-[10px] font-semibold">
                     Planned Dose
                   </th>
 
-                  <th className="px-6 py-3 font-semibold">
+                  <th className="px-6 py-3 text-[10px] font-semibold">
                     Actual Dose
                   </th>
 
-                  <th className="px-6 py-3 font-semibold text-right">
+                  <th className="px-6 py-3 text-[10px] font-semibold text-right">
                     Outcome
                   </th>
                 </tr>
@@ -2454,94 +2222,152 @@ const HistoryTab: React.FC<{
         </div>
       </section>
 
-      {/* MEDICATION HISTORY */}
-      <section className="px-6 pb-6">
+      {/* MEDICATION HISTORY - one planned cycle day at a time */}
+      <section className="px-6 pb-6" id="medication-history-section">
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-          <div className="flex justify-between items-center p-5 border-b border-gray-200 bg-gray-50/50">
-            <h2 className="text-[10px] font-bold text-gray-900">
-              Medication History
-            </h2>
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 sm:p-5 border-b border-gray-200 bg-gray-50/50">
+            <div className="min-w-0">
+              <h2 className="text-[10px] font-bold text-gray-900">Medication History</h2>
+              <p className="mt-0.5 text-[10px] text-gray-500">
+                Medicines planned and given for each cycle day
+              </p>
+            </div>
+
+            {/* Cycle / day filter: previous, jump list, next */}
+            <CycleDayPicker
+              slots={historySlots}
+              slotIndex={historySlotIndex}
+              slot={historySlot}
+              onSelect={(key) => selectHistoryDay(key)}
+            />
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-[10px] text-left">
-              <thead className="text-[10px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
+          {/* Selected day summary */}
+          {historySlot?.kind === "planned" && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-gray-100 px-4 sm:px-5 py-2.5 text-[10px]">
+              <span className="font-bold text-gray-900">{cycleDayLabel(historySlot.row.cycle, historySlot.row.day)}</span>
+              <CycleDayStatusChip status={historySlot.row.status} />
+              <span className="text-gray-500">
+                {fmtDate(historySheetDay?.treatment_date || historySlot.row.date)}
+              </span>
+              {historySlot.row.status === "COMPLETED" && historySlot.row.order?.completed_at && (
+                <span className="text-gray-500">Completed {fmtDate(historySlot.row.order.completed_at)}</span>
+              )}
+              {historySheetDay && historySheetDay.summary.total > 0 && (
+                <span className="flex flex-wrap gap-x-3 font-semibold">
+                  <span className="text-emerald-700">{historySheetDay.summary.given} given</span>
+                  <span className="text-amber-700">{historySheetDay.summary.pending} pending</span>
+                  {historySheetDay.summary.skipped > 0 && (
+                    <span className="text-slate-600">{historySheetDay.summary.skipped} skipped</span>
+                  )}
+                  {historySheetDay.summary.cancelled > 0 && (
+                    <span className="text-red-600">{historySheetDay.summary.cancelled} cancelled</span>
+                  )}
+                </span>
+              )}
+              {historySheetDay?.administered_by?.length ? (
+                <span className="text-gray-500">By {historySheetDay.administered_by.join(", ")}</span>
+              ) : null}
+            </div>
+          )}
+
+          <div className="max-h-[460px] overflow-auto">
+            <table className="w-full min-w-[760px] text-[10px] text-left">
+              <thead className="sticky top-0 z-10 text-[10px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-6 py-3 font-semibold">
-                    Medication
-                  </th>
-
-                  <th className="px-6 py-3 font-semibold">
-                    Start Date
-                  </th>
-
-                  <th className="px-6 py-3 font-semibold">
-                    End Date
-                  </th>
-
-                  <th className="px-6 py-3 font-semibold">
-                    Dosage
-                  </th>
-
-                  <th className="px-6 py-3 font-semibold">
-                    Route
-                  </th>
-
-                  <th className="px-6 py-3 font-semibold text-right">
-                    Status
-                  </th>
+                  <th className="px-4 sm:px-5 py-3 font-semibold">Medicine</th>
+                  <th className="px-4 py-3 font-semibold">Dose</th>
+                  <th className="px-4 py-3 font-semibold">Patient Dose</th>
+                  <th className="px-4 py-3 font-semibold">Route</th>
+                  <th className="px-4 py-3 font-semibold">Infusion / Timing</th>
+                  <th className="px-4 py-3 font-semibold">Given By / At</th>
+                  <th className="px-4 sm:px-5 py-3 font-semibold text-right">Status</th>
                 </tr>
               </thead>
 
               <tbody className="divide-y divide-gray-100">
-                {medicationRows.length === 0 ? (
+                {historySlots.length === 0 ? (
                   <tr>
-                    <td
-                      colSpan={6}
-                      className="px-6 py-6 text-center text-[10px] text-gray-400"
-                    >
-                      No medications prescribed for this patient yet.
+                    <td colSpan={7} className="px-6 py-8 text-center text-[10px] text-gray-400">
+                      No chemotherapy cycle days are planned for this patient yet.
+                    </td>
+                  </tr>
+                ) : historySlot?.kind === "unplanned" ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-8 text-center">
+                      <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-[10px] text-gray-500">
+                        <i className="fa-regular fa-calendar text-lg text-slate-300" />
+                        <p>
+                          <span className="font-semibold text-gray-700">
+                            {cycleDayLabel(historySlot.row.cycle, historySlot.row.day)}
+                          </span>{" "}
+                          is not planned yet. Its medicines will appear here once the doctor orders it in the
+                          Chemotherapy Order{historySlot.row.date ? ` (scheduled for ${fmtDate(historySlot.row.date)})` : ""}.
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+                ) : historySlot?.kind === "end" ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-8 text-center">
+                      <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-[10px] text-gray-500">
+                        <i className="fa-solid fa-flag-checkered text-lg text-emerald-400" />
+                        <p>
+                          No further cycle day is planned
+                          {historySlot.last
+                            ? ` - the treatment course ends with ${cycleDayLabel(historySlot.last.cycle, historySlot.last.day)}.`
+                            : "."}
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+                ) : historySheetLoading ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-8 text-center text-[10px] text-gray-500">
+                      <i className="fa-solid fa-circle-notch fa-spin mr-2" />
+                      Loading the cycle day's medicines...
+                    </td>
+                  </tr>
+                ) : historySheetError ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-8 text-center text-[10px] text-red-600">
+                      {historySheetError}
+                    </td>
+                  </tr>
+                ) : historyMedicineRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-8 text-center text-[10px] text-gray-400">
+                      No medicines were ordered for this cycle day.
                     </td>
                   </tr>
                 ) : (
-                  medicationRows.map((medication) => (
-                    <tr
-                      key={medication.medication}
-                      className="hover:bg-gray-50"
-                    >
-                      <td className="px-6 py-4 font-medium text-gray-900">
-                        {medication.medication}
-                      </td>
-
-                      <td className="px-6 py-4 text-gray-500">
-                        {medication.start || "—"}
-                      </td>
-
-                      <td className="px-6 py-4 text-gray-500">
-                        {medication.end}
-                      </td>
-
-                      <td className="px-6 py-4 text-gray-700">
-                        {medication.dosage}
-                      </td>
-
-                      <td className="px-6 py-4 text-gray-700">
-                        {medication.route}
-                      </td>
-
-                      <td className="px-6 py-4 text-right">
-                        {medication.active ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800">
-                            ACTIVE
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-800">
-                            COMPLETED
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
+                  historyMedicineRows.map((row) => {
+                    const role = MED_ROLE_BADGE[row.role];
+                    return (
+                      <tr key={row.id} className="align-top transition-colors hover:bg-gray-50">
+                        <td className="px-4 sm:px-5 py-3">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-semibold text-gray-900">{row.name}</span>
+                            {role && (
+                              <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase ${role.className}`}>
+                                {role.label}
+                              </span>
+                            )}
+                          </div>
+                          {row.detail && <p className="mt-0.5 text-[10px] text-gray-500">{row.detail}</p>}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-gray-700">{row.dose || "—"}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-gray-700">{row.patientDose || "—"}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-gray-700">{row.route || "—"}</td>
+                        <td className="px-4 py-3 text-gray-700">{row.infusion || "—"}</td>
+                        <td className="px-4 py-3 text-gray-500">{row.givenBy || "—"}</td>
+                        <td className="px-4 sm:px-5 py-3 text-right">
+                          <MedicineStatusBadge status={row.status} />
+                          {row.reason && <p className="mt-1 text-[10px] text-gray-500">{row.reason}</p>}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -2562,27 +2388,27 @@ const HistoryTab: React.FC<{
             <table className="w-full text-[10px] text-left">
               <thead className="text-[10px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-6 py-3 font-semibold">
+                  <th className="px-6 py-3 text-[10px] font-semibold">
                     Date
                   </th>
 
-                  <th className="px-6 py-3 font-semibold whitespace-nowrap">
+                  <th className="px-6 py-3 text-[10px] font-semibold whitespace-nowrap">
                     Cycle / Day
                   </th>
 
-                  <th className="px-6 py-3 font-semibold">
+                  <th className="px-6 py-3 text-[10px] font-semibold">
                     Event
                   </th>
 
-                  <th className="px-6 py-3 font-semibold">
+                  <th className="px-6 py-3 text-[10px] font-semibold">
                     Grade
                   </th>
 
-                  <th className="px-6 py-3 font-semibold">
+                  <th className="px-6 py-3 text-[10px] font-semibold">
                     Action Taken
                   </th>
 
-                  <th className="px-6 py-3 font-semibold text-right">
+                  <th className="px-6 py-3 text-[10px] font-semibold text-right">
                     Outcome
                   </th>
                 </tr>

@@ -11,6 +11,7 @@ import {
 import { activeBranches } from "../../lib/utils";
 import { encounterApi } from "../../api/encounter.api";
 import { ipdApi } from "../../api/ipd.api";
+import { chemotherapyApi } from "../../api/chemotherapy.api";
 import { getUser } from "../../utils/token";
 import { useToast } from "@/hooks/use-toast";
 import { BellNotificationButton } from "@/components/hms/BellNotificationButton";
@@ -66,7 +67,8 @@ function Icon({
     | "users"
     | "appointments"
     | "cancel"
-    | "trend";
+    | "trend"
+    | "bed";
   className?: string;
 }) {
   const common = {
@@ -149,10 +151,59 @@ function Icon({
     );
   }
 
+  if (name === "bed") {
+    return (
+      <svg {...common}>
+        <path d="M2 4v16" />
+        <path d="M2 8h18a2 2 0 0 1 2 2v10" />
+        <path d="M2 17h20" />
+        <path d="M6 8v9" />
+        <circle cx="10" cy="12" r="1.5" />
+      </svg>
+    );
+  }
+
   return (
     <svg {...common}>
       <polyline points="6 9 12 15 18 9" />
     </svg>
+  );
+}
+
+/* One KPI tile: label, big value, icon chip and a one-line context footer. */
+function KpiCard({
+  label,
+  value,
+  icon,
+  tone,
+  footer,
+  loading,
+}: {
+  label: string;
+  value: number;
+  icon: React.ComponentProps<typeof Icon>["name"];
+  /* Icon chip colours. */
+  tone: string;
+  footer: string;
+  loading: boolean;
+}) {
+  return (
+    <article className="flex min-h-[128px] min-w-0 flex-col justify-between gap-3 rounded-xl border border-[#e1e4ec] bg-white p-5 shadow-[0_1px_2px_rgba(16,24,40,0.04)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_10px_24px_-12px_rgba(16,24,40,0.18)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase leading-4 tracking-[0.6px] text-[#5b5f6e]">
+            {label}
+          </p>
+          <p className="mt-1.5 text-[28px] font-semibold leading-8 tracking-[-0.4px] text-[#191c1e] tabular-nums">
+            {loading ? "—" : value}
+          </p>
+        </div>
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${tone}`}>
+          <Icon name={icon} />
+        </div>
+      </div>
+      <p className="text-xs font-medium leading-4 text-[#5b5f6e]">{loading ? "—" : footer}</p>
+    </article>
   );
 }
 
@@ -265,6 +316,11 @@ export default function DoctorDashboard() {
   const [totalAppointments, setTotalAppointments] = useState(0);
   const [cancelledAppointments, setCancelledAppointments] = useState(0);
   const [totalPatientsToday, setTotalPatientsToday] = useState(0);
+  /* Today's appointments by status, for the KPI footers. */
+  const [statusBreakdown, setStatusBreakdown] = useState({ pending: 0, inConsultation: 0, completed: 0, noShow: 0 });
+  /* Admitted inpatients under this doctor, and those whose admission
+     encounter is open (counted as checked in). */
+  const [inpatientStats, setInpatientStats] = useState({ total: 0, withEncounter: 0, checkedIn: 0 });
   const [doctorEmployeeId, setDoctorEmployeeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [branchLoading, setBranchLoading] = useState(false);
@@ -314,6 +370,46 @@ export default function DoctorDashboard() {
     }
   };
 
+  /* Proceed: opens the consultation - straight on the Chemotherapy Order
+     step when the patient has a chemo plan in progress (PLANNED / ACTIVE);
+     the other steps stay reachable from there. */
+  const [proceedingKey, setProceedingKey] = useState<string | null>(null);
+  const handleProceed = async (appointment: Appointment) => {
+    const key = appointment.appointmentId || appointment.encounterNo || "";
+    if (proceedingKey) return;
+    setProceedingKey(key);
+    let initialStep: string | undefined;
+    try {
+      const response = await chemotherapyApi.getLatestPlanForPatient(appointment.patientId);
+      const status = String(response.data?.data?.treatment_status ?? "").toUpperCase();
+      if (status === "PLANNED" || status === "ACTIVE") initialStep = "CHEMOTHERAPY ORDER";
+    } catch {
+      // No plan (or not reachable): open the consultation as usual.
+    } finally {
+      setProceedingKey(null);
+    }
+    navigate("/doctor/patient-consultation", {
+      state: {
+        patientId: appointment.patientId,
+        appointmentId: appointment.appointmentId,
+        branchId:
+          selectedBranchId ||
+          getActiveBranchId() ||
+          doctor?.branches?.find((b) => b.status === undefined || b.status === 1)?.branch_id ||
+          undefined,
+        appointmentDate: appointment.appointmentDate,
+        appointmentTime: appointment.appointmentTime,
+        consultedBy: doctorName,
+        visit_type: appointment.visit_type,
+        ...(initialStep ? { initialStep } : {}),
+        // Inpatient row: open on the admission's encounter.
+        ...(appointment.encounterNo
+          ? { appointmentId: undefined, encounterNo: appointment.encounterNo }
+          : {}),
+      },
+    });
+  };
+
   const periodRef = useRef<HTMLDivElement>(null);
   const hospitalRef = useRef<HTMLDivElement>(null);
 
@@ -329,6 +425,8 @@ export default function DoctorDashboard() {
         setTotalAppointments(0);
         setCancelledAppointments(0);
         setTotalPatientsToday(0);
+        setStatusBreakdown({ pending: 0, inConsultation: 0, completed: 0, noShow: 0 });
+        setInpatientStats({ total: 0, withEncounter: 0, checkedIn: 0 });
       }
       setDashboardError("");
 
@@ -342,7 +440,10 @@ export default function DoctorDashboard() {
 
       setDoctorEmployeeId(employeeId);
 
-      const today = new Date().toISOString().slice(0, 10);
+      // Today's local (IST) date - toISOString() gives the UTC date, which
+      // is still yesterday before 05:30 IST.
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
       const employeeResponse = await doctorDashboardApi.getDoctor(employeeId);
       const employeeData = employeeResponse.data.data;
 
@@ -383,7 +484,7 @@ export default function DoctorDashboard() {
           branchId,
           date: today,
           page: 1,
-          limit: 10,
+          limit: 100,
         }),
         doctorDashboardApi.getAppointments({
           employeeId,
@@ -402,6 +503,15 @@ export default function DoctorDashboard() {
       setTotalAppointments(appointmentsResponse.data.data.total);
       setCancelledAppointments(cancelledResponse.data.data.total);
       setTotalPatientsToday(checkedInResponse.data.data.totalPatients);
+      const todayStatuses = appointmentsResponse.data.data.appointments.map((item) =>
+        String(item.status ?? "").toUpperCase()
+      );
+      setStatusBreakdown({
+        pending: todayStatuses.filter((status) => ["SCHEDULED", "RESCHEDULED", "CHECKED_IN"].includes(status)).length,
+        inConsultation: todayStatuses.filter((status) => status === "IN_CONSULTATION").length,
+        completed: todayStatuses.filter((status) => status === "COMPLETED").length,
+        noShow: todayStatuses.filter((status) => status === "NO_SHOW").length,
+      });
 
       const mappedAppointments = appointmentsResponse.data.data.appointments
         .map(
@@ -463,8 +573,29 @@ export default function DoctorDashboard() {
           status: "ADMITTED",
           limit: 100,
         });
-        inpatientRows = (admissionsResponse.data?.data?.admissions ?? [])
-          .filter((a) => a.employee_id === employeeId && a.encounter_no)
+        const myAdmissions = (admissionsResponse.data?.data?.admissions ?? []).filter(
+          (a) => a.employee_id === employeeId
+        );
+        /* Inpatients with an admission encounter count as checked in -
+           unless already counted through today's checked-in appointments. */
+        const checkedInOpd = new Set(
+          appointmentsResponse.data.data.appointments
+            .filter((item) =>
+              ["CHECKED_IN", "IN_CONSULTATION", "COMPLETED"].includes(String(item.status ?? "").toUpperCase())
+            )
+            .map((item) => item.patient_bio_data?.patient_id)
+            .filter(Boolean)
+        );
+        const withEncounter = new Set(
+          myAdmissions.filter((a) => a.encounter_no).map((a) => a.patient_id)
+        );
+        setInpatientStats({
+          total: new Set(myAdmissions.map((a) => a.patient_id)).size,
+          withEncounter: withEncounter.size,
+          checkedIn: [...withEncounter].filter((id) => !checkedInOpd.has(id)).length,
+        });
+        inpatientRows = myAdmissions
+          .filter((a) => a.encounter_no)
           .map((a) => ({
             patientId: a.patient_id,
             patient:
@@ -603,11 +734,11 @@ export default function DoctorDashboard() {
   });
 
   return (
-    <main className="min-h-screen w-full bg-white font-['Inter',sans-serif] text-[#181c1e]">
-      <div className="mx-auto w-full max-w-[1120px] px-8 py-8 max-[1100px]:max-w-full max-[1100px]:px-6 max-[700px]:px-4 max-[700px]:py-5">
+    <main className="min-h-screen w-full bg-[#f7f9fb] font-['Inter',sans-serif] text-[#181c1e]">
+      <div className="mx-auto w-full max-w-[1280px] px-8 py-7 max-[1100px]:max-w-full max-[1100px]:px-6 max-[700px]:px-4 max-[700px]:py-5">
 
         {/* Header */}
-        <header className="mb-8 flex items-center justify-between max-[700px]:items-start">
+        <header className="mb-6 flex flex-wrap items-center justify-between gap-4 max-[700px]:items-start">
           <div className="flex flex-col gap-2">
             <h1 className="font-['Manrope',sans-serif] text-[28px] font-bold leading-[34px] tracking-[-0.56px] text-[#191c1e] max-[700px]:text-2xl max-[700px]:leading-8">
               Welcome back, {doctorName}
@@ -662,27 +793,25 @@ export default function DoctorDashboard() {
         {/* Branch Loading Skeleton */}
         {branchLoading && (
           <div className="mb-6 animate-fade-in">
-            <div className="grid grid-cols-[minmax(0,1fr)_336px] items-start gap-6 max-[900px]:grid-cols-1">
+            <div className="grid grid-cols-[minmax(0,1fr)_320px] items-start gap-6 max-[1024px]:grid-cols-1">
               {/* Left column skeleton */}
               <section className="min-w-0">
-                <div className="mb-[34px] grid h-[142px] grid-cols-3 gap-6 max-[700px]:h-auto max-[700px]:grid-cols-1">
-                  {[1, 2, 3].map((i) => (
-                    <article key={i} className="flex min-w-0 flex-col justify-between rounded-xl border border-[#c3c6d6] bg-white p-[21px] shadow-[0_4px_6px_rgba(0,0,0,0.05)] max-[700px]:min-h-[142px] animate-pulse">
-                      <div className="flex items-start justify-between gap-2.5">
-                        <div className="flex flex-col gap-1">
-                          <div className="h-4 w-3/4 bg-slate-200 rounded" />
-                          <div className="h-8 w-1/2 bg-slate-200 rounded" />
+                <div className="-mx-1 mb-5 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-smooth px-1 pb-2 pt-1 [scrollbar-width:thin] [&>*]:min-w-[200px] [&>*]:flex-[0_0_calc((100%-2rem)/3)] [&>*]:snap-start max-[700px]:[&>*]:flex-[0_0_80%]">
+                  {[1, 2, 3, 4].map((i) => (
+                    <article key={i} className="flex min-h-[128px] min-w-0 flex-col justify-between gap-3 rounded-xl border border-[#e1e4ec] bg-white p-5 animate-pulse">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex w-full flex-col gap-2">
+                          <div className="h-3 w-3/4 rounded bg-slate-200" />
+                          <div className="h-7 w-1/3 rounded bg-slate-200" />
                         </div>
                         <div className="h-10 w-10 shrink-0 rounded-lg bg-slate-200" />
                       </div>
-                      <div className="pt-4">
-                        <div className="h-2 w-3/4 bg-slate-200 rounded-full" />
-                      </div>
+                      <div className="h-3 w-2/3 rounded bg-slate-200" />
                     </article>
                   ))}
                 </div>
 
-                <section className="mb-[29px] h-[293px] overflow-hidden rounded-lg border border-[#c3c6d6] bg-white max-[700px]:overflow-x-auto animate-pulse">
+                <section className="mb-6 h-[293px] overflow-hidden rounded-xl border border-[#e1e4ec] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)] animate-pulse">
                   <div className="h-[54px] border-b border-[#c3c6d6] bg-slate-50" />
                   <div className="p-4 space-y-3">
                     {[1, 2, 3, 4].map((i) => (
@@ -691,7 +820,7 @@ export default function DoctorDashboard() {
                   </div>
                 </section>
 
-                <section className="h-[370px] rounded-xl border border-[#c3c6d6] bg-white p-[25px] shadow-[0_4px_6px_rgba(0,0,0,0.05)] animate-pulse">
+                <section className="h-[370px] rounded-xl border border-[#e1e4ec] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)] p-6 animate-pulse">
                   <div className="h-6 w-1/3 bg-slate-200 rounded mb-4" />
                   <div className="h-4 w-1/2 bg-slate-200 rounded mb-6" />
                   <div className="h-200 bg-slate-200 rounded" />
@@ -699,8 +828,8 @@ export default function DoctorDashboard() {
               </section>
 
               {/* Right column skeleton */}
-              <aside className="min-w-0 max-[900px]:grid max-[900px]:grid-cols-2 max-[900px]:gap-6 max-[700px]:grid-cols-1">
-                <section className="mb-6 overflow-hidden rounded border border-slate-200 bg-white shadow-[0_1px_1.5px_rgba(0,0,0,0.1),0_1px_1px_rgba(0,0,0,0.06)] max-[900px]:mb-0 animate-pulse">
+              <aside className="min-w-0 max-[1024px]:grid max-[1024px]:grid-cols-2 max-[1024px]:items-start max-[1024px]:gap-6 max-[700px]:grid-cols-1">
+                <section className="mb-6 overflow-hidden rounded-xl border border-[#e1e4ec] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)] max-[1024px]:mb-0 animate-pulse">
                   <div className="h-[50px] border-b border-slate-100 bg-slate-50" />
                   <div className="p-5 space-y-3">
                     {[1, 2, 3, 4, 5, 6, 7].map((i) => (
@@ -712,7 +841,7 @@ export default function DoctorDashboard() {
                   </div>
                 </section>
 
-                <section className="h-[370px] rounded-xl border border-[#c3c6d6] bg-white p-[25px] shadow-[0_4px_6px_rgba(0,0,0,0.05)] animate-pulse">
+                <section className="h-[370px] rounded-xl border border-[#e1e4ec] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)] p-6 animate-pulse">
                   <div className="h-6 w-1/4 bg-slate-200 rounded mb-4" />
                   <div className="space-y-4">
                     {[1, 2, 3].map((i) => (
@@ -727,92 +856,56 @@ export default function DoctorDashboard() {
 
         {/* Main Content - Hidden during branch loading */}
         {!branchLoading && (
-          <div className="grid grid-cols-[minmax(0,1fr)_336px] items-start gap-6 max-[900px]:grid-cols-1">
+          <div className="grid grid-cols-[minmax(0,1fr)_320px] items-start gap-6 max-[1024px]:grid-cols-1">
             {/* Left column */}
             <section className="min-w-0">
-            {/* Metrics */}
-            <div className="mb-[34px] grid h-[142px] grid-cols-3 gap-6 max-[700px]:h-auto max-[700px]:grid-cols-1">
-
-              <article className="flex min-w-0 flex-col justify-between rounded-xl border border-[#c3c6d6] bg-white p-[21px] shadow-[0_4px_6px_rgba(0,0,0,0.05)] max-[700px]:min-h-[142px]">
-                <div className="flex items-start justify-between gap-2.5">
-                  <div className="flex flex-col gap-1">
-                    <div className="text-xs font-medium uppercase leading-4 tracking-[0.6px] text-[#434654]">
-                      Total
-                      <br />
-                      Appointments
-                    </div>
-
-                    <div className="text-2xl font-semibold leading-8 tracking-[-0.24px]">
-                      {loading ? "—" : totalAppointments}
-                    </div>
-                  </div>
-
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#003d9b]/10 text-[#003d9b]">
-                    <Icon name="appointments" />
-                  </div>
-                </div>
-
-                <div className="pt-4">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-[5px] flex-1 items-end gap-0.5 overflow-hidden rounded-full">
-                      <span className="h-1 flex-1 rounded-[1px] bg-[#003d9b]" />
-                      <span className="h-[5px] flex-1 rounded-[1px] bg-[#003d9b]" />
-                      <span className="h-[6px] flex-1 rounded-[1px] bg-[#003d9b]" />
-                      <span className="h-[7px] flex-1 rounded-[1px] bg-[#003d9b]" />
-                      <span className="h-[6px] flex-1 rounded-[1px] bg-[#003d9b]" />
-                    </div>
-
-                    <span className="whitespace-nowrap text-xs font-bold text-[#003d9b]">
-                      +12%
-                    </span>
-                  </div>
-                </div>
-              </article>
-
-              <article className="flex min-w-0 flex-col justify-between rounded-xl border border-[#c3c6d6] bg-white p-[21px] shadow-[0_4px_6px_rgba(0,0,0,0.05)] max-[700px]:min-h-[142px]">
-                <div className="flex items-start justify-between gap-2.5">
-                  <div className="flex flex-col gap-1">
-                    <div className="text-xs font-medium uppercase leading-4 tracking-[0.6px] text-[#434654]">
-                      Patients Checked In
-                    </div>
-
-                    <div className="text-2xl font-semibold leading-8 tracking-[-0.24px]">
-                      {loading ? "—" : totalPatientsToday}
-                    </div>
-                  </div>
-
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-green-500/10 text-green-600">
-                    <Icon name="users" />
-                  </div>
-                </div>
-              </article>
-
-              <article className="flex min-w-0 flex-col justify-between rounded-xl border border-[#c3c6d6] bg-white p-[21px] shadow-[0_4px_6px_rgba(0,0,0,0.05)] max-[700px]:min-h-[142px]">
-                <div className="flex items-start justify-between gap-2.5">
-                  <div className="flex flex-col gap-1">
-                    <div className="text-xs font-medium uppercase leading-4 tracking-[0.6px] text-[#434654]">
-                      Cancelled
-                    </div>
-
-                    <div className="text-2xl font-semibold leading-8 tracking-[-0.24px]">
-                      {loading ? "—" : cancelledAppointments}
-                    </div>
-                  </div>
-
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-red-600/10 text-red-700">
-                    <Icon name="cancel" />
-                  </div>
-                </div>
-
-                <div className="pt-4 text-xs font-medium leading-4 text-[#434654]">
-                  12 slots remaining today
-                </div>
-              </article>
+            {/* Metrics - fits as many columns as the width allows (4 / 2 / 1) */}
+            <div className="-mx-1 mb-5 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-smooth px-1 pb-2 pt-1 [scrollbar-width:thin] [&>*]:min-w-[200px] [&>*]:flex-[0_0_calc((100%-2rem)/3)] [&>*]:snap-start max-[700px]:[&>*]:flex-[0_0_80%]">
+              <KpiCard
+                label="Total Appointments"
+                value={totalAppointments}
+                icon="appointments"
+                tone="bg-[#003d9b]/10 text-[#003d9b]"
+                loading={loading}
+                footer={`${statusBreakdown.pending} waiting · ${statusBreakdown.inConsultation} in consultation · ${statusBreakdown.completed} done${statusBreakdown.noShow ? ` · ${statusBreakdown.noShow} no-show` : ""}`}
+              />
+              <KpiCard
+                label="Patients Checked In"
+                value={totalPatientsToday + inpatientStats.checkedIn}
+                icon="users"
+                tone="bg-green-500/10 text-green-600"
+                loading={loading}
+                footer={`${totalPatientsToday} OP · ${inpatientStats.checkedIn} IP · of ${Math.max(totalAppointments - cancelledAppointments, 0)} active appointments`}
+              />
+              <KpiCard
+                label="Total Inpatients"
+                value={inpatientStats.total}
+                icon="bed"
+                tone="bg-violet-500/10 text-violet-600"
+                loading={loading}
+                footer={
+                  inpatientStats.total > 0
+                    ? `${inpatientStats.withEncounter} with encounter · ${inpatientStats.total - inpatientStats.withEncounter} awaiting`
+                    : "No inpatients admitted under you"
+                }
+              />
+              <KpiCard
+                label="Cancelled"
+                value={cancelledAppointments}
+                icon="cancel"
+                tone="bg-red-600/10 text-red-700"
+                loading={loading}
+                footer={
+                  cancelledAppointments > 0 && totalAppointments > 0
+                    ? `${Math.round((cancelledAppointments / totalAppointments) * 100)}% of today's appointments`
+                    : "No cancellations today"
+                }
+              />
             </div>
 
             {/* Appointments */}
-            <section className="mb-[29px] rounded-lg border border-[#c3c6d6] bg-white">
-              <div className="flex h-[54px] items-center justify-between border-b border-[#c3c6d6] px-4 sticky top-0 bg-white z-10">
+            <section className="mb-6 overflow-hidden rounded-xl border border-[#e1e4ec] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)]">
+              <div className="flex h-[54px] items-center justify-between border-b border-[#e1e4ec] bg-white px-5">
                 <h2 className="font-['Manrope',sans-serif] text-lg font-bold leading-6 text-[#191c1e]">
                   Today's Appointments
                 </h2>
@@ -825,9 +918,9 @@ export default function DoctorDashboard() {
                 </div>
               )}
 
-              <div className="overflow-y-auto max-h-[240px]">
+              <div className="max-h-[320px] overflow-auto">
                 <table className="w-full table-fixed border-collapse max-[700px]:min-w-[650px]">
-                <thead className="bg-slate-50">
+                <thead className="sticky top-0 z-10 bg-slate-50">
                   <tr>
                     <th className="w-[28%] border-b border-slate-200 px-5 py-3 text-left font-['Manrope',sans-serif] text-xs font-bold leading-4 text-slate-500">
                       Patient
@@ -857,23 +950,7 @@ export default function DoctorDashboard() {
                     return (
                     <tr
                       key={`${appointment.patient}-${appointment.dateTime}`}
-                      onClick={(appointment.originalStatus === "IN_CONSULTATION")?(                  () =>
-                        navigate("/doctor/patient-consultation", {
-                          state: {
-                            patientId: appointment.patientId,
-                            appointmentId: appointment.appointmentId,
-                            branchId:
-                              selectedBranchId ||
-                              getActiveBranchId() ||
-                              doctor?.branches?.find(
-                                (b) => b.status === undefined || b.status === 1
-                              )?.branch_id ||
-                              undefined,
-                            appointmentDate: appointment.appointmentDate,
-                            appointmentTime: appointment.appointmentTime,
-                            consultedBy: doctorName,
-                          },
-                        })):undefined}
+                      onClick={appointment.originalStatus === "IN_CONSULTATION" ? () => void handleProceed(appointment) : undefined}
                       className={`relative cursor-pointer transition hover:bg-slate-50`}
                     >
                       <td className="h-[50px] border-b border-slate-100 px-5 py-2 text-xs text-slate-600 relative">
@@ -959,32 +1036,14 @@ export default function DoctorDashboard() {
                         {((appointment.originalStatus === "IN_CONSULTATION" || appointment.originalStatus==="CHECKED_IN") || appointment.hasEncounter) && (
                           <button
                             type="button"
-                            className="inline-flex items-center justify-center px-2 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors"
-                                                 onClick={() =>
-                        navigate("/doctor/patient-consultation", {
-                          state: {
-                            patientId: appointment.patientId,
-                            appointmentId: appointment.appointmentId,
-                            branchId:
-                              selectedBranchId ||
-                              getActiveBranchId() ||
-                              doctor?.branches?.find(
-                                (b) => b.status === undefined || b.status === 1
-                              )?.branch_id ||
-                              undefined,
-                            appointmentDate: appointment.appointmentDate,
-                            appointmentTime: appointment.appointmentTime,
-                            consultedBy: doctorName,
-                            visit_type:appointment.visit_type,
-                            // Inpatient row: open on the admission's encounter.
-                            ...(appointment.encounterNo
-                              ? { appointmentId: undefined, encounterNo: appointment.encounterNo }
-                              : {}),
-                          },
-                        })
-                      }
+                            disabled={proceedingKey === (appointment.appointmentId || appointment.encounterNo)}
+                            className="inline-flex items-center justify-center px-2 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-wait"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleProceed(appointment);
+                            }}
                           >
-                            Proceed
+                            {proceedingKey === (appointment.appointmentId || appointment.encounterNo) ? "Opening..." : "Proceed"}
                           </button>
                         )}
                       </td>
@@ -997,7 +1056,7 @@ export default function DoctorDashboard() {
             </section>
 
             {/* Trends */}
-            <section className="h-[370px] rounded-xl border border-[#c3c6d6] bg-white p-[25px] shadow-[0_4px_6px_rgba(0,0,0,0.05)]">
+            <section className="h-[370px] rounded-xl border border-[#e1e4ec] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)] p-6">
               <div className="mb-6 flex items-center justify-between max-[700px]:flex-col max-[700px]:items-start max-[700px]:gap-4">
                 <div>
                   <h2 className="text-lg font-semibold leading-6 text-[#181c1e]">
@@ -1092,10 +1151,10 @@ export default function DoctorDashboard() {
           </section>
 
           {/* Right column */}
-          <aside className="min-w-0 max-[900px]:grid max-[900px]:grid-cols-2 max-[900px]:gap-6 max-[700px]:grid-cols-1">
+          <aside className="min-w-0 max-[1024px]:grid max-[1024px]:grid-cols-2 max-[1024px]:items-start max-[1024px]:gap-6 max-[700px]:grid-cols-1">
 
             {/* Availability */}
-            <section className="mb-6 overflow-hidden rounded border border-slate-200 bg-white shadow-[0_1px_1.5px_rgba(0,0,0,0.1),0_1px_1px_rgba(0,0,0,0.06)] max-[900px]:mb-0">
+            <section className="mb-6 overflow-hidden rounded-xl border border-[#e1e4ec] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)] max-[1024px]:mb-0">
               <div className="flex items-center justify-between gap-4 border-b border-slate-100 p-5">
                 <h2 className="text-lg font-bold leading-7 text-slate-900">
                   Availability
@@ -1189,7 +1248,7 @@ export default function DoctorDashboard() {
             </section>
 
             {/* Feedback */}
-            <section className="h-[370px] rounded-xl border border-[#c3c6d6] bg-white p-[25px] shadow-[0_4px_6px_rgba(0,0,0,0.05)]">
+            <section className="h-[370px] rounded-xl border border-[#e1e4ec] bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)] p-6">
               <h2 className="mb-4 text-lg font-semibold leading-6 text-[#181c1e]">
                 Patient Feedback
               </h2>

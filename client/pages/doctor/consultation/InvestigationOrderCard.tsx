@@ -9,24 +9,37 @@ import {
 } from "../../../components/ui/select";
 import { targetDateError } from "./helpers";
 import DateInputField from "./DateInputField";
-import type { InvestigationOrderDetail, InvestigationPriority } from "./types";
+import type {
+  InvestigationMethod,
+  InvestigationOrderDetail,
+  InvestigationPriority,
+} from "./types";
 
 /* ============================================================
    INVESTIGATION ORDER CARD
    One selected investigation in the Consultation step: clinical
-   notes, Priority and Target Date. Lab Review sends these on the
-   test's lab_order_item when it places the order.
+   notes, testing Method (Molecular tests only), Priority and
+   Target Date. Lab Review sends these on the test's
+   lab_order_item when it places the order.
    ============================================================ */
 
 export const EMPTY_INVESTIGATION_DETAIL: InvestigationOrderDetail = {
   notes: "",
   priority: "Normal",
   targetDate: "",
+  method: "",
 };
 
 const PRIORITY_OPTIONS: { value: InvestigationPriority; dot: string }[] = [
   { value: "Normal", dot: "bg-emerald-500" },
   { value: "Urgent", dot: "bg-red-500" },
+];
+
+/* Testing methods offered for Molecular-category investigations only. */
+export const METHOD_OPTIONS: InvestigationMethod[] = [
+  "Germline Testing",
+  "Tissue Biopsy Testing",
+  "Liquid Biopsy Testing",
 ];
 
 const FIELD_LABEL =
@@ -38,6 +51,8 @@ interface InvestigationOrderCardProps {
   detail: InvestigationOrderDetail;
   onChange: (patch: Partial<InvestigationOrderDetail>) => void;
   onRemove: () => void;
+  /* Molecular-category tests show the testing Method dropdown. */
+  showMethod?: boolean;
 }
 
 const InvestigationOrderCard: React.FC<InvestigationOrderCardProps> = ({
@@ -46,9 +61,22 @@ const InvestigationOrderCard: React.FC<InvestigationOrderCardProps> = ({
   detail,
   onChange,
   onRemove,
+  showMethod = false,
 }) => {
   const urgent = detail.priority === "Urgent";
   const fieldId = `investigation-${index}`;
+
+  /* Three fields normally; Molecular adds the Method field, so the grid
+     widens on large screens and reflows to two columns below that. */
+  const gridClass = showMethod
+    ? "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,170px)_140px_160px]"
+    : "grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-[minmax(0,1fr)_140px_170px]";
+  const notesClass = `flex flex-col gap-1.5 sm:col-span-2 ${
+    showMethod ? "lg:col-span-1" : "md:col-span-1"
+  }`;
+  const targetClass = `flex flex-col gap-1.5 ${
+    showMethod ? "sm:col-span-2 lg:col-span-1" : ""
+  }`;
 
   return (
     <div
@@ -64,6 +92,11 @@ const InvestigationOrderCard: React.FC<InvestigationOrderCardProps> = ({
         <span className="min-w-0 flex-1 truncate text-[10px] font-semibold leading-5 text-slate-700">
           {name}
         </span>
+        {showMethod && (
+          <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.5px] text-blue-600 ring-1 ring-blue-200">
+            Molecular
+          </span>
+        )}
         {urgent && (
           <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.5px] text-red-600 ring-1 ring-red-200">
             Urgent
@@ -82,9 +115,9 @@ const InvestigationOrderCard: React.FC<InvestigationOrderCardProps> = ({
         </button>
       </div>
 
-      {/* Notes | Priority | Target Date */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-[minmax(0,1fr)_140px_170px]">
-        <div className="flex flex-col gap-1.5 sm:col-span-2 md:col-span-1">
+      {/* Notes | Method | Priority | Target Date */}
+      <div className={gridClass}>
+        <div className={notesClass}>
           <span className={FIELD_LABEL}>Clinical Notes</span>
           <VoiceToText
             rows={2}
@@ -93,6 +126,36 @@ const InvestigationOrderCard: React.FC<InvestigationOrderCardProps> = ({
             placeholder={`Clinical notes for ${name}`}
           />
         </div>
+
+        {showMethod && (
+          <div className="flex flex-col gap-1.5">
+            <span className={FIELD_LABEL}>Method</span>
+            <Select
+              value={detail.method || undefined}
+              onValueChange={(value) =>
+                onChange({ method: value as InvestigationMethod })
+              }
+            >
+              <SelectTrigger
+                aria-label={`Method for ${name}`}
+                className={`h-[38px] rounded-md text-sm shadow-none focus:ring-0 focus:ring-offset-0 ${
+                  detail.method
+                    ? "border-blue-200 bg-blue-50 text-blue-700"
+                    : "border-slate-200 bg-white text-slate-500"
+                }`}
+              >
+                <SelectValue placeholder="Select method" />
+              </SelectTrigger>
+              <SelectContent>
+                {METHOD_OPTIONS.map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         <div className="flex flex-col gap-1.5">
           <span className={FIELD_LABEL}>Priority</span>
@@ -125,7 +188,7 @@ const InvestigationOrderCard: React.FC<InvestigationOrderCardProps> = ({
           </Select>
         </div>
 
-        <div className="flex flex-col gap-1.5">
+        <div className={targetClass}>
           <label htmlFor={`${fieldId}-target-date`} className={FIELD_LABEL}>
             Target Date
           </label>

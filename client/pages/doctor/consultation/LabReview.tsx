@@ -1,16 +1,18 @@
 ﻿import React, { useEffect, useRef, useState, useCallback } from "react";
-import API, { getActiveBranchId } from "../../../api/axios";
 import { getUser } from "../../../utils/token";
 import { encounterApi } from "../../../api/encounter.api";
 import type { LabTestMasterRecord } from "../../../api/labTestMaster.api";
 import {
-  labOrderApi,
   labOrderItemApi,
   type LabOrderItemRecord,
 } from "../../../api/labOrder.api";
 import { UserProfileDropdown } from "../../../components/ui/User_profile_dropdown";
 import VoiceToText from "@/components/ui/voicetotext";
-import { dmyToIsoStrict, findActiveEncounter } from "./helpers";
+import {
+  dmyToIsoStrict,
+  findActiveEncounter,
+  orderVisitInvestigations,
+} from "./helpers";
 import { BackIcon, CheckIcon } from "./icons";
 import type { InvestigationOrderDetail } from "./types";
 
@@ -83,6 +85,9 @@ const LabReview: React.FC<{
   testDetails?: Record<string, InvestigationOrderDetail>;
   /* Consultation's Additional Instructions -> lab_order.clinical_notes. */
   instructions?: string;
+  /* Investigations typed by the doctor that are not lab tests - kept on
+     the visit's lab order (not orderable by the lab). */
+  otherInvestigations?: string[];
   onOrdered?: (testIds: string[]) => void;
   onNext?: () => void;
 }> = ({
@@ -94,6 +99,7 @@ const LabReview: React.FC<{
   pendingTests = [],
   testDetails = {},
   instructions = "",
+  otherInvestigations,
   onOrdered,
   onNext,
 }) => {
@@ -123,7 +129,7 @@ const LabReview: React.FC<{
     setItemsLoading(true);
     setItemsError("");
     labOrderItemApi
-      .getAll()
+      .getAll(patientId ? { patientId } : undefined)
       .then((response) => {
         if (cancelled) return;
         const allItems = response.data.data ?? [];
@@ -185,80 +191,54 @@ const LabReview: React.FC<{
 
     (async () => {
       try {
-        let employeeId = getUser()?.employee_id ?? null;
-
-        if (!employeeId) {
-          const me = await API.get<{
-            success: boolean;
-            user?: { employee_id?: string | null };
-          }>("/auth/me");
-          employeeId = me.data?.user?.employee_id ?? null;
-        }
-
-        if (!employeeId) {
-          throw new Error(
-            "Could not resolve the logged-in doctor. Please log in again."
-          );
-        }
-
-        const branchId =
-          getActiveBranchId() ?? getUser()?.branch_id ?? undefined;
-
-        /* The order is Urgent when any of its tests is, so the lab's
-           order-level badges and alerts flag it. */
-        const orderUrgent = pendingTests.some(
-          (test) => testDetails[test.test_name]?.priority === "Urgent"
-        );
-
-        const orderResponse = await labOrderApi.create({
-          patient_id: patientId,
-          doctor_employee_id: employeeId,
-          priority: orderUrgent ? "Urgent" : "Normal",
-          ...(instructions.trim()
-            ? { clinical_notes: instructions.trim() }
-            : {}),
-          ...(branchId ? { branch_id: branchId } : {}),
+        /* Shared with the Chemotherapy Order tab: reuses this visit's open
+           lab order and skips tests already ordered there - even when the
+           same test is stored under a different lab_test_id. */
+        const result = await orderVisitInvestigations({
+          patientId,
+          appointmentId,
+          encounterNo,
+          branchId,
+          tests: pendingTests.map((test) => {
+            const detail = testDetails[test.test_name];
+            const method = detail?.method ?? "";
+            return {
+              lab_test_id: test.lab_test_id,
+              test_name: test.test_name,
+              clinical_notes: detail?.notes.trim() || undefined,
+              priority: detail?.priority ?? "Normal",
+              /* An invalid typed date is dropped (Consultation's Proceed
+                 blocks it, but this step can be opened from the stepper). */
+              target_date: dmyToIsoStrict(detail?.targetDate ?? ""),
+              ...(method.trim() ? { method: method.trim() } : {}),
+            };
+          }),
+          otherInvestigations,
+          clinicalNotes: instructions,
         });
 
-        const labOrderId = orderResponse.data.data?.lab_order_id;
-
-        if (!labOrderId) {
-          throw new Error("Failed to create the lab order.");
+        if (result.errors.length > 0) {
+          setOrderError(result.errors[0]);
         }
-
-        const createdItems = await Promise.all(
-          pendingTests.map((test) => {
-            const detail = testDetails[test.test_name];
-            const notes = detail?.notes.trim() ?? "";
-            /* An invalid typed date is dropped (Consultation's Proceed
-               blocks it, but this step can be opened from the stepper). */
-            const targetDate = dmyToIsoStrict(detail?.targetDate ?? "");
-
-            return labOrderItemApi.create({
-              lab_order_id: labOrderId,
-              lab_test_id: test.lab_test_id,
-              priority: detail?.priority ?? "Normal",
-              ...(notes ? { clinical_notes: notes } : {}),
-              ...(targetDate ? { target_date: targetDate } : {}),
-              ...(branchId ? { branch_id: branchId } : {}),
-            });
-          })
-        );
-
-        try {
-          const itemIds = createdItems
-            .map((r) => r.data.data?.lab_order_item_id)
-            .filter(Boolean);
-          if (itemIds.length > 0) {
+        if (result.resolvedTestIds.length > 0) {
+          onOrdered?.(result.resolvedTestIds);
+        }
+        if (result.orderedItemIds.length > 0) {
+          try {
             const existing: string[] = JSON.parse(
               localStorage.getItem(`hms_lab_item_ids_${patientId}`) || "[]"
             );
-            const merged = [...new Set([...existing, ...itemIds])];
-            localStorage.setItem(`hms_lab_item_ids_${patientId}`, JSON.stringify(merged));
+            const merged = [
+              ...new Set([...existing, ...result.orderedItemIds]),
+            ];
+            localStorage.setItem(
+              `hms_lab_item_ids_${patientId}`,
+              JSON.stringify(merged)
+            );
+          } catch {
+            /* ignore */
           }
-        } catch { /* ignore */ }
-
-        onOrdered?.(pendingTests.map((test) => test.lab_test_id));
+        }
       } catch (error: any) {
         console.error("Failed to place lab order:", error);
         setOrderError(
@@ -340,7 +320,7 @@ const LabReview: React.FC<{
         {/* Card Header */}
         <div className="flex items-center justify-between border-b border-gray-100 px-8 py-6">
 
-          <span className="text-xs font-bold text-gray-900">
+          <span className="text-[10px] font-bold text-gray-900">
             {itemsLoading
               ? "Loading..."
               : `${orderedItems.length} Reports Found`}
@@ -372,23 +352,23 @@ const LabReview: React.FC<{
           <table className="w-full border-collapse text-left">
             <thead>
               <tr className="border-b border-gray-100 bg-white">
-                <th className="w-[36%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-900">
+                <th className="w-[36%] px-8 py-4 text-[10px] font-bold uppercase tracking-wider text-gray-900">
                   Investigation Name
                 </th>
 
-                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-900">
+                <th className="w-[16%] px-8 py-4 text-[10px] font-bold uppercase tracking-wider text-gray-900">
                   Ordered Date
                 </th>
 
-                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-900">
+                <th className="w-[16%] px-8 py-4 text-[10px] font-bold uppercase tracking-wider text-gray-900">
                   Target Date
                 </th>
 
-                <th className="w-[16%] px-8 py-4 text-xs font-bold uppercase tracking-wider text-gray-900">
+                <th className="w-[16%] px-8 py-4 text-[10px] font-bold uppercase tracking-wider text-gray-900">
                   Status
                 </th>
 
-                <th className="w-[16%] px-8 py-4 text-right text-xs font-bold uppercase tracking-wider text-gray-900">
+                <th className="w-[16%] px-8 py-4 text-right text-[10px] font-bold uppercase tracking-wider text-gray-900">
                   Action
                 </th>
               </tr>
@@ -432,6 +412,14 @@ const LabReview: React.FC<{
                         title={item.clinical_notes}
                       >
                         {item.clinical_notes}
+                      </div>
+                    )}
+                    {item.method && (
+                      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-blue-600">
+                        <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-semibold">
+                          Method
+                        </span>
+                        <span className="truncate">{item.method}</span>
                       </div>
                     )}
                   </td>
@@ -493,7 +481,7 @@ const LabReview: React.FC<{
 
       {/* Clinical Remarks */}
       <section className="rounded-xl border border-gray-100 bg-white p-8 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)]">
-        <h2 className="mb-6 text-xs font-bold text-gray-900">
+        <h2 className="mb-6 text-[10px] font-bold text-gray-900">
           Clinical Remarks
         </h2>
 

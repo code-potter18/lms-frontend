@@ -61,6 +61,8 @@ export interface ConsultationSummaryPrintData {
   molecularTests: { test: string; date?: string; result?: string; impression?: string }[];
   investigations: {
     name: string;
+    /* Molecular-category tests only. */
+    method?: string;
     notes?: string;
     priority?: string;
     targetDate?: string;
@@ -213,6 +215,10 @@ export const buildConsultationSummaryHtml = (data: ConsultationSummaryPrintData)
       "Investigations / Scans Advised",
       table(data.investigations, [
         { header: "Investigation", cell: (row) => row.name },
+        /* The Method column only appears when a Molecular test picked one. */
+        ...(data.investigations.some((row) => has(row.method))
+          ? [{ header: "Method", cell: (row: (typeof data.investigations)[number]) => row.method }]
+          : []),
         { header: "Priority", cell: (row) => row.priority },
         { header: "Target Date", cell: (row) => row.targetDate },
         { header: "Clinical Notes", cell: (row) => row.notes },

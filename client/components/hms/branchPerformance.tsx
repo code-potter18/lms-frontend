@@ -1,5 +1,5 @@
-﻿import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Loader2, AlertCircle } from "lucide-react";
 import { format, addDays, subDays, startOfWeek, endOfWeek, subWeeks, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
@@ -443,8 +443,13 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
       };
     },
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    placeholderData: keepPreviousData,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
+
+  const isInitialLoading = branchPerfQuery.isPending && !branchPerfQuery.data;
+  const isUpdating = branchPerfQuery.isFetching && !!branchPerfQuery.data;
 
   useEffect(() => {
     if (branchPerfQuery.data) {
@@ -472,6 +477,7 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
         dateFrom,
         dateTo,
       });
+
       const appointments = res.data?.data?.appointments || [];
 
       let completed = 0;
@@ -487,6 +493,7 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
         else if (s === "SCHEDULED" || s === "RESCHEDULED" || s === "NOT_CHECKED_IN" || s === "IN_CONSULTATION") scheduled++;
       });
 
+
       setHoveredBranchDetails({
         total: appointments.length,
         booked: appointments.length - cancelled - noShow,
@@ -495,6 +502,7 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
         noShow,
         scheduled,
       });
+
     } catch {
       setHoveredBranchDetails(null);
     } finally {
@@ -562,6 +570,7 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
       return changed ? next : prev;
     });
 
+
     const intervals = branches
       .filter((b) => b.systemShare !== (animatedValuesRef.current[b.id] ?? 0))
       .map((branch) => {
@@ -577,9 +586,11 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
               [branch.id]: value < branch.systemShare ? value + 1 : value - 1,
             };
           });
+
         }, 30);
         return interval;
       });
+
 
     return () => intervals.forEach((interval) => window.clearInterval(interval));
   }, [branches]);
@@ -595,7 +606,15 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
       {/* Header -- original Dashboard widget look */}
       <div className="flex items-start justify-between">
         <div>
-          <h3 className="text-[#191C1E] font-extrabold text-base leading-6 tracking-[-0.4px]">Branch Performance</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-[#191C1E] font-extrabold text-base leading-6 tracking-[-0.4px]">Branch Performance</h3>
+            {isUpdating && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-[#00488D] font-medium bg-blue-50 px-2 py-0.5 rounded-full animate-fade-in">
+                <Loader2 className="w-3 h-3 animate-spin text-[#00488D]" />
+                <span>Updating...</span>
+              </span>
+            )}
+          </div>
           {branchPerfDateLabel && <p className="text-[#424752] text-[10px] font-semibold mt-0.5">{branchPerfDateLabel}</p>}
           {branchPerfCompareLabel && <p className="text-[#8C8D8F] text-[9px] font-medium">{branchPerfCompareLabel}</p>}
         </div>
@@ -675,8 +694,8 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
         </div>
       )}
 
-      {/* Loading skeleton */}
-      {branchPerfQuery.isLoading && (
+      {/* Loading skeleton -- Mode aware */}
+      {isInitialLoading && vizMode === "bars" && (
         <div className="flex flex-col gap-3 py-2">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="flex items-center gap-3">
@@ -690,14 +709,44 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
         </div>
       )}
 
+      {isInitialLoading && vizMode === "pie" && (
+        <div className="flex flex-col lg:flex-row items-center gap-4 py-2">
+          {/* Donut chart skeleton */}
+          <div className="relative w-full lg:w-1/2 h-[260px] flex items-center justify-center">
+            <div className="w-[164px] h-[164px] rounded-full bg-[#F1F3F6] animate-pulse flex items-center justify-center shadow-inner">
+              <div className="w-[116px] h-[116px] rounded-full bg-white flex flex-col items-center justify-center gap-1 shadow-sm">
+                <div className="w-8 h-2 bg-[#F1F3F6] rounded animate-pulse" />
+                <div className="w-12 h-4 bg-[#E5E7EB] rounded animate-pulse" />
+                <div className="w-8 h-2 bg-[#F1F3F6] rounded animate-pulse" />
+              </div>
+            </div>
+          </div>
+          {/* Legend rows skeleton */}
+          <div className="w-full lg:w-1/2 flex flex-col gap-2 max-h-[260px] py-1">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <div key={i} className="flex items-center justify-between p-1.5 rounded-md">
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <div className="w-2.5 h-2.5 rounded-full bg-[#F1F3F6] animate-pulse shrink-0" />
+                  <div className="w-24 h-2.5 bg-[#F1F3F6] rounded animate-pulse" />
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="w-12 h-2.5 bg-[#F1F3F6] rounded animate-pulse" />
+                  <div className="w-8 h-2.5 bg-[#E5E7EB] rounded animate-pulse" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Empty state */}
-      {!branchPerfQuery.isLoading && !branchPerfError && branches.length === 0 && (
+      {!isInitialLoading && !branchPerfError && branches.length === 0 && (
         <div className="flex items-center justify-center py-8 text-[#6B7280] text-xs">No branch data available.</div>
       )}
 
       {/* BAR VIEW -- original compact rows with animated share bars */}
-      {!branchPerfQuery.isLoading && !branchPerfError && branches.length > 0 && vizMode === "bars" && (
-        <div className="flex flex-col gap-3 max-h-[260px] overflow-y-auto hide-scrollbar pr-1">
+      {!isInitialLoading && !branchPerfError && branches.length > 0 && vizMode === "bars" && (
+        <div className={`flex flex-col gap-3 max-h-[260px] overflow-y-auto hide-scrollbar pr-1 transition-opacity duration-200 ${isUpdating ? "opacity-75" : "opacity-100"}`}>
           {branches.map((branch, index) => {
             const trendObj = computeTrend(branch.count, branch.previousCount);
             const formattedTrendText = formatTrend(trendObj);
@@ -770,11 +819,11 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
       )}
 
       {/* PIE VIEW */}
-      {!branchPerfQuery.isLoading && !branchPerfError && vizMode === "pie" && (
+      {!isInitialLoading && !branchPerfError && vizMode === "pie" && (
         pieData.length === 0 ? (
           <div className="flex items-center justify-center py-8 text-[#6B7280] text-xs">No booked appointments for this range.</div>
         ) : (
-          <div className="flex flex-col lg:flex-row items-start gap-4">
+          <div className={`flex flex-col lg:flex-row items-start gap-4 transition-opacity duration-200 ${isUpdating ? "opacity-75" : "opacity-100"}`}>
             <div className="relative w-full lg:w-1/2 h-[260px]">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>

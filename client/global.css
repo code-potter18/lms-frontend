@@ -24,7 +24,7 @@
     @apply text-[12px] font-bold text-[#01091a] tracking-[0.9px] capitalize;
   }
   .hms-avatar-text {
-  @apply text-[10px] font-semibold;
+  @apply text-[12px] font-semibold;
 }
   .hms-name-text {
   @apply text-[#111827] font-semibold text-sm leading-[1.2];
@@ -216,6 +216,10 @@
 
   body {
     @apply bg-background text-foreground;
+    font-family: 'Manrope', -apple-system, Roboto, Helvetica, sans-serif;
+  }
+
+  html, button, input, select, textarea {
     font-family: 'Manrope', -apple-system, Roboto, Helvetica, sans-serif;
   }
 

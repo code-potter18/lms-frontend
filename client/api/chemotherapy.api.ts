@@ -4,6 +4,7 @@ export interface MedicineOption {
   medicine_id: string;
   medicine_name: string;
   generic_name?: string;
+  generic_id?: string;
   strength?: string;
   dosage_form?: string;
   unit?: string;
@@ -26,6 +27,8 @@ export interface RegimenProtocolDilution {
 export interface RegimenProtocolDilutionInput {
   protocol_dilution_id?: string;
   medicine_id?: string | null;
+  medicine_name?: string | null;
+  generic_name?: string | null;
   drug_brand_name?: string | null;
   form?: string | null;
   dose?: string | number | null;
@@ -74,6 +77,8 @@ export interface DischargeInstructionInput {
 
 export interface RegimenProtocolItem {
   protocol_item_id: string;
+  medicine_name?: string | null;
+  generic_name?: string | null;
   medicine_id: string;
   drug_brand_name?: string | null;
   drug_role: string;
@@ -93,6 +98,7 @@ export interface RegimenProtocolItem {
   patient_dose_unit: string | null;
   administration_detail: string | null;
   previous_toxicity: string | null;
+  generic_name?: string | null;
   remarks: string | null;
   medicine_master: { medicine_name: string | null } | null;
   chemotherapy_protocol_dilutions?: RegimenProtocolDilution[] | null;
@@ -245,6 +251,8 @@ export interface ChemoPlanItem {
     medicine_name?: string | null;
     brand_name?: string | null;
     generic_name?: string | null;
+    /* The generic a brand's pharmacy_master rows are matched on. */
+    generic_id?: string | null;
     dosage_form?: string | null;
     unit?: string | null;
   } | null;
@@ -328,6 +336,8 @@ export interface PharmacySlipItemRecord {
   medicine_id: string | null;
   drug_name: string | null;
   brand_name: string | null;
+  dosage_form?: string | null;
+  patient_dose?: string | null;
   dose: string | null;
   dose_unit: string | null;
   quantity: number | null;
@@ -336,6 +346,7 @@ export interface PharmacySlipItemRecord {
     medicine_name: string | null;
     generic_name: string | null;
     brand_name: string | null;
+    dosage_form?: string | null;
   } | null;
 }
 
@@ -349,14 +360,54 @@ export interface PharmacySlipRecord {
   pharmacy_slip_item: PharmacySlipItemRecord[];
 }
 
+export type ChemoPlanInvestigationCategory = "LAB" | "NON_LAB" | "TISSUE";
+export type ChemoPlanInvestigationStatus = "PLANNED" | "ORDERED" | "CANCELLED";
+
+export interface ChemoPlanInvestigation {
+  investigation_id: string;
+  plan_order_id?: string;
+  chemotherapy_plan_id?: string;
+  lab_test_id?: string | null;
+  investigation_name: string;
+  investigation_category: ChemoPlanInvestigationCategory;
+  investigation_type?: string | null;
+  source_medicine_ids?: string | null;
+  source_drug_names?: string | null;
+  source_test_text?: string | null;
+  monitoring_phase?: string | null;
+  priority?: string | null;
+  target_date?: string | null;
+  clinical_notes?: string | null;
+  item_status?: ChemoPlanInvestigationStatus | string | null;
+  lab_order_id?: string | null;
+  lab_order_item_id?: string | null;
+  display_order?: number | null;
+}
+
+/* A suggestion from GET /chemotherapy/medicine-investigations. */
+export interface ChemoMedicineInvestigationSuggestion
+  extends Omit<ChemoPlanInvestigation, "investigation_id" | "plan_order_id" | "chemotherapy_plan_id" | "display_order"> {
+  lab_test_id: string | null;
+  test_code?: string | null;
+  sample_type?: string | null;
+  category_name?: string | null;
+}
+
+export interface ChemoMedicineInvestigations {
+  lab: ChemoMedicineInvestigationSuggestion[];
+  nonLab: ChemoMedicineInvestigationSuggestion[];
+}
+
 export interface ChemoPlanOrder extends ChemoPlanOrderHeader {
   dosing_height_cm?: number | string | null;
   dosing_weight_kg?: number | string | null;
   dosing_bsa?: number | string | null;
   dosing_serum_creatinine?: number | string | null;
   dosing_crcl?: number | string | null;
+  investigations_saved?: boolean;
   chemotherapy_plan_items: ChemoPlanItem[];
   chemotherapy_plan_hydration: ChemoPlanHydration[];
+  chemotherapy_plan_order_investigation?: ChemoPlanInvestigation[];
 }
 
 /* PUT /chemotherapy/plans/:planId/orders/:cycle/:day. hydration left out
@@ -371,6 +422,23 @@ export interface ChemoPlanOrderPayload {
     dilution_volume?: number | null;
     dilution_volume_unit?: string | null;
     guidance?: string | null;
+  }[];
+  investigations?: {
+    investigation_id?: string | null;
+    lab_test_id?: string | null;
+    investigation_name: string;
+    investigation_category: ChemoPlanInvestigationCategory;
+    investigation_type?: string | null;
+    source_medicine_ids?: string | null;
+    source_drug_names?: string | null;
+    source_test_text?: string | null;
+    monitoring_phase?: string | null;
+    priority?: string | null;
+    target_date?: string | null;
+    clinical_notes?: string | null;
+    item_status?: ChemoPlanInvestigationStatus | null;
+    lab_order_id?: string | null;
+    lab_order_item_id?: string | null;
   }[];
   dosing?: {
     height_cm?: number | null;
@@ -548,8 +616,8 @@ export const chemoPlanItemName = (item?: {
   drug_name?: string | null;
   medicine_master?: { medicine_name?: string | null; generic_name?: string | null } | null;
 } | null) =>
-  item?.medicine_master?.medicine_name ||
   item?.medicine_master?.generic_name ||
+  item?.medicine_master?.medicine_name ||
   item?.drug_name ||
   "";
 
@@ -703,6 +771,27 @@ export const chemotherapyApi = {
     API.put<{ success: boolean; message: string; data: ChemoPlanOrder }>(
       `/chemotherapy/plans/${planId}/orders/${cycleNumber}/${cycleDay}`,
       payload
+    ),
+  getMedicineInvestigations: (medicineIds: string[]) =>
+    API.get<{ success: boolean; message: string; data: ChemoMedicineInvestigations }>(
+      "/chemotherapy/medicine-investigations",
+      { params: { medicine_ids: medicineIds.join(",") } }
+    ),
+  updatePlanInvestigationStatus: (
+    planId: string,
+    cycleNumber: number,
+    cycleDay: number,
+    updates: {
+      investigation_id?: string | null;
+      lab_test_id?: string | null;
+      item_status: ChemoPlanInvestigationStatus;
+      lab_order_id?: string | null;
+      lab_order_item_id?: string | null;
+    }[]
+  ) =>
+    API.patch<{ success: boolean; message: string; data: { updated: number } }>(
+      `/chemotherapy/plans/${planId}/orders/${cycleNumber}/${cycleDay}/investigations/status`,
+      { updates }
     ),
   /* This patient's discharge (take-home) medicines. Stored on their chemo
      plan as plan items with drug_role DISCHARGE: a drug from medicine_master
@@ -977,6 +1066,19 @@ export const chemotherapyApi = {
       { params: { cancer_type_ids: cancerParam, subtype_ids: subtypeParam || undefined, drug_role: drugRole } }
     );
   },
+  getGenericFormsAndBrands: () =>
+    API.get<{
+      success: boolean;
+      message: string;
+      data: Record<
+        string,
+        {
+          generic_name: string;
+          forms: string[];
+          brandsByForm: Record<string, string[]>;
+        }
+      >;
+    }>("/chemotherapy/forms-and-brands"),
   addDischargeInstruction: (
     protocolId: string,
     payload: DischargeInstructionInput

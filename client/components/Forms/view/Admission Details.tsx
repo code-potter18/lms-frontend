@@ -21,8 +21,11 @@ import {
   Banknote,
   ShieldCheck,
   Ban,
+  Users,
 } from "lucide-react";
-import { ipdApi, type AdmissionRecord } from "@/api/ipd.api";
+import { ipdApi, type AdmissionRecord, type CareTeamEntry, type CareTeamResponse } from "@/api/ipd.api";
+import { usePermission } from "@/context/PermissionContext";
+import { AllocateCareTeamDialog } from "@/components/hms/AllocateCareTeamDialog";
 import { formatMobile } from "@/utils/formatters";
 import { StatusBadge, type StatusTone } from "@/components/hms/StatusBadge";
 import PatientVitalsPanel from "@/components/hms/PatientVitalsPanel";
@@ -86,6 +89,36 @@ function formatDateOnly(date?: string | null): string {
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
 }
 
+// Care-team times are real instants; show them in hospital time (IST).
+function formatCareTeamTime(date?: string | null): string {
+  if (!date) return "—";
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Kolkata",
+  });
+}
+
+const CARE_TEAM_ROLE_LABELS: Record<string, string> = {
+  ASSIGNED_DOCTOR: "Duty Doctor",
+  PRIMARY_NURSE: "Nurse",
+};
+
+const CARE_TEAM_END_LABELS: Record<string, string> = {
+  HANDOVER: "Handed over",
+  DISCHARGE: "Discharged",
+  REMOVED: "Removed",
+};
+
+function careTeamPerson(entry: CareTeamEntry): string {
+  return entry.role_in_team === "ASSIGNED_DOCTOR" ? `Dr. ${entry.employee_name}` : entry.employee_name;
+}
+
 function calculateAge(admission: AdmissionRecord): string {
   const p = admission.patient_bio_data;
   const dob = p?.patient_DOB ?? (p as any)?.patient_dob ?? null;
@@ -101,8 +134,22 @@ const AdmissionDetails: React.FC = () => {
   const navigate = useNavigate();
   const { ipNumber } = useParams<{ ipNumber: string }>();
 
+  const { can } = usePermission();
   const [admission, setAdmission] = useState<AdmissionRecord | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [careTeam, setCareTeam] = useState<CareTeamResponse | null>(null);
+  const [careTeamOpen, setCareTeamOpen] = useState(false);
+
+  const loadCareTeam = (admissionId: string) =>
+    ipdApi
+      .getCareTeam(admissionId)
+      .then((res) => setCareTeam(res.data?.data ?? null))
+      .catch(() => setCareTeam(null));
+
+  // Planned / cancelled requests have no care team -- the card hides itself then.
+  useEffect(() => {
+    if (admission?.admission_id) loadCareTeam(admission.admission_id);
+  }, [admission?.admission_id]);
 
   useEffect(() => {
     if (!ipNumber) {
@@ -536,6 +583,115 @@ const AdmissionDetails: React.FC = () => {
             </div>
           </div>
         </section>
+
+        {/* 4b. Care Team & Handover History */}
+        {(rawStatus === "ADMITTED" || (careTeam?.history.length ?? 0) > 0) && (
+          <section className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                  <Users className="h-4 w-4" />
+                </div>
+                <h2 className="text-base font-bold text-slate-900">Care Team &amp; Handover</h2>
+              </div>
+              {rawStatus === "ADMITTED" && can("admission.care_team") && (
+                <button
+                  onClick={() => setCareTeamOpen(true)}
+                  className="rounded-lg border border-[#00488D] bg-white px-3 py-1.5 text-xs font-semibold text-[#00488D] transition-colors hover:bg-blue-50"
+                >
+                  Allocate / Hand over
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-3">
+              {[
+                { label: "Consultant", name: doctorName, note: admission.employees?.specialization ?? null },
+                {
+                  label: "Duty Doctor",
+                  name: careTeam?.current.assigned_doctor ? careTeamPerson(careTeam.current.assigned_doctor) : null,
+                  note: careTeam?.current.assigned_doctor ? `since ${formatCareTeamTime(careTeam.current.assigned_doctor.start_time)}` : null,
+                },
+                {
+                  label: "Primary Nurse",
+                  name: careTeam?.current.nurse ? careTeamPerson(careTeam.current.nurse) : null,
+                  note: careTeam?.current.nurse ? `since ${formatCareTeamTime(careTeam.current.nurse.start_time)}` : null,
+                },
+              ].map((slot) => (
+                <div key={slot.label} className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-xs font-bold text-blue-700">
+                    {slot.name && slot.name !== "Unassigned" ? getInitials(slot.name) : "—"}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="hms-id-text">{slot.label}</div>
+                    <div className="truncate text-sm font-semibold text-slate-800">
+                      {slot.name && slot.name !== "Unassigned" ? slot.name : "Not assigned"}
+                    </div>
+                    {slot.note && (
+                      <span className="mt-0.5 inline-block rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                        {slot.note}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {careTeam && careTeam.history.length > 0 ? (
+              <ol className="space-y-4 border-t border-slate-100 p-5">
+                {careTeam.history.map((entry) => (
+                  <li key={entry.assignment_id} className="relative pl-6">
+                    <span
+                      className={`absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full ${
+                        entry.is_active ? "bg-green-500" : "bg-slate-300"
+                      }`}
+                    />
+                    <div className="flex flex-wrap items-baseline gap-x-2 text-xs">
+                      <span className="font-semibold text-slate-800">{careTeamPerson(entry)}</span>
+                      <span className="text-slate-500">
+                        {CARE_TEAM_ROLE_LABELS[entry.role_in_team] ?? entry.role_in_team}
+                      </span>
+                      {entry.is_active && (
+                        <span className="rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-semibold text-green-700">
+                          On duty
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {formatCareTeamTime(entry.start_time)}
+                      {entry.end_time
+                        ? ` → ${formatCareTeamTime(entry.end_time)} (${CARE_TEAM_END_LABELS[entry.end_reason ?? ""] ?? "Ended"})`
+                        : " → now"}
+                      {entry.assigned_by_name ? ` • by ${entry.assigned_by_name}` : ""}
+                    </div>
+                    {entry.handover_notes && (
+                      <div className="mt-1.5 whitespace-pre-wrap rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        {entry.handover_notes}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="border-t border-slate-100 px-6 py-6 text-xs italic text-slate-400">
+                No duty doctor or nurse has been allocated for this stay yet.
+              </p>
+            )}
+          </section>
+        )}
+
+        <AllocateCareTeamDialog
+          open={careTeamOpen}
+          onOpenChange={setCareTeamOpen}
+          admission={admission}
+          onDone={(team) => {
+            setCareTeam(team);
+            ipdApi
+              .getByIpNumber(admission.ip_number)
+              .then((res) => res.data?.data && setAdmission(res.data.data))
+              .catch(() => undefined);
+          }}
+        />
 
         {/* 5. Transfer History */}
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">

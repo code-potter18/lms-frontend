@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData, useQueryClient } from "@tanstack/react-query";
 import { Stethoscope, UserRound, Users, Calendar as CalendarIcon, FileText, Receipt, Loader2, Activity, AlertCircle, FlaskConical, CheckCircle2, XCircle, ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, Bed, BedDouble } from "lucide-react";
 import { useNavigate } from 'react-router-dom';
 import HmsTable from "@/components/hms/HmsTable";
@@ -30,6 +30,9 @@ import { getUser } from "@/utils/token";
 import { useCriticalPatients } from "@/hooks/useCriticalPatients";
 import { CriticalDot, CriticalCorner, CriticalWrapper } from "@/components/hms/CriticalPatientIndicator";
 import type { CriticalInfo } from "@/components/hms/CriticalPatientIndicator";
+import { WardOccupancyWidget } from "@/components/hms/dashboard/WardOccupancyWidget";
+import { SystemIntegrityWidget } from "@/components/hms/dashboard/SystemIntegrityWidget";
+import { AdminQuickActionToolbar } from "@/components/hms/dashboard/AdminQuickActionToolbar";
 
 function getVitalsCriticalReasons(enc: EncounterRecord): string[] {
   const reasons: string[] = [];
@@ -66,7 +69,7 @@ function getVitalsCriticalReasons(enc: EncounterRecord): string[] {
   }
   return reasons;
 }
-import { getKpiPreferences, saveKpiPreferences } from "@/api/userPreferences.api";
+import { getKpiPreferences, saveKpiPreferences, getKpiUsage, saveKpiUsage } from "@/api/userPreferences.api";
 
 const navItems = [
   {
@@ -382,6 +385,7 @@ export default function Dashboard() {
   const [selectedKpis, setSelectedKpis] = useState<string[]>(ALL_KPI_IDS);
   const [isKpiShowerOpen, setIsKpiShowerOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showWardOccupancy, setShowWardOccupancy] = useState(false);
   const { toast } = useToast();
   // Aliased -- this page already has its own local `branches` state below
   // for the branch-performance widget, so the real branch directory from
@@ -389,6 +393,7 @@ export default function Dashboard() {
   // different name.
   const { selectedBranchId, isAllBranches, branches: branchDirectory } = useBranchFilter();
   const { can, canAny, permissions, loading: permissionsLoading } = usePermission();
+  const queryClient = useQueryClient();
 
   // Track if KPI preferences have been loaded from backend. Kept as state (not
   // only a ref) so the auto-save effect can re-run once hydration finishes.
@@ -430,30 +435,118 @@ export default function Dashboard() {
     return () => clearTimeout(timer);
   }, [kpiHydrated, selectedKpis]);
 
+  // ---- KPI usage tracking (frequency-based ordering) ----
+  // Hydrated once from the backend; used only for sorting so the order
+  // stays stable for the whole session (re-sorts on next page load).
+  const [kpiUsageSnapshot, setKpiUsageSnapshot] = useState<Record<string, number>>({});
+  // Live mutable counts — incremented on click, never drives a re-render,
+  // so cards don't jump around mid-session. Flushed to the backend on a
+  // debounce and on unmount.
+  const kpiUsageRef = useRef<Record<string, number>>({});
+  const [kpiUsageHydrated, setKpiUsageHydrated] = useState(false);
+  const skipNextUsageSaveRef = useRef(false);
+  const kpiUsageSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Master toggle: when off, KPIs keep their default order regardless of
+  // usage counts. Persisted in localStorage (pure UI preference).
+  const [usageSortEnabled, setUsageSortEnabled] = useState(() => {
+    return localStorage.getItem("hms_kpi_usage_sort") !== "off";
+  });
+
+  const toggleUsageSort = useCallback(() => {
+    setUsageSortEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem("hms_kpi_usage_sort", next ? "on" : "off");
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (permissionsLoading) return;
+    if (kpiUsageHydrated) return;
+
+    getKpiUsage()
+      .then((usage) => {
+        skipNextUsageSaveRef.current = true;
+        kpiUsageRef.current = { ...usage };
+        setKpiUsageSnapshot(usage);
+        setKpiUsageHydrated(true);
+      })
+      .catch(() => {
+        skipNextUsageSaveRef.current = true;
+        setKpiUsageHydrated(true);
+      });
+  }, [permissionsLoading, kpiUsageHydrated]);
+
+  const flushKpiUsageSave = useCallback(() => {
+    const usage = { ...kpiUsageRef.current };
+    if (Object.keys(usage).length > 0) {
+      saveKpiUsage(usage).catch(() => {});
+    }
+  }, []);
+
+  const trackKpiUsage = useCallback((kpiId: string) => {
+    if (!kpiUsageHydrated) return;
+    kpiUsageRef.current = {
+      ...kpiUsageRef.current,
+      [kpiId]: (kpiUsageRef.current[kpiId] ?? 0) + 1,
+    };
+    if (kpiUsageSaveTimerRef.current) clearTimeout(kpiUsageSaveTimerRef.current);
+    kpiUsageSaveTimerRef.current = setTimeout(() => {
+      flushKpiUsageSave();
+      kpiUsageSaveTimerRef.current = null;
+    }, 2000);
+  }, [kpiUsageHydrated, flushKpiUsageSave]);
+
+  // Persist any pending usage counts on unmount (page refresh/navigation).
+  useEffect(() => {
+    return () => {
+      if (kpiUsageSaveTimerRef.current) {
+        clearTimeout(kpiUsageSaveTimerRef.current);
+        kpiUsageSaveTimerRef.current = null;
+        const usage = { ...kpiUsageRef.current };
+        if (Object.keys(usage).length > 0) {
+          saveKpiUsage(usage).catch(() => {});
+        }
+      }
+    };
+  }, []);
+
  
-  const [realDoctors, setRealDoctors] = useState<Record<string, unknown>[] | null>(null);
-  const [realStaff, setRealStaff] = useState<Record<string, unknown>[] | null>(null);
-  const [isEmployeesLoading, setIsEmployeesLoading] = useState(true);
 
-  const [patientCount, setPatientCount] = useState<number>(0);
-  const [patientLoading, setPatientLoading] = useState(false);
+  const [realDoctors, setRealDoctors] = useState<Record<string, unknown>[] | null>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-employees", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return cached?.doctors ?? null;
+  });
+  const [realStaff, setRealStaff] = useState<Record<string, unknown>[] | null>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-employees", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return cached?.staff ?? null;
+  });
 
-  // Real appointments fetched from the backend. No dummy fallback  an
-  // empty/failed fetch just leaves this null and the tab shows no rows.
-  const [realAppointments, setRealAppointments] = useState<Record<string, unknown>[] | null>(null);
-  const [isAppointmentsLoading, setIsAppointmentsLoading] = useState(true);
-  const [appointmentCount, setAppointmentCount] = useState<number>(0);
+  const [patientCount, setPatientCount] = useState<number>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-patients", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return typeof cached === "number" ? cached : 0;
+  });
 
-  const [prescriptionCount, setPrescriptionCount] = useState<number>(0);
-  const [isPrescriptionsLoading, setIsPrescriptionsLoading] = useState(false);
+  // Real appointments fetched from the backend. Cached per branch + date.
+  const [realAppointments, setRealAppointments] = useState<Record<string, unknown>[] | null>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-appointments", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return cached?.rows ?? null;
+  });
+  const [appointmentCount, setAppointmentCount] = useState<number>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-appointments", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return cached?.total ?? 0;
+  });
+
+  const [prescriptionCount, setPrescriptionCount] = useState<number>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-prescriptions", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return typeof cached === "number" ? cached : 0;
+  });
 
   // IPD snapshot -- currently admitted inpatients + bed occupancy (branch-scoped).
-  const [ipdOverview, setIpdOverview] = useState<{ totalPatients: number; bedsOccupied: number; totalBeds: number }>({
-    totalPatients: 0,
-    bedsOccupied: 0,
-    totalBeds: 0,
+  const [ipdOverview, setIpdOverview] = useState<{ totalPatients: number; bedsOccupied: number; totalBeds: number }>(() => {
+    const cached: any = queryClient.getQueryData(["dashboard-ipd-overview", isAllBranches ? "all" : selectedBranchId, format(new Date(), "yyyy-MM-dd")]);
+    return cached ?? { totalPatients: 0, bedsOccupied: 0, totalBeds: 0 };
   });
-  const [isIpdStatsLoading, setIsIpdStatsLoading] = useState(false);
 
   // Track previous counts to compute "newly added" deltas
   const prevDoctorsRef = useRef<number>(0);
@@ -533,8 +626,10 @@ export default function Dashboard() {
       return { doctors: doctors.map(mapEmployeeRecord), staff: staff.map(mapEmployeeRecord) };
     },
     enabled: canReadEmployees,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   // Keep the local doctors/staff arrays in sync with the query result.
@@ -565,8 +660,10 @@ export default function Dashboard() {
       return { rows: rows.map(mapAppointmentRecord), total: res.data?.data?.total ?? rows.length };
     },
     enabled: canReadAppointments,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   useEffect(() => {
@@ -576,9 +673,7 @@ export default function Dashboard() {
     setAppointmentCount(appointmentsQuery.data.total);
   }, [appointmentsQuery.data]);
 
-  useEffect(() => {
-    setIsAppointmentsLoading(appointmentsQuery.isLoading || appointmentsQuery.isFetching);
-  }, [appointmentsQuery.isLoading, appointmentsQuery.isFetching]);
+
 
   const appointmentPatientIds = useMemo(() => {
     if (!realAppointments) return [];
@@ -601,8 +696,10 @@ export default function Dashboard() {
       return (res.data?.data?.patients || []) as PatientRecord[];
     },
     enabled: canReadPatients,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   const patientAgeData = useMemo(() => {
@@ -689,6 +786,24 @@ export default function Dashboard() {
     return criticalCountIds.filter((id) => getLiveCriticalInfo(id).isCritical).length;
   }, [criticalCountIds, getLiveCriticalInfo]);
 
+  const doctorsOnLeave = useMemo(() => {
+    if (!realDoctors) return [];
+    return (realDoctors as any[])
+      .filter((d) => d.status === "Leave")
+      .map((d) => ({ id: String(d.id ?? ""), name: String(d.name ?? "Dr. Doctor") }));
+  }, [realDoctors]);
+
+  const unassignedApptsCount = useMemo(() => {
+    if (!realAppointments) return 0;
+    return (realAppointments as any[]).filter(
+      (a) =>
+        !a.doctorId ||
+        !a.doctorName ||
+        String(a.doctorName).toLowerCase().includes("unassigned") ||
+        a.doctorName === "Laboratory"
+    ).length;
+  }, [realAppointments]);
+
   useEffect(() => {
     if (!appointmentsQuery.error) return;
     const err: any = appointmentsQuery.error;
@@ -721,8 +836,10 @@ export default function Dashboard() {
       return res.data?.data?.total ?? 0;
     },
     enabled: canReadPatients,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   useEffect(() => {
@@ -730,10 +847,6 @@ export default function Dashboard() {
     prevPatientsRef.current = patientCount;
     setPatientCount(patientsQuery.data);
   }, [patientsQuery.data]);
-
-  useEffect(() => {
-    setPatientLoading(patientsQuery.isLoading || patientsQuery.isFetching);
-  }, [patientsQuery.isLoading, patientsQuery.isFetching]);
 
   const prescriptionsQuery = useQuery({
     queryKey: ["dashboard-prescriptions", isAllBranches ? "all" : selectedBranchId, dateStr],
@@ -756,8 +869,10 @@ export default function Dashboard() {
       });
       return res.data?.data?.total ?? 0;
     },
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   useEffect(() => {
@@ -765,10 +880,6 @@ export default function Dashboard() {
     prevPrescriptionsRef.current = prescriptionCount;
     setPrescriptionCount(prescriptionsQuery.data);
   }, [prescriptionsQuery.data]);
-
-  useEffect(() => {
-    setIsPrescriptionsLoading(prescriptionsQuery.isLoading || prescriptionsQuery.isFetching);
-  }, [prescriptionsQuery.isLoading, prescriptionsQuery.isFetching]);
 
   const canReadAdmissions = permissions.includes("admission.read");
 
@@ -782,8 +893,10 @@ export default function Dashboard() {
       );
     },
     enabled: canReadAdmissions,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 
   useEffect(() => {
@@ -795,15 +908,29 @@ export default function Dashboard() {
     }));
   }, [ipdOverviewQuery.data]);
 
-  useEffect(() => {
-    setIsIpdStatsLoading(ipdOverviewQuery.isLoading || ipdOverviewQuery.isFetching);
-  }, [ipdOverviewQuery.isLoading, ipdOverviewQuery.isFetching]);
+  // Decoupled loading states: Skeletons show ONLY on first cold load when no data exists yet.
+  // When switching dates/filters, previous data is retained and updating indicators are shown.
+  const isEmployeesLoading = employeesQuery.isPending && !employeesQuery.data;
+  const isUpdatingEmployees = employeesQuery.isFetching && !!employeesQuery.data;
 
-  // Reflect React Query's pending state into the UI loading flags so the
-  // table spinner and stat-card skeletons stay in sync with real requests.
-  useEffect(() => {
-    setIsEmployeesLoading(employeesQuery.isLoading || employeesQuery.isFetching);
-  }, [employeesQuery.isLoading, employeesQuery.isFetching]);
+  const isAppointmentsLoading = appointmentsQuery.isPending && !appointmentsQuery.data;
+  const isUpdatingAppointments = appointmentsQuery.isFetching && !!appointmentsQuery.data;
+
+  const patientLoading = patientsQuery.isPending && patientsQuery.data === undefined;
+  const isUpdatingPatients = patientsQuery.isFetching && patientsQuery.data !== undefined;
+
+  const isPrescriptionsLoading = prescriptionsQuery.isPending && prescriptionsQuery.data === undefined;
+  const isUpdatingPrescriptions = prescriptionsQuery.isFetching && prescriptionsQuery.data !== undefined;
+
+  const isIpdStatsLoading = ipdOverviewQuery.isPending && !ipdOverviewQuery.data;
+  const isUpdatingIpd = ipdOverviewQuery.isFetching && !!ipdOverviewQuery.data;
+
+  const isUpdatingKpi =
+    isUpdatingAppointments ||
+    isUpdatingEmployees ||
+    isUpdatingPatients ||
+    isUpdatingPrescriptions ||
+    isUpdatingIpd;
 
   useEffect(() => {
     if (!employeesQuery.error) return;
@@ -1290,7 +1417,7 @@ export default function Dashboard() {
         icon: <AlertCircle className="w-[17px] h-[17px]" color="#DC2626" />,
         isActive: false,
         onClick: () => {
-          navigate("/patients");
+          navigate("/patients?critical=true");
         },
       },
       {
@@ -1535,9 +1662,25 @@ export default function Dashboard() {
     return allKpiItems.filter((stat) => !stat.permission || can(stat.permission));
   }, [allKpiItems, can]);
 
+  // Filter to selected KPIs, then (when the usage-sort toggle is on) order
+  // by usage frequency — most-clicked first (left), least-clicked last
+  // (right). Ties keep the default order from allKpiItems. Uses the
+  // hydrated snapshot so the order only changes on the next page load,
+  // not mid-session.
   const displayedStats = useMemo(() => {
-    return visibleStats.filter((stat) => selectedKpis.includes(stat.id));
-  }, [visibleStats, selectedKpis]);
+    const filtered = visibleStats
+      .filter((stat) => selectedKpis.includes(stat.id))
+      .map((stat, defaultIndex) => ({ stat, defaultIndex }));
+    if (usageSortEnabled) {
+      filtered.sort((a, b) => {
+        const usageA = kpiUsageSnapshot[a.stat.id] ?? 0;
+        const usageB = kpiUsageSnapshot[b.stat.id] ?? 0;
+        if (usageA !== usageB) return usageB - usageA;
+        return a.defaultIndex - b.defaultIndex;
+      });
+    }
+    return filtered.map((entry) => entry.stat);
+  }, [visibleStats, selectedKpis, kpiUsageSnapshot, usageSortEnabled]);
 
   useEffect(() => {
     const timer = setTimeout(updateScrollButtons, 150);
@@ -1578,6 +1721,12 @@ export default function Dashboard() {
                 <p className="text-xs text-[#70747c]">Real-time operational & clinical metrics across departments</p>
               </div>
               <div className="flex items-center gap-2">
+                {isUpdatingKpi && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-[#00488D] font-medium bg-blue-50 px-2.5 py-1 rounded-full animate-fade-in">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00488D]" />
+                    <span>Updating KPIs...</span>
+                  </span>
+                )}
                 <div className="flex items-center bg-white border border-[#E5E7EB] rounded-lg shadow-sm">
                   <button
                     onClick={() => setSelectedDate((prev) => subDays(prev, 1))}
@@ -1704,6 +1853,36 @@ export default function Dashboard() {
                       </div>
                     </div>
 
+                    {/* Usage-based sort toggle */}
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 bg-slate-50/60">
+                      <div className="flex flex-col gap-[1px] min-w-0">
+                        <span className="text-[11px] font-semibold text-slate-700 leading-tight">
+                          Sort by most used
+                        </span>
+                        <span className="text-[10px] text-slate-400 leading-tight truncate">
+                          {usageSortEnabled
+                            ? "Frequently clicked KPIs appear first"
+                            : "KPIs stay in default order"}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={usageSortEnabled}
+                        onClick={toggleUsageSort}
+                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00488D] focus-visible:ring-offset-2 ${
+                          usageSortEnabled ? "bg-[#00488D]" : "bg-slate-300"
+                        }`}
+                        title={usageSortEnabled ? "Disable usage-based sorting" : "Enable usage-based sorting"}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200 ${
+                            usageSortEnabled ? "translate-x-[19px]" : "translate-x-[3px]"
+                          }`}
+                        />
+                      </button>
+                    </div>
+
                     {/* KPI Multi-select List */}
                     <div className="max-h-64 overflow-y-auto p-1 space-y-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                       {visibleStats.map((stat) => {
@@ -1786,12 +1965,16 @@ export default function Dashboard() {
                   displayedStats.map((card) => (
                     <div
                       key={card.id}
-                      onClick={card.onClick}
+                      onClick={() => {
+                        trackKpiUsage(card.id);
+                        card.onClick();
+                      }}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
+                          trackKpiUsage(card.id);
                           card.onClick();
                         }
                       }}
@@ -1982,23 +2165,33 @@ export default function Dashboard() {
           </div>
 
 {/* Overview Header */}
-           <div className="flex items-end justify-between">
+           <div className="flex items-center justify-between flex-wrap gap-3">
              <div>
                <h2 className="hms-heading">Admin Overview</h2>
-               <p className="hms-subheading">Real-time performance across all branches.</p>
+               <p className="hms-subheading">Real-time clinical, inpatient, and staff performance across all branches.</p>
              </div>
-             {can("appointment.create") && (
-             <button
-               onClick={() => navigate("/appointments/add")}
-               className="flex items-center gap-1.5 px-5 py-2.5 bg-[#004785] rounded-[10px] text-white text-xs font-semibold whitespace-nowrap hover:opacity-90 transition-opacity"
-             >
-               <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
-                 <path d="M8 2V10M4 6H12" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-               </svg>
-               Add Appointment
-             </button>
-             )}
+             <div className="flex items-center gap-2">
+               <button
+                 type="button"
+                 onClick={() => navigate("/component-showcase")}
+                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100 shadow-2xs cursor-pointer"
+                 title="Preview all inputs and dropdowns"
+               >
+                 🎨 Component Showcase
+               </button>
+               <AdminQuickActionToolbar
+                 showWardOccupancy={showWardOccupancy}
+                 onToggleWardOccupancy={() => setShowWardOccupancy((prev) => !prev)}
+               />
+             </div>
            </div>
+
+           {/* Full-Width Ward & Bed Occupancy Drawer (Default: Closed) */}
+           {showWardOccupancy && (
+             <div className="w-full transition-all duration-300">
+               <WardOccupancyWidget />
+             </div>
+           )}
 
           {/* Table Card */}
           <div className="bg-white rounded-xl border border-[#E5E7EB] shadow-sm flex flex-col transition-all duration-300 hover:shadow-md">
@@ -2098,6 +2291,12 @@ export default function Dashboard() {
                   open={isFilterOpen}
                   onOpenChange={setIsFilterOpen}
                 />
+                {(activeTab === "appointments" ? isUpdatingAppointments : isUpdatingEmployees) && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-[#00488D] font-medium bg-blue-50 px-2.5 py-1 rounded-full animate-fade-in">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00488D]" />
+                    <span>Updating {activeTab}...</span>
+                  </span>
+                )}
                 <RefreshButton
                   onClick={() => {
                     if (activeTab === "appointments") fetchAppointments();
@@ -2110,7 +2309,7 @@ export default function Dashboard() {
                     prescriptionsQuery.refetch();
                     ipdOverviewQuery.refetch();
                   }}
-                  isLoading={activeTab === "appointments" ? isAppointmentsLoading : isEmployeesLoading}
+                  isLoading={activeTab === "appointments" ? (isAppointmentsLoading || isUpdatingAppointments) : (isEmployeesLoading || isUpdatingEmployees)}
                 />
               </div>
             </div>
@@ -2123,6 +2322,7 @@ export default function Dashboard() {
                 Loading {activeTab}...
               </div>
             ) : (
+              <div className={`transition-opacity duration-200 ${(activeTab === "appointments" ? isUpdatingAppointments : isUpdatingEmployees) ? "opacity-75" : "opacity-100"}`}>
               <HmsTable
                 scrollable={false}
                 columns={activeTab === "appointments" ? [
@@ -2252,6 +2452,7 @@ export default function Dashboard() {
                    return "";
                 }}
               />
+              </div>
             )}
             </div>
           </div>
@@ -2263,38 +2464,16 @@ export default function Dashboard() {
             <BranchPerformance selectedDate={selectedDate} />
             )}
 
-            {/* System Integrity */}
-            <div className="bg-white rounded-lg border border-[rgba(194,198,212,0.10)] p-5 flex flex-col gap-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="text-[#191C1E] font-extrabold text-base leading-6 tracking-[-0.4px]">System Integrity</h3>
-                  <p className="text-[#424752] text-[9px] font-semibold tracking-[0.9px] capitalize">Alerts</p>
-                </div>
-                <button className="px-3 py-1 rounded border border-[rgba(194,198,212,0.30)] text-[#424752] text-[9px] font-semibold tracking-[0.9px]">View All</button>
-              </div>
-              <div className="flex flex-col gap-2">
-                {/* Alert 1 */}
-                <div className="flex items-start gap-3 p-2 rounded-[4px]">
-                  <svg width="17" height="15" viewBox="0 0 17 15" fill="none" className="flex-shrink-0 mt-0.5">
-                    <path d="M0 14.25L8.25 0L16.5 14.25H0ZM2.5875 12.75H13.9125L8.25 3L2.5875 12.75ZM8.25 12C8.4625 12 8.64062 11.9281 8.78438 11.7844C8.92813 11.6406 9 11.4625 9 11.25C9 11.0375 8.92813 10.8594 8.78438 10.7156C8.64062 10.5719 8.4625 10.5 8.25 10.5C8.0375 10.5 7.85938 10.5719 7.71562 10.7156C7.57187 10.8594 7.5 11.0375 7.5 11.25C7.5 11.4625 7.57187 11.6406 7.71562 11.7844C7.85938 11.9281 8.0375 12 8.25 12ZM7.5 9.75H9V6H7.5V9.75Z" fill="#BA1A1A"/>
-                  </svg>
-                  <div>
-                    <div className="text-[#191C1E] font-semibold text-xs leading-[15px]">Admin Access Granted</div>
-                    <div className="text-[#424752] font-normal text-[10px] leading-[15px]">John Doe (IT) authorized for DB.</div>
-                  </div>
-                </div>
-                {/* Alert 2 */}
-                <div className="flex items-start gap-3 p-2 rounded-[4px]">
-                  <svg width="17" height="15" viewBox="0 0 17 15" fill="none" className="flex-shrink-0 mt-0.5">
-                    <path d="M0 14.25L8.25 0L16.5 14.25H0ZM2.5875 12.75H13.9125L8.25 3L2.5875 12.75ZM8.25 12C8.4625 12 8.64062 11.9281 8.78438 11.7844C8.92813 11.6406 9 11.4625 9 11.25C9 11.0375 8.92813 10.8594 8.78438 10.7156C8.64062 10.5719 8.4625 10.5 8.25 10.5C8.0375 10.5 7.85938 10.5719 7.71562 10.7156C7.57187 10.8594 7.5 11.0375 7.5 11.25C7.5 11.4625 7.57187 11.6406 7.71562 11.7844C7.85938 11.9281 8.0375 12 8.25 12ZM7.5 9.75H9V6H7.5V9.75Z" fill="#BA1A1A"/>
-                  </svg>
-                  <div>
-                    <div className="text-[#191C1E] font-semibold text-xs leading-[15px]">Server Latency</div>
-                    <div className="text-[#424752] font-normal text-[10px] leading-[15px]">Billing module experiencing delays.</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            {/* System Integrity Control Center */}
+            <SystemIntegrityWidget
+              criticalPatientCount={criticalPatientCount}
+              doctorsOnLeave={doctorsOnLeave}
+              unassignedApptsCount={unassignedApptsCount}
+              onFilterCritical={() => {
+                setActiveTab("appointments");
+                setCurrentPage(1);
+              }}
+            />
           </div>
         </main>
       </div>

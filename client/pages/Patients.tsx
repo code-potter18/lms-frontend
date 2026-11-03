@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import CalendarPicker from "@/components/hms/Calender";
 import { format, isToday, isTomorrow, isYesterday, addDays, subDays } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -309,6 +309,8 @@ function CardMenu({ onView, onEdit }: { onView: () => void; onEdit: () => void }
 // ============================================================
 export default function PatientsManagement() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isCriticalOnly = searchParams.get("critical") === "true";
   const { toast } = useToast();
   const { can } = usePermission();
   const { selectedBranchId, isAllBranches } = useBranchFilter();
@@ -491,8 +493,12 @@ export default function PatientsManagement() {
 
     result = filterDataByValues(result, appliedValues, patientFilterFields);
 
+    if (isCriticalOnly) {
+      result = result.filter((item) => getCriticalInfo(String(item.id)).isCritical);
+    }
+
     return result;
-  }, [searchQuery, searchableFields, appliedValues, viewMode, realPatients, assignedDoctors, patientFilterFields]);
+  }, [searchQuery, searchableFields, appliedValues, viewMode, realPatients, assignedDoctors, patientFilterFields, isCriticalOnly, getCriticalInfo]);
 
   // ---- SORTING (list only) ----
   const handleSort = (field: string) => {
@@ -746,6 +752,27 @@ export default function PatientsManagement() {
                 />
               </div>
             </div>
+
+            {isCriticalOnly && (
+              <div className="mb-4 flex items-center justify-between rounded-lg border border-red-200 bg-red-50/80 px-4 py-2.5 text-sm text-red-900 transition-all">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
+                  <span className="font-semibold">Filtered by Critical Patients</span>
+                  <span className="text-red-700 text-xs">
+                    (Showing {displayData.length} patient{displayData.length === 1 ? "" : "s"} with abnormal vitals or critical flags)
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    searchParams.delete("critical");
+                    setSearchParams(searchParams);
+                  }}
+                  className="inline-flex items-center gap-1 rounded bg-red-100 px-2.5 py-1 text-xs font-medium text-red-800 hover:bg-red-200 hover:text-red-900 transition-colors"
+                >
+                  Clear Filter
+                </button>
+              </div>
+            )}
 
             {/* ================================================================ */}
             {/* BODY: LIST VIEW (sortable table with diagnose/doctor columns)   */}

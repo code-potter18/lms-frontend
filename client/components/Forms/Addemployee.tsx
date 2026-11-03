@@ -12,6 +12,7 @@ import { PhoneInput } from "@/components/ui/phone-input";
 import { State as CSState, City } from "country-state-city";
 import type { IState } from "country-state-city";
 import { employeeApi, CreateEmployeePayload, UpdateEmployeePayload, WorkingHourDto } from "@/api/employee.api";
+import { dutyRosterApi, type BranchShift } from "@/api/dutyRoster.api";
 import { branchApi, Branch, AssignableUser } from "@/api/branch.api";
 import { departmentApi, Department } from "@/api/department.api";
 import { qualificationApi, Qualification } from "@/api/qualification.api";
@@ -130,6 +131,50 @@ interface ScheduleEntry {
   end_time: string;
   branch_id: string;
   consultation_minutes: string;
+  /** Nurse duty pattern only: the branch shift (branch_shift_master.shift_code). */
+  shift_code: string;
+}
+
+// Nurse duty pattern: two slots on the same weekly timeline must not overlap
+// (an overnight shift runs into the next day, and Sunday wraps to Monday).
+// The backend enforces the same rule; checking here avoids creating the
+// employee and only then failing to save the schedule.
+const DAY_INDEX: Record<string, number> = {
+  MONDAY: 0, TUESDAY: 1, WEDNESDAY: 2, THURSDAY: 3, FRIDAY: 4, SATURDAY: 5, SUNDAY: 6,
+};
+const clockMinutes = (t: string) => {
+  const d = new Date(t);
+  if (!isNaN(d.getTime()) && t.includes("T")) return d.getUTCHours() * 60 + d.getUTCMinutes();
+  const [h, m] = t.slice(0, 5).split(":").map(Number);
+  return h * 60 + m;
+};
+function findNurseSlotConflict(
+  slots: ScheduleEntry[],
+  shiftsByBranch: Record<string, BranchShift[]>,
+): string | null {
+  const DAY = 24 * 60;
+  const spans = slots.map((s) => {
+    const shift = shiftsByBranch[s.branch_id]?.find((x) => x.shift_code === s.shift_code);
+    if (!shift || !(s.day_of_week in DAY_INDEX)) return null;
+    const start = clockMinutes(shift.start_time);
+    let end = clockMinutes(shift.end_time);
+    if (end <= start) end += DAY;
+    const base = DAY_INDEX[s.day_of_week] * DAY;
+    return { label: `${s.day_of_week} ${s.shift_code}`, start: base + start, end: base + end };
+  });
+  for (let i = 0; i < spans.length; i++) {
+    for (let j = i + 1; j < spans.length; j++) {
+      const a = spans[i];
+      const b = spans[j];
+      if (!a || !b) continue;
+      for (const wrap of [-7 * DAY, 0, 7 * DAY]) {
+        if (a.start < b.end + wrap && b.start + wrap < a.end) {
+          return `${a.label} overlaps ${b.label}`;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 function deriveShiftName(startTime: string): string {
@@ -486,6 +531,11 @@ export default function AddEmployee() {
   // appointments/encounters, which would otherwise make a removed slot
   // reappear on the pages.
   const [removedScheduleIds, setRemovedScheduleIds] = useState<(string | number)[]>([]);
+  // Nurse duty pattern: shifts per branch, and saved duty templates the admin
+  // removed in edit mode (deleted through the roster API on save).
+  const [branchShifts, setBranchShifts] = useState<Record<string, BranchShift[]>>({});
+  const requestedShiftBranches = useRef<Set<string>>(new Set());
+  const [removedTemplateIds, setRemovedTemplateIds] = useState<string[]>([]);
 
   // ── Edit-mode-only state ──────────────────────────────────────────────────
   const [isActive, setIsActive] = useState(true);
@@ -761,6 +811,7 @@ export default function AddEmployee() {
               end_time: toTimeInputValue(s.end_time) || "17:00",
               branch_id: s.branch_id || "",
               consultation_minutes: s.consultation_minutes ? String(s.consultation_minutes) : String(profile?.consultation_minutes || "20"),
+              shift_code: "",
             }));
             setSchedule(loadedSchedule);
             initialScheduleRef.current = loadedSchedule;
@@ -773,6 +824,34 @@ export default function AddEmployee() {
           }
           setFormData((p) => ({ ...p, doctorBio: profile?.doctor_bio || "" }));
         }
+
+        if (roleType === "NURSE") {
+          // The nurse's weekly duty pattern lives in the duty-roster templates.
+          setRemovedTemplateIds([]);
+          Promise.all(
+            branchIds.map((b) =>
+              dutyRosterApi
+                .getTemplates(b)
+                .then((r) => r.data?.data || [])
+                .catch(() => []),
+            ),
+          ).then((lists) => {
+            const mine = lists
+              .flat()
+              .filter((t) => t.employee_id === employeeId && t.role_in_duty === "DUTY_NURSE");
+            const loaded: ScheduleEntry[] = mine.map((t) => ({
+              id: `tpl-${t.template_id}`,
+              day_of_week: t.day_of_week,
+              start_time: "",
+              end_time: "",
+              branch_id: t.branch_id,
+              consultation_minutes: "",
+              shift_code: t.shift_code,
+            }));
+            setSchedule(loaded);
+            initialScheduleRef.current = loaded;
+          });
+        }
       })
       .catch(() => {
         toast({
@@ -784,12 +863,42 @@ export default function AddEmployee() {
       .finally(() => setLoading(false));
   }, [employeeId, toast]);
 
+  // Nurse duty pattern: load each selected branch's shifts once (the backend
+  // provisions the default shift set for a branch that has none yet).
+  useEffect(() => {
+    if (formData.roleType !== "NURSE") return;
+    formData.branchIds
+      .filter((b) => b && !requestedShiftBranches.current.has(b))
+      .forEach((b) => {
+        requestedShiftBranches.current.add(b);
+        dutyRosterApi
+          .getBranchShifts(b)
+          .then((res) =>
+            setBranchShifts((p) => ({
+              ...p,
+              [b]: (res.data?.data || []).filter((s) => s.is_active),
+            })),
+          )
+          .catch(() => {
+            requestedShiftBranches.current.delete(b);
+            setBranchShifts((p) => ({ ...p, [b]: [] }));
+          });
+      });
+  }, [formData.roleType, formData.branchIds]);
+
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const displayRole = toDisplayRole(formData.roleType);
   const roleConfig = ROLE_CONFIG[displayRole] ?? null;
   const isMedical = roleConfig?.isMedical ?? false;
   const showSchedule = roleConfig?.showSchedule ?? false;
+  // A nurse has no OPD clinic hours; her "schedule" is a weekly duty pattern of
+  // branch shifts (saved as duty-roster templates), built with the same slot rows.
+  const isNurse = formData.roleType === "NURSE";
+  // Saved doctor slots are edited elsewhere; a nurse's saved shifts stay fixed
+  // here too, but new shifts can be added and old ones removed.
+  const slotLocked = (entry: ScheduleEntry) =>
+    isEditMode && !(isNurse && entry.id.startsWith("slot-"));
   const emergencyOptional = formData.maritalStatus === "Divorced";
   const todayStr = new Date().toISOString().slice(0, 10);
   const joiningMaxStr = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
@@ -906,6 +1015,7 @@ export default function AddEmployee() {
       setSchedule([]);
       setConsultationMinutes("20");
       setRemovedScheduleIds([]);
+      setRemovedTemplateIds([]);
     }
   };
 
@@ -927,7 +1037,16 @@ export default function AddEmployee() {
     const id = `slot-${nextSlotId.current++}`;
     setSchedule((p) => [
       ...p,
-      { id, day_of_week: "", start_time: "09:00", end_time: "17:00", branch_id: "", consultation_minutes: "20" },
+      {
+        id,
+        day_of_week: "",
+        start_time: "09:00",
+        end_time: "17:00",
+        // A nurse usually works one branch, so pre-pick it.
+        branch_id: formData.roleType === "NURSE" && formData.branchIds.length === 1 ? formData.branchIds[0] : "",
+        consultation_minutes: "20",
+        shift_code: "",
+      },
     ]);
   };
 
@@ -942,6 +1061,11 @@ export default function AddEmployee() {
     if (dbMatch) {
       setRemovedScheduleIds((p) => [...p, dbMatch[1]]);
     }
+    // Saved nurse duty shifts (id "tpl-<template_id>") are deleted on save.
+    const tplMatch = id.match(/^tpl-(.+)$/);
+    if (tplMatch) {
+      setRemovedTemplateIds((p) => [...p, tplMatch[1]]);
+    }
     setSchedule((p) => p.filter((s) => s.id !== id));
   };
 
@@ -951,6 +1075,50 @@ export default function AddEmployee() {
     );
 
   // ── Submit ─────────────────────────────────────────────────────────────────
+
+  // Saves the nurse's weekly duty pattern as duty-roster templates. Runs after
+  // the employee exists (the backend requires an active branch mapping).
+  // Returns a list of problems instead of throwing, so a schedule hiccup never
+  // hides the fact that the employee itself was saved.
+  const saveNurseDuty = async (empId: string): Promise<string[]> => {
+    if (formData.roleType !== "NURSE") return [];
+    const issues: string[] = [];
+    const reason = (err: any) => err?.response?.data?.message || err?.message || "failed";
+
+    // Removals first so a replaced shift can never collide with its old row.
+    for (const templateId of removedTemplateIds) {
+      try {
+        await dutyRosterApi.deleteTemplate(templateId);
+      } catch (err) {
+        issues.push(`Remove shift: ${reason(err)}`);
+      }
+    }
+    setRemovedTemplateIds([]);
+
+    for (const s of schedule.filter((x) => x.id.startsWith("slot-"))) {
+      try {
+        await dutyRosterApi.upsertTemplate({
+          employee_id: empId,
+          branch_id: s.branch_id,
+          day_of_week: s.day_of_week,
+          shift_code: s.shift_code,
+          role_in_duty: "DUTY_NURSE",
+        });
+      } catch (err) {
+        issues.push(`${s.day_of_week} ${s.shift_code}: ${reason(err)}`);
+      }
+    }
+    return issues;
+  };
+
+  const reportNurseDuty = (issues: string[]) => {
+    if (issues.length === 0) return;
+    toast({
+      title: "Nurse saved, but some duty shifts were not saved",
+      description: `${issues.join("; ")}. You can set them in Inpatient Duty Roster.`,
+      variant: "destructive",
+    });
+  };
 
   // Does the actual create/update call. `branchAction` is only meaningful for
   // a Branch Admin edit whose branch selection changed — assign/unassign runs
@@ -1125,6 +1293,8 @@ export default function AddEmployee() {
 
         setOriginalBranchId(formData.branchIds[0] ?? NONE_BRANCH_VALUE);
 
+        reportNurseDuty(await saveNurseDuty(employeeId));
+
         toast({
           title: "Employee updated",
           description: `${formData.firstName} ${formData.lastName} was updated successfully.`,
@@ -1145,6 +1315,9 @@ export default function AddEmployee() {
         } as CreateEmployeePayload);
 
         if (!response.data.success) throw new Error(response.data.message);
+
+        const newEmployeeId = response.data.data?.employee?.employee_id;
+        if (newEmployeeId) reportNurseDuty(await saveNurseDuty(newEmployeeId));
 
         toast({
           title: "Employee added",
@@ -1271,6 +1444,27 @@ export default function AddEmployee() {
         toast({
           title: "Incomplete schedule",
           description: "Please select a day, start time, end time and consultation minutes for every schedule time slot.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    if (formData.roleType === "NURSE") {
+      const incomplete = schedule.find((s) => !s.day_of_week || !s.branch_id || !s.shift_code);
+      if (incomplete) {
+        toast({
+          title: "Incomplete duty schedule",
+          description: "Please select a day, branch and shift for every duty shift, or remove the empty row.",
+          variant: "destructive",
+        });
+        return;
+      }
+      const conflict = findNurseSlotConflict(schedule, branchShifts);
+      if (conflict) {
+        toast({
+          title: "Overlapping duty shifts",
+          description: `${conflict}. A nurse cannot be on two overlapping shifts.`,
           variant: "destructive",
         });
         return;
@@ -2186,9 +2380,9 @@ export default function AddEmployee() {
             )}
           </AnimatePresence>
 
-          {/* ── Schedule (Doctor only) ── */}
+          {/* ── Schedule: Doctor = OPD working hours, Nurse = weekly duty pattern ── */}
           <AnimatePresence>
-            {showSchedule && (
+            {(showSchedule || isNurse) && (
               <motion.div
                 key="schedule"
                 layout
@@ -2198,18 +2392,25 @@ export default function AddEmployee() {
                 transition={{ duration: 0.25, ease: "easeInOut" }}
               >
                 <Section
-                  title="Schedule and time slots"
-                  sub="Weekly working hours — shown only for the Doctor role."
+                  title={isNurse ? "Duty schedule (weekly shifts)" : "Schedule and time slots"}
+                  sub={
+                    isNurse
+                      ? "Recurring weekly duty pattern. Pick a day, branch and shift — it feeds the Inpatient Duty Roster and ward allocation."
+                      : "Weekly working hours — shown only for the Doctor role."
+                  }
                 >
                   {schedule.length === 0 && (
                     <p className="text-[13px] text-gray-400 mb-3">
-                      No time slots added yet.
+                      {isNurse ? "No duty shifts added yet." : "No time slots added yet."}
                     </p>
                   )}
 
                   {/* ── Style 3 slot rows ── */}
                   <div className="space-y-2.5 mb-3">
-                    {schedule.map((entry) => (
+                    {schedule.map((entry) => {
+                      const locked = slotLocked(entry);
+                      const shiftsForBranch = branchShifts[entry.branch_id] ?? [];
+                      return (
                       <div
                         key={entry.id}
                         className="flex flex-wrap items-end gap-3 bg-white border border-gray-200 border-l-[4px] border-l-blue-600 rounded-r-[10px] px-4 py-3.5"
@@ -2226,94 +2427,153 @@ export default function AddEmployee() {
                             value={entry.day_of_week}
                             onValueChange={(v) => updateSlot(entry.id, "day_of_week", v)}
                             placeholder="Select day"
-                            disabled={submitting || isEditMode}
+                            disabled={submitting || locked}
                           />
                         </div>
 
-                        {/* Start time */}
-                        <div className="flex flex-col">
-                          <label className="text-[10.5px] font-bold text-blue-600 uppercase tracking-[0.04em] mb-1.5">
-                            Start time <Req />
-                          </label>
-                          <TimepickerWheel
-                            value={entry.start_time}
-                            onChange={(v) => updateSlot(entry.id, "start_time", v)}
-                            placeholder="Start time"
-                            disabled={submitting || isEditMode}
-                          />
-                        </div>
+                        {isNurse ? (
+                          <>
+                            {/* Branch (decides which shifts are offered) */}
+                            <div className="flex flex-col">
+                              <label className="text-[10.5px] font-bold text-blue-600 uppercase tracking-[0.04em] mb-1.5">
+                                Branch <Req />
+                              </label>
+                              <FormDropdown
+                                name={`branch-${entry.id}`}
+                                className={inputCls + " !h-9 !w-[200px]"}
+                                options={branches
+                                  .filter((b) => formData.branchIds.includes(b.branch_id))
+                                  .map((b) => ({
+                                    label: `${b.branch_id}${b.branch_name ? ` - ${b.branch_name}` : ""}`,
+                                    value: b.branch_id,
+                                  }))}
+                                value={entry.branch_id}
+                                onValueChange={(v) =>
+                                  setSchedule((p) =>
+                                    p.map((s) =>
+                                      s.id === entry.id ? { ...s, branch_id: v, shift_code: "" } : s,
+                                    ),
+                                  )
+                                }
+                                placeholder="Select branch"
+                                disabled={submitting || branches.length === 0 || locked}
+                              />
+                            </div>
 
-                        {/* End time */}
-                        <div className="flex flex-col">
-                          <label className="text-[10.5px] font-bold text-blue-600 uppercase tracking-[0.04em] mb-1.5">
-                            End time <Req />
-                          </label>
-                          <TimepickerWheel
-                            value={entry.end_time}
-                            onChange={(v) => updateSlot(entry.id, "end_time", v)}
-                            placeholder="End time"
-                            disabled={submitting || isEditMode}
-                          />
-                        </div>
+                            {/* Shift (from the branch's shift master) */}
+                            <div className="flex flex-col">
+                              <label className="text-[10.5px] font-bold text-blue-600 uppercase tracking-[0.04em] mb-1.5">
+                                Shift <Req />
+                              </label>
+                              <FormDropdown
+                                name={`shift-${entry.id}`}
+                                className={inputCls + " !h-9 !w-[240px]"}
+                                options={shiftsForBranch.map((s) => ({
+                                  label: `${s.shift_name} (${toTimeInputValue(s.start_time)}–${toTimeInputValue(s.end_time)})`,
+                                  value: s.shift_code,
+                                }))}
+                                value={entry.shift_code}
+                                onValueChange={(v) => updateSlot(entry.id, "shift_code", v)}
+                                placeholder={
+                                  !entry.branch_id
+                                    ? "Select branch first"
+                                    : shiftsForBranch.length === 0
+                                    ? "No shifts for this branch"
+                                    : "Select shift"
+                                }
+                                disabled={submitting || locked || !entry.branch_id}
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* Start time */}
+                            <div className="flex flex-col">
+                              <label className="text-[10.5px] font-bold text-blue-600 uppercase tracking-[0.04em] mb-1.5">
+                                Start time <Req />
+                              </label>
+                              <TimepickerWheel
+                                value={entry.start_time}
+                                onChange={(v) => updateSlot(entry.id, "start_time", v)}
+                                placeholder="Start time"
+                                disabled={submitting || locked}
+                              />
+                            </div>
 
-                        {/* Consultation minutes */}
-                        <div className="flex flex-col">
-                          <label className="text-[10.5px] font-bold text-blue-600 uppercase tracking-[0.04em] mb-1.5">
-                            Consultation min <Req />
-                          </label>
-                          <input
-                            type="number"
-                            min={1}
-                            className={inputCls + " !h-9 !w-[90px]"}
-                            value={entry.consultation_minutes}
-                            onChange={(e) => updateSlot(entry.id, "consultation_minutes", e.target.value)}
-                            disabled={submitting || isEditMode}
-                          />
-                        </div>
+                            {/* End time */}
+                            <div className="flex flex-col">
+                              <label className="text-[10.5px] font-bold text-blue-600 uppercase tracking-[0.04em] mb-1.5">
+                                End time <Req />
+                              </label>
+                              <TimepickerWheel
+                                value={entry.end_time}
+                                onChange={(v) => updateSlot(entry.id, "end_time", v)}
+                                placeholder="End time"
+                                disabled={submitting || locked}
+                              />
+                            </div>
 
-                        {/* Branch */}
-                        <div className="flex flex-col">
-                          <label className="text-[10.5px] font-bold text-blue-600 uppercase tracking-[0.04em] mb-1.5">
-                            Branch <Req />
-                          </label>
-                          <FormDropdown
-                            name={`branch-${entry.id}`}
-                            className={inputCls + " !h-9 !w-[200px]"}
-                            options={branches
-                              .filter((b) => formData.branchIds.includes(b.branch_id))
-                              .map((b) => ({
-                                label: `${b.branch_id}${b.branch_name ? ` - ${b.branch_name}` : ""}`,
-                                value: b.branch_id,
-                              }))}
-                            value={entry.branch_id}
-                            onValueChange={(v) => updateSlot(entry.id, "branch_id", v)}
-                            placeholder="Select branch"
-                            disabled={submitting || branches.length === 0 || isEditMode}
-                          />
-                        </div>
+                            {/* Consultation minutes */}
+                            <div className="flex flex-col">
+                              <label className="text-[10.5px] font-bold text-blue-600 uppercase tracking-[0.04em] mb-1.5">
+                                Consultation min <Req />
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                className={inputCls + " !h-9 !w-[90px]"}
+                                value={entry.consultation_minutes}
+                                onChange={(e) => updateSlot(entry.id, "consultation_minutes", e.target.value)}
+                                disabled={submitting || locked}
+                              />
+                            </div>
+
+                            {/* Branch */}
+                            <div className="flex flex-col">
+                              <label className="text-[10.5px] font-bold text-blue-600 uppercase tracking-[0.04em] mb-1.5">
+                                Branch <Req />
+                              </label>
+                              <FormDropdown
+                                name={`branch-${entry.id}`}
+                                className={inputCls + " !h-9 !w-[200px]"}
+                                options={branches
+                                  .filter((b) => formData.branchIds.includes(b.branch_id))
+                                  .map((b) => ({
+                                    label: `${b.branch_id}${b.branch_name ? ` - ${b.branch_name}` : ""}`,
+                                    value: b.branch_id,
+                                  }))}
+                                value={entry.branch_id}
+                                onValueChange={(v) => updateSlot(entry.id, "branch_id", v)}
+                                placeholder="Select branch"
+                                disabled={submitting || branches.length === 0 || locked}
+                              />
+                            </div>
+                          </>
+                        )}
 
                         {/* Remove — Style 3 danger tint */}
                         <button
                           type="button"
                           onClick={() => removeSlot(entry.id)}
-                          disabled={submitting || isEditMode}
+                          disabled={submitting || (isEditMode && !isNurse)}
                           className="w-8 h-8 flex items-center justify-center rounded-[6px] border border-red-300 bg-red-50 text-red-600 hover:bg-red-100 transition-colors disabled:opacity-50"
-                          aria-label="Remove time slot"
+                          aria-label={isNurse ? "Remove duty shift" : "Remove time slot"}
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   <button
                     type="button"
                     onClick={addSlot}
-                    disabled={submitting || isEditMode}
+                    disabled={submitting || (isEditMode && !isNurse)}
                     className="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-semibold text-blue-600 border border-blue-200 rounded-[10px] bg-white hover:bg-blue-50 transition-colors disabled:opacity-50"
                   >
                     <Plus className="w-4 h-4" />
-                    Add time slot <Req />
+                    {isNurse ? "Add duty shift" : "Add time slot"} {isNurse ? <Opt /> : <Req />}
                   </button>
                 </Section>
               </motion.div>

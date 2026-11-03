@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { getActiveBranchId } from "../../../api/axios";
+import { appointmentApi, type AppointmentRecord } from "../../../api/appointment.api";
 import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
+import { patientApi, type PatientRecord } from "../../../api/patient.api";
 import { computeBsa } from "../../../utils/vitals";
 import type {
   ChemoVitalsEntry,
@@ -303,4 +307,135 @@ export function useLatestPatientVitals(
     lastCheckedLabel,
     scopeHint,
   };
+}
+
+/* ================= Next visit booking =================
+   The patient's appointments (from the treatment start, or today), latest
+   encounter and record, and the doctor-portal booking actions: Book a cycle
+   day's visit (prefilled, "Chemotherapy Visit") or Reschedule the
+   appointment already booked on it. Used by the Order Summary and
+   Medications tabs. */
+const isoDayOf = (value?: string | null) => (value ? String(value).slice(0, 10) : "");
+const localTodayIso = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+};
+
+export function useNextVisitBooking(
+  patientId: string,
+  { planDoctorId, treatmentStartDate }: { planDoctorId?: string | null; treatmentStartDate?: string | null } = {}
+) {
+  const navigate = useNavigate();
+  const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
+  const [latestEncounter, setLatestEncounter] = useState<EncounterRecord | null>(null);
+  const [patient, setPatient] = useState<PatientRecord | null>(null);
+  const today = localTodayIso();
+
+  useEffect(() => {
+    if (!patientId) return;
+    let cancelled = false;
+    const from = isoDayOf(treatmentStartDate);
+    appointmentApi
+      .getAll({
+        patientId,
+        dateFrom: from && from < today ? from : today,
+        sortBy: "appointment_date",
+        sortOrder: "desc",
+        limit: 100,
+      })
+      .then((response) => {
+        if (!cancelled) setAppointments(response.data?.data?.appointments ?? []);
+      })
+      .catch((error) => console.error("Failed to load the patient's appointments:", error));
+    encounterApi
+      .getLatest(patientId, 1)
+      .then((response) => {
+        if (!cancelled) setLatestEncounter(response.data?.data?.encounters?.[0] ?? null);
+      })
+      .catch(() => undefined);
+    patientApi
+      .getById(patientId)
+      .then((response) => {
+        if (!cancelled) setPatient(response.data?.data ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patientId, treatmentStartDate]);
+
+  /* Not cancelled / no-show. */
+  const activeAppointments = appointments.filter(
+    (appointment) => !["CANCELLED", "NO_SHOW"].includes(String(appointment.status ?? "").toUpperCase())
+  );
+
+  /* The appointment booked on a date (not yet completed). */
+  const bookedOn = (date?: string | null): AppointmentRecord | null =>
+    date
+      ? activeAppointments.find(
+          (appointment) =>
+            isoDayOf(appointment.appointment_date) === date &&
+            String(appointment.status ?? "").toUpperCase() !== "COMPLETED"
+        ) ?? null
+      : null;
+
+  const placement = {
+    doctorId: latestEncounter?.employee_id || planDoctorId || "",
+    branchId: latestEncounter?.branch_id || getActiveBranchId() || "",
+    departmentId: latestEncounter?.department_id || "",
+  };
+
+  /* Book the visit of a date (today when it has passed). */
+  const book = (dateValue?: string | null) => {
+    const date = dateValue && dateValue >= today ? dateValue : today;
+    navigate("/doctor/appointments/add", {
+      state: {
+        ...(patient
+          ? {
+              patient: {
+                patient_id: patient.patient_id,
+                patient_first_name: patient.patient_first_name,
+                patient_middle_name: patient.patient_middle_name ?? "",
+                patient_last_name: patient.patient_last_name ?? "",
+                patient_primary_mobile: patient.patient_primary_mobile ?? "",
+              },
+            }
+          : {}),
+        ...(placement.doctorId && placement.branchId && placement.departmentId
+          ? { slot: { ...placement, date } }
+          : {}),
+        ...(placement.doctorId
+          ? {
+              doctorBooking: {
+                doctorId: placement.doctorId,
+                ...(placement.branchId ? { branchId: placement.branchId } : {}),
+                ...(placement.departmentId ? { departmentId: placement.departmentId } : {}),
+              },
+            }
+          : {}),
+        defaultVisitType: "Chemotherapy Visit",
+      },
+    });
+  };
+
+  /* Reschedule a booked appointment (returns to the doctor portal). */
+  const reschedule = (appointment: AppointmentRecord) => {
+    const doctorId = appointment.employee_id || placement.doctorId;
+    const branchId = appointment.branch_id || placement.branchId;
+    const departmentId = appointment.department_id || placement.departmentId;
+    navigate(`/doctor/appointments/edit/${appointment.appointment_id}`, {
+      state: doctorId
+        ? {
+            doctorBooking: {
+              doctorId,
+              ...(branchId ? { branchId } : {}),
+              ...(departmentId ? { departmentId } : {}),
+            },
+          }
+        : undefined,
+    });
+  };
+
+  return { appointments, activeAppointments, latestEncounter, patient, bookedOn, book, reschedule };
 }

@@ -1,4 +1,6 @@
 ﻿import React, { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { appointmentApi } from "../../../api/appointment.api";
 import type { PatientRecord } from "../../../api/patient.api";
 import { encounterApi, type EncounterRecord } from "../../../api/encounter.api";
@@ -7,7 +9,11 @@ import {
   type ConsultationOptionRecord,
   type ImmunizationRecord,
   type DrugConsumptionRecord,
+  type FamilyDegree,
+  type FamilyHistoryEntry,
+  type FamilyHistoryStatus,
   type PersonalHistoryItem,
+  type RelativeTypeOption,
 } from "../../../api/consultation.api";
 import type { LabTestMasterRecord } from "../../../api/labTestMaster.api";
 import { Calendar } from "../../../components/ui/calendar";
@@ -21,7 +27,15 @@ import {
   PopoverTrigger,
 } from "../../../components/ui/popover";
 import { MultiSelectDropdown } from "../../../components/ui/multi-select-dropdown";
-import VoiceToText from "@/components/ui/voicetotext";
+import { SingleSelectDropdown } from "../../../components/ui/single-select-dropdown";
+import VoiceToText, { VoiceInput } from "@/components/ui/voicetotext";
+import DurationInput from "@/components/ui/duration-input";
+import {
+  DEFAULT_DURATION_UNIT,
+  normalizeDurationUnit,
+  toDurationPayload,
+  type DurationUnit,
+} from "@/utils/duration";
 import AdviceSection, {
   type AdviceSaveResult,
   type AdviceSectionHandle,
@@ -30,8 +44,6 @@ import InvestigationOrderCard, {
   EMPTY_INVESTIGATION_DETAIL,
 } from "./InvestigationOrderCard";
 import type { ConsultationState, InvestigationOrderDetail } from "./types";
-import { computeBmi, computeBsa } from "../../../utils/vitals";
-import { printConsultationSummary } from "../../../utils/consultationSummaryPrint";
 import {
   formatDateDMY,
   formatPickedDate,
@@ -39,6 +51,9 @@ import {
   parsePickedDate,
   PAST_HISTORY_MARKER,
   targetDateError,
+  readConsultationDraft,
+  writeConsultationDraft,
+  clearConsultationDraft,
 } from "./helpers";
 
 /* ============================================================
@@ -78,6 +93,37 @@ const hasGeneralExamFinding = (selected: string[], label: string) =>
 /* Per-selection detail fields of the multi-select history inputs. */
 type PastTreatmentDetail = { date: string; note: string; response: string };
 type TestResultDetail = { date: string; result: string; impression: string };
+type DrugConsumptionDetail = {
+  durationValue: string;
+  durationUnit: DurationUnit;
+  commands: string;
+};
+/* One Family History relative being edited. `id` is local only (list keys +
+   updates) and is stripped before saving. */
+type FamilyHistoryDraft = {
+  id: string;
+  degree: FamilyDegree | "";
+  relativeType: string;
+  condition: string;
+  ageAtDiagnosis: string;
+  remarks: string;
+};
+
+const FAMILY_DEGREES: { value: FamilyDegree; label: string }[] = [
+  { value: "1st", label: "1st Degree" },
+  { value: "2nd", label: "2nd Degree" },
+  { value: "3rd", label: "3rd Degree" },
+];
+
+let familyEntrySeq = 0;
+const newFamilyHistoryDraft = (): FamilyHistoryDraft => ({
+  id: `family-${Date.now()}-${familyEntrySeq++}`,
+  degree: "",
+  relativeType: "",
+  condition: "",
+  ageAtDiagnosis: "",
+  remarks: "",
+});
 
 const EMPTY_PAST_TREATMENT: PastTreatmentDetail = {
   date: "",
@@ -88,6 +134,11 @@ const EMPTY_TEST_RESULT: TestResultDetail = {
   date: "",
   result: "",
   impression: "",
+};
+const EMPTY_DRUG_CONSUMPTION_DETAIL: DrugConsumptionDetail = {
+  durationValue: "",
+  durationUnit: DEFAULT_DURATION_UNIT,
+  commands: "",
 };
 
 /* Keeps a details map in step with a multi-select's full selection:
@@ -218,8 +269,37 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
     []
   );
 
+  /* Typed investigations restored with a reopened visit show as custom
+     options again. */
+  useEffect(() => {
+    if (labTestsLoading) return;
+    const labNames = new Set(labTests.map((test) => test.test_name));
+    const missing = selectedInvestigations.filter((name) => !labNames.has(name));
+    if (missing.length === 0) return;
+    setCustomInvestigations((current) => {
+      const added = missing.filter((name) => !current.includes(name));
+      return added.length > 0 ? [...current, ...added] : current;
+    });
+  }, [selectedInvestigations, labTests, labTestsLoading]);
+
   const investigationDetail = (name: string) =>
     investigationDetails[name] ?? EMPTY_INVESTIGATION_DETAIL;
+
+  /* A selected investigation is Molecular when its lab test master row
+     belongs to a "Molecular" category. The master groups molecular tests
+     under names like "Molecular - Breast Cancer" / "Molecular - Lung
+     Cancer", so the category name is matched by prefix, case-insensitively.
+     Custom (typed) tests have no master row, so they never show the
+     testing Method dropdown. */
+  const isMolecularTest = (name: string) => {
+    const test = labTests.find(
+      (item) => (item.test_name ?? "").toLowerCase() === name.toLowerCase()
+    );
+    return (test?.lab_test_category?.category_name ?? "")
+      .trim()
+      .toLowerCase()
+      .startsWith("molecular");
+  };
 
   const updateInvestigationDetail = (
     name: string,
@@ -268,9 +348,76 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
   const [selectedDrugConsumptions, setSelectedDrugConsumptions] = useState<
     string[]
   >([]);
+  /* Per-drug Duration + Command(s), keyed by the selected value (master
+     name or typed "Others" text). Persisted in the drug_consumption JSON. */
+  const [drugConsumptionDetails, setDrugConsumptionDetails] = useState<
+    Record<string, DrugConsumptionDetail>
+  >({});
   const [dietType, setDietType] = useState("");
 
+  /* Family History: neither status is preselected so an unanswered form is
+     never saved as a false NOT PRESENT. Rows only exist for PRESENT. */
+  const [familyHistoryStatus, setFamilyHistoryStatus] = useState<
+    FamilyHistoryStatus | ""
+  >("");
+  const [familyHistoryEntries, setFamilyHistoryEntries] = useState<
+    FamilyHistoryDraft[]
+  >([]);
+  const [relativeTypeOptions, setRelativeTypeOptions] = useState<
+    RelativeTypeOption[]
+  >([]);
+  /* The family-history column must not be overwritten when its load failed
+     (or hasn't finished): ready flips on a successful GET, or when the doctor
+     starts answering. */
+  const familyHistoryReadyRef = useRef(false);
+
   const [proceeding, setProceeding] = useState(false);
+
+  const [expandedSections, setExpandedSections] = useState<{
+    summary: boolean;
+    personalHistory: boolean;
+    generalExamination: boolean;
+    systemicExamination: boolean;
+    patientDetails: boolean;
+    investigations: boolean;
+    advice: boolean;
+  }>({
+    summary: true,
+    personalHistory: false,
+    generalExamination: false,
+    systemicExamination: false,
+    patientDetails: false,
+    investigations: false,
+    advice: false,
+  });
+
+  const toggleSection = (key: keyof typeof expandedSections) => {
+    setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const expandAll = () => {
+    setExpandedSections({
+      summary: true,
+      personalHistory: true,
+      generalExamination: true,
+      systemicExamination: true,
+      patientDetails: true,
+      investigations: true,
+      advice: true,
+    });
+  };
+
+  const collapseAll = () => {
+    setExpandedSections({
+      summary: false,
+      personalHistory: false,
+      generalExamination: false,
+      systemicExamination: false,
+      patientDetails: false,
+      investigations: false,
+      advice: false,
+    });
+  };
 
   const clinicalDetailsRef = useRef<ClinicalDetailsSectionHandle>(null);
 
@@ -311,17 +458,9 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
        clinical_notes column, separated by a [Past History] marker
        (see proceedNext). A saved draft takes precedence over the
        encounter so in-session work is never clobbered. */
-    let draftNotes = "";
-    let draftPast = "";
-    try {
-      const draft = JSON.parse(
-        localStorage.getItem("hms_consultation_draft") ?? "{}"
-      );
-      draftNotes = draft.consultationNotes ?? "";
-      draftPast = draft.pastHistory ?? "";
-    } catch {
-      /* Malformed draft - fall back to the encounter. */
-    }
+    const draft = readConsultationDraft(encounter?.encounter_no, patientDisplayId);
+    const draftNotes: string = draft.consultationNotes ?? "";
+    const draftPast: string = draft.pastHistory ?? "";
 
     if (draftNotes) {
       setConsultationNotes(draftNotes);
@@ -397,6 +536,14 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         if (!cancelled) setDietTypeOptions(response.data.data ?? []);
       })
       .catch((error) => console.error("Failed to load diet types:", error));
+    consultationApi
+      .getRelativeTypes()
+      .then((response) => {
+        if (!cancelled) setRelativeTypeOptions(response.data.data ?? []);
+      })
+      .catch((error) =>
+        console.error("Failed to load relative types:", error)
+      );
     return () => {
       cancelled = true;
     };
@@ -406,12 +553,44 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
     const encounterNo = encounter?.encounter_no;
     if (!encounterNo) return;
     let cancelled = false;
+
+    /* Start unanswered until this encounter's saved family history is known;
+       ready only after a successful GET (or a doctor edit). */
+    familyHistoryReadyRef.current = false;
+    setFamilyHistoryStatus("");
+    setFamilyHistoryEntries([]);
+
+    const toFamilyDrafts = (familyRows: FamilyHistoryEntry[] | null | undefined) =>
+      (familyRows ?? []).map((entry) => {
+        const degree: FamilyDegree | "" =
+          entry.degree === "1st" || entry.degree === "2nd" || entry.degree === "3rd"
+            ? entry.degree
+            : "";
+        return {
+          id: `family-${Date.now()}-${familyEntrySeq++}`,
+          degree,
+          relativeType: entry.relative_type ?? "",
+          condition: entry.condition ?? "",
+          ageAtDiagnosis: entry.age_at_diagnosis ?? "",
+          remarks: entry.remarks ?? "",
+        };
+      });
+
     consultationApi
       .getPersonalHistory(encounterNo)
       .then((response) => {
         if (cancelled) return;
         const record = response.data.data;
-        if (!record) return;
+        if (!record) {
+          setSelectedImmunizations([]);
+          setSelectedDrugConsumptions([]);
+          setDrugConsumptionDetails({});
+          setDietType("");
+          setFamilyHistoryStatus("");
+          setFamilyHistoryEntries([]);
+          familyHistoryReadyRef.current = true;
+          return;
+        }
 
         /* Master values by name; older free-text "Others" entries by
            their typed text, shown as selected values of their own. */
@@ -422,7 +601,33 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         setSelectedImmunizations(toNames(record.immunization ?? []));
         setSelectedDrugConsumptions(toNames(record.drug_consumption ?? []));
 
+        const drugDetails: Record<string, DrugConsumptionDetail> = {};
+        (record.drug_consumption ?? []).forEach((item) => {
+          const key = item.others ? item.others : item.name;
+          if (!key) return;
+          drugDetails[key] = {
+            durationValue:
+              item.duration_value != null ? String(item.duration_value) : "",
+            durationUnit: normalizeDurationUnit(item.duration_unit),
+            commands: item.commands ?? "",
+          };
+        });
+        setDrugConsumptionDetails(drugDetails);
+
         setDietType(record.diet_type ?? "");
+
+        const family = record.family_history;
+        if (family && (family.status === "PRESENT" || family.status === "NOT_PRESENT")) {
+          setFamilyHistoryStatus(family.status);
+          setFamilyHistoryEntries(
+            family.status === "PRESENT" ? toFamilyDrafts(family.entries) : []
+          );
+        } else {
+          /* null = not answered yet; keep neither option selected. */
+          setFamilyHistoryStatus("");
+          setFamilyHistoryEntries([]);
+        }
+        familyHistoryReadyRef.current = true;
       })
       .catch((error) =>
         console.error("Failed to load personal history:", error)
@@ -557,16 +762,53 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
   const buildPersonalHistoryItems = (
     selectedNames: string[],
-    options: ImmunizationRecord[] | DrugConsumptionRecord[]
+    options: ImmunizationRecord[] | DrugConsumptionRecord[],
+    details?: Record<string, DrugConsumptionDetail>
   ): PersonalHistoryItem[] =>
     selectedNames.map((name) => {
       const match = options.find(
         (option) => option.name.toLowerCase() === name.toLowerCase()
       );
-      return match
+      const base: PersonalHistoryItem = match
         ? { code: match.code, name: match.name }
         : { code: "OTHERS", name: "Others", others: name };
+
+      const detail = details?.[name];
+      if (!detail) return base;
+
+      const duration = toDurationPayload(
+        detail.durationValue,
+        detail.durationUnit
+      );
+
+      return {
+        ...base,
+        duration_value: duration.value,
+        duration_unit: duration.unit,
+        commands: detail.commands.trim() || null,
+      };
     });
+
+  /* Family History -> API payload. Rows without a Relative Type are dropped
+     so a stray empty row never reaches the chart. */
+  const buildFamilyHistoryPayload = () => {
+    if (!familyHistoryStatus) return null;
+    if (familyHistoryStatus === "NOT_PRESENT") {
+      return { status: familyHistoryStatus, entries: [] as FamilyHistoryEntry[] };
+    }
+
+    const entries: FamilyHistoryEntry[] = familyHistoryEntries
+      .filter((entry) => entry.relativeType.trim())
+      .map((entry) => ({
+        degree: (entry.degree || "") as FamilyDegree,
+        relative_type: entry.relativeType.trim(),
+        condition: entry.condition.trim() || null,
+        age_at_diagnosis: entry.ageAtDiagnosis.trim() || null,
+        remarks: entry.remarks.trim() || null,
+      }));
+
+    return { status: familyHistoryStatus, entries };
+  };
 
   const savePersonalHistory = async (encounterNo: string) => {
     await consultationApi.savePersonalHistory(encounterNo, {
@@ -576,11 +818,94 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       ),
       drug_consumption: buildPersonalHistoryItems(
         selectedDrugConsumptions,
-        drugConsumptionOptions
+        drugConsumptionOptions,
+        drugConsumptionDetails
       ),
       diet_type: dietType || null,
+      /* Omitted when the family-history load failed, so a failed GET can
+         never wipe what the doctor saved earlier. */
+      ...(familyHistoryReadyRef.current
+        ? { family_history: buildFamilyHistoryPayload() }
+        : {}),
     });
   };
+
+  /* PRESENT / NOT PRESENT toggle. Clicking the active status clears it back
+     to unanswered; switching to PRESENT seeds the first relative row. */
+  const handleFamilyHistoryStatusChange = (status: FamilyHistoryStatus) => {
+    familyHistoryReadyRef.current = true;
+    setFamilyHistoryStatus((previous) => (previous === status ? "" : status));
+    if (status === "PRESENT" && familyHistoryStatus !== "PRESENT") {
+      setFamilyHistoryEntries((previous) =>
+        previous.length > 0 ? previous : [newFamilyHistoryDraft()]
+      );
+    }
+  };
+
+  const updateFamilyHistoryEntry = (
+    id: string,
+    patch: Partial<FamilyHistoryDraft>
+  ) => {
+    familyHistoryReadyRef.current = true;
+    setFamilyHistoryEntries((previous) =>
+      previous.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry))
+    );
+  };
+
+  /* Picking a relative type auto-fills its usual degree (still editable). */
+  const handleRelativeTypeChange = (id: string, relativeType: string) => {
+    const suggested = relativeTypeOptions.find(
+      (option) => option.name.toLowerCase() === relativeType.toLowerCase()
+    );
+    updateFamilyHistoryEntry(id, {
+      relativeType,
+      ...(suggested?.degree ? { degree: suggested.degree } : {}),
+    });
+  };
+
+  const addFamilyHistoryEntry = () => {
+    familyHistoryReadyRef.current = true;
+    setFamilyHistoryEntries((previous) => [...previous, newFamilyHistoryDraft()]);
+  };
+
+  const removeFamilyHistoryEntry = (id: string) => {
+    familyHistoryReadyRef.current = true;
+    setFamilyHistoryEntries((previous) =>
+      previous.filter((entry) => entry.id !== id)
+    );
+  };
+
+  /* The drug-consumption multi-select reports the full selected list. Keep
+     each value's Duration / Command(s) in step: seed blanks for new
+     selections and drop deselected ones. */
+  const handleDrugConsumptionsChange = (names: string[]) => {
+    setSelectedDrugConsumptions(names);
+    setDrugConsumptionDetails((previous) =>
+      syncDetails(previous, names, EMPTY_DRUG_CONSUMPTION_DETAIL)
+    );
+  };
+
+  /* "+ Add" on the drug search: select the value and seed its row. */
+  const selectDrugConsumption = (name: string) => {
+    addToSelection(setSelectedDrugConsumptions)(name);
+    setDrugConsumptionDetails((previous) =>
+      previous[name]
+        ? previous
+        : { ...previous, [name]: EMPTY_DRUG_CONSUMPTION_DETAIL }
+    );
+  };
+
+  const updateDrugConsumptionDetail = (
+    name: string,
+    patch: Partial<DrugConsumptionDetail>
+  ) =>
+    setDrugConsumptionDetails((previous) => ({
+      ...previous,
+      [name]: {
+        ...(previous[name] ?? EMPTY_DRUG_CONSUMPTION_DETAIL),
+        ...patch,
+      },
+    }));
 
   /* The immunization multi-select reports the full selected list. Keep the
      Date/Response entries in step: seed blanks for new selections and drop
@@ -846,21 +1171,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
      LOAD DRAFT
   ============================================================ */
 
-  useEffect(() => {
-    const saved = localStorage.getItem("hms_consultation_draft");
-
-    if (!saved) return;
-
-    try {
-      const data = JSON.parse(saved);
-
-      if (data.consultationNotes) {
-        setConsultationNotes(data.consultationNotes);
-      }
-    } catch (error) {
-      console.error("Draft loading failed", error);
-    }
-  }, []);
+  /* The visit's draft is restored with the encounter (above). */
 
   /* ============================================================
      INVESTIGATION
@@ -902,141 +1213,6 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
   };
 
   /* ============================================================
-     PRINT
-  ============================================================ */
-
-  /* Prints a clean A4 report built from the current form values (see
-     utils/consultationSummaryPrint.ts), not a screenshot of the form. */
-  const printSummary = () => {
-    const clinical = clinicalDetailsRef.current?.getPrintSummary();
-    const vitalNumber = (value: number | string | null | undefined) => {
-      const parsed = parseFloat(String(value ?? ""));
-      return Number.isFinite(parsed) ? parsed : null;
-    };
-    const height = vitalNumber(encounter?.height);
-    const weight = vitalNumber(encounter?.weight);
-    const systolic = vitalNumber(encounter?.systolic_bp);
-    const diastolic = vitalNumber(encounter?.diastolic_bp);
-    const bmi = vitalNumber(encounter?.BMI) ?? computeBmi(height, weight);
-    const bsa = computeBsa(height, weight);
-    const withUnit = (value: number | null, unit: string) =>
-      value === null ? "" : `${value}${unit}`;
-
-    printConsultationSummary({
-      hospitalName: patient?.branch?.branch_name ?? "",
-      patient: {
-        name: patientName,
-        displayId: patientDisplayId,
-        age:
-          patient?.patient_age != null ? `${patient.patient_age} yrs` : "",
-        gender: patient?.patient_gender ?? "",
-        mobile: patient?.patient_primary_mobile ?? "",
-      },
-      visit: {
-        date: visitDate,
-        time: visitTime,
-        type: visitType,
-        consultedBy,
-        encounterNo: encounter?.encounter_no ?? "",
-        firstVisit: registeredOn,
-      },
-      vitals: [
-        { label: "Height", value: withUnit(height, " cm") },
-        { label: "Weight", value: withUnit(weight, " kg") },
-        { label: "BMI", value: withUnit(bmi, "") },
-        { label: "BSA", value: withUnit(bsa, " m²") },
-        {
-          label: "Blood Pressure",
-          value:
-            systolic !== null && diastolic !== null
-              ? `${systolic}/${diastolic} mmHg`
-              : "",
-        },
-        { label: "Pulse", value: withUnit(vitalNumber(encounter?.pulse), " bpm") },
-        {
-          label: "Temperature",
-          value: withUnit(vitalNumber(encounter?.temperature), " °C"),
-        },
-        { label: "SpO2", value: withUnit(vitalNumber(encounter?.spo2), "%") },
-        {
-          label: "Respiratory Rate",
-          value: withUnit(vitalNumber(encounter?.respiratory_rate), " /min"),
-        },
-        {
-          label: "Pain Score",
-          value: withUnit(vitalNumber(encounter?.pain_score), "/10"),
-        },
-      ],
-      chiefComplaint,
-      reasonOfVisit,
-      consultationNotes,
-      historyOfPresentIllness,
-      performanceStatus: clinical?.performanceStatus ?? "",
-      symptoms: clinical?.symptoms ?? [],
-      allergies: clinical?.allergies ?? [],
-      comorbidities: clinical?.comorbidities ?? [],
-      personalHistory: [
-        { label: "Immunization", value: selectedImmunizations.join(", ") },
-        {
-          label: "Drug Consumption",
-          value: selectedDrugConsumptions.join(", "),
-        },
-        { label: "Diet Type", value: dietType },
-      ],
-      generalExamination: [...generalExamFindings, ...generalExamOthers],
-      systemicExamination: [
-        { label: "CNS", value: systemicCns },
-        { label: "CVS", value: systemicCvs },
-        { label: "Respiratory", value: systemicRespiratory },
-        { label: "Per Abdomen", value: systemicPerAbdomen },
-      ],
-      clinicalFindings: systemicClinicalFindings,
-      pastHistory,
-      pastTreatments: selectedTreatmentTypes.map((name) => ({
-        type: name,
-        date: formatDateDMY(treatmentDetails[name]?.date),
-        note: treatmentDetails[name]?.note ?? "",
-        response: treatmentDetails[name]?.response ?? "",
-      })),
-      previousReports: selectedReports.map((key) => ({
-        test: reportTestName(key),
-        date: formatDateDMY(reportDetails[key]?.date),
-        result: reportDetails[key]?.result ?? "",
-        impression: reportDetails[key]?.impression ?? "",
-      })),
-      previousReportsText: reportsText,
-      molecularTests: selectedMolecularTests.map((name) => ({
-        test: name,
-        date: formatDateDMY(molecularTestDetails[name]?.date),
-        result: molecularTestDetails[name]?.result ?? "",
-        impression: molecularTestDetails[name]?.impression ?? "",
-      })),
-      investigations: selectedInvestigations.map((name) => {
-        const detail = investigationDetail(name);
-        return {
-          name,
-          notes: detail.notes,
-          priority: detail.priority,
-          targetDate: detail.targetDate,
-        };
-      }),
-      investigationInstructions: additionalInstructions,
-      medicines: (adviceSectionRef.current?.getDraftRows() ?? []).map(
-        (row) => ({
-          form: row.drugForm,
-          name: row.drugName,
-          dosage: row.dosage,
-          frequency: row.frequency,
-          duration: row.duration,
-          instruction: row.instruction,
-        })
-      ),
-      adviceDiscussion: adviceSectionRef.current?.getDraftDiscussion() ?? "",
-      adviceFollowUpDate: adviceSectionRef.current?.getDraftFollowUpDate() ?? "",
-    });
-  };
-
-  /* ============================================================
      SAVE DRAFT
   ============================================================ */
 
@@ -1052,10 +1228,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       investigations: selectedInvestigations,
     };
 
-    localStorage.setItem(
-      "hms_consultation_draft",
-      JSON.stringify(data)
-    );
+    writeConsultationDraft(encounter?.encounter_no, patientDisplayId, data);
 
     showToast("Consultation saved as draft");
   };
@@ -1368,6 +1541,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       }
 
       showToast("Consultation saved");
+      /* Saved to the visit: the draft would only shadow it on reopen. */
+      clearConsultationDraft(encounter.encounter_no, patientDisplayId);
 
       onProceed();
     } catch (error: any) {
@@ -1402,7 +1577,27 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5">
 
-    {/* SUMMARY GRID */}
+    <button
+      type="button"
+      onClick={() => toggleSection("summary")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          Consultation Summary
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform duration-200",
+            expandedSections.summary && "rotate-180",
+          )}
+        />
+      </div>
+    </button>
+    {expandedSections.summary && (
+      <div className="pt-4">
+
+      {/* SUMMARY GRID */}
 
     <div className="grid w-full grid-cols-4 gap-x-4">
 
@@ -1410,7 +1605,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex min-w-0 flex-col gap-1">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           Visit Date &amp; Time
         </label>
 
@@ -1493,7 +1688,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex min-w-0 flex-col gap-1">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           First Visit for this Treatment
         </label>
 
@@ -1509,7 +1704,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex min-w-0 flex-col gap-1">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           Consulted By
         </label>
 
@@ -1546,7 +1741,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex min-w-0 flex-col gap-1">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           Visit Type
         </label>
 
@@ -1572,7 +1767,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex flex-col gap-2">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           Consultation Notes
         </label>
 
@@ -1591,7 +1786,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
           <div className="flex flex-col gap-1">
 
-            <div className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+            <div className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
               Chief Complaint
             </div>
 
@@ -1641,8 +1836,31 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       </div>
 
     </div>
-
+    </div>
+    )}
     </section>
+
+    {/* =================================================
+      EXPAND ALL / COLLAPSE ALL CONTROLS
+    ================================================= */}
+    <div className="flex w-full items-center justify-between gap-2 px-2 py-2 border-b border-slate-100">
+      <button
+        type="button"
+        onClick={expandAll}
+        className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold leading-4 text-slate-700 transition hover:bg-slate-50"
+      >
+        <ChevronsDownUp className="h-3.5 w-3.5 shrink-0" />
+        <span>Expand All</span>
+      </button>
+      <button
+        type="button"
+        onClick={collapseAll}
+        className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold leading-4 text-slate-700 transition hover:bg-slate-50"
+      >
+        <ChevronsUpDown className="h-3.5 w-3.5 shrink-0" />
+        <span>Collapse All</span>
+      </button>
+    </div>
 
     {/* =================================================
       PERSONAL HISTORY
@@ -1650,11 +1868,27 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="text-[10px] font-bold leading-7 text-slate-800">
-      Personal History
-    </div>
+    <button
+      type="button"
+      onClick={() => toggleSection("personalHistory")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          Personal History
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform duration-200",
+            expandedSections.personalHistory && "rotate-180",
+          )}
+        />
+      </div>
+    </button>
+    {expandedSections.personalHistory && (
+      <div className="pt-4">
 
-    {/* PERSONAL HISTORY GRID */}
+      {/* PERSONAL HISTORY GRID */}
 
     <div className="grid w-full grid-cols-2 gap-x-6 gap-y-4 pt-2">
 
@@ -1662,7 +1896,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex flex-col gap-2">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           Immunization
         </label>
 
@@ -1695,13 +1929,13 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
                 className="flex flex-col gap-2 rounded-md border border-slate-200 bg-slate-50 p-3"
               >
 
-                <div className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                <div className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                   {name}
                 </div>
 
                 <div className="flex flex-col gap-1.5">
 
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Date
                   </label>
 
@@ -1718,7 +1952,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
                 <div className="flex flex-col gap-1.5">
 
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Response
                   </label>
 
@@ -1744,7 +1978,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex flex-col gap-2">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           Drug Consumption
         </label>
 
@@ -1754,17 +1988,59 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
             selectedDrugConsumptions
           )}
           value={selectedDrugConsumptions}
-          onValueChange={setSelectedDrugConsumptions}
+          onValueChange={handleDrugConsumptionsChange}
           onCreateOption={(typed) =>
             addMasterOption(
               () => consultationApi.createCustomDrugConsumption({ name: typed }),
               setDrugConsumptionOptions,
-              addToSelection(setSelectedDrugConsumptions),
+              selectDrugConsumption,
               "drug consumption"
             )
           }
           placeholder="Select drug consumption(s)"
         />
+
+        {/* Per-drug Duration + Command(s) */}
+        {selectedDrugConsumptions.length > 0 && (
+          <div className="flex w-full flex-col gap-1.5">
+            {selectedDrugConsumptions.map((name) => {
+              const detail =
+                drugConsumptionDetails[name] ?? EMPTY_DRUG_CONSUMPTION_DETAIL;
+
+              return (
+                <div
+                  key={name}
+                  className="flex w-full flex-col gap-2 rounded-md border border-slate-200 bg-slate-50 p-3"
+                >
+                  <div className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                    {name}
+                  </div>
+
+                  <DurationInput
+                    value={detail.durationValue}
+                    unit={detail.durationUnit}
+                    onValueChange={(value) =>
+                      updateDrugConsumptionDetail(name, {
+                        durationValue: value,
+                      })
+                    }
+                    onUnitChange={(unit) =>
+                      updateDrugConsumptionDetail(name, { durationUnit: unit })
+                    }
+                  />
+
+                  <VoiceInput
+                    value={detail.commands}
+                    onChange={(text) =>
+                      updateDrugConsumptionDetail(name, { commands: text })
+                    }
+                    placeholder="Command(s)"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
 
       </div>
 
@@ -1772,7 +2048,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex flex-col gap-2">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           Diet Type
         </label>
 
@@ -1815,6 +2091,247 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     </div>
 
+    {/* FAMILY HISTORY */}
+
+    <div className="flex w-full flex-col gap-3 border-t border-slate-200 pt-4">
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
+          Family History
+        </label>
+
+        <div className="flex items-center gap-0.5 rounded-md border border-slate-200 bg-slate-50 p-0.5">
+
+          {([
+            { value: "PRESENT", label: "Present" },
+            { value: "NOT_PRESENT", label: "Not Present" },
+          ] as const).map((option) => {
+            const active = familyHistoryStatus === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => handleFamilyHistoryStatusChange(option.value)}
+                className={`rounded px-3 py-1.5 text-[10px] font-semibold uppercase leading-4 transition-colors ${
+                  active
+                    ? "bg-[#004785] text-white shadow-sm"
+                    : "text-slate-600 hover:bg-white hover:text-slate-800"
+                }`}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+
+        </div>
+
+      </div>
+
+      {familyHistoryStatus === "" && (
+        <p className="text-[10px] leading-4 text-slate-500">
+          Select Present or Not Present. Leave both unselected if not asked.
+        </p>
+      )}
+
+      {familyHistoryStatus === "NOT_PRESENT" && (
+        <p className="text-[10px] leading-4 text-slate-500">
+          No family history recorded for this patient.
+        </p>
+      )}
+
+      {familyHistoryStatus === "PRESENT" && (
+        <div className="flex w-full flex-col gap-3">
+
+          {familyHistoryEntries.length === 0 && (
+            <p className="text-[10px] leading-4 text-slate-500">
+              Add each relative with a family history of disease.
+            </p>
+          )}
+
+          {familyHistoryEntries.map((entry, index) => (
+            <div
+              key={entry.id}
+              className="flex w-full flex-col gap-3 rounded-md border border-slate-200 bg-slate-50 p-3"
+            >
+
+              <div className="flex items-center justify-between gap-2">
+
+                <div className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  Relative {index + 1}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => removeFamilyHistoryEntry(entry.id)}
+                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold leading-4 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600"
+                >
+                  × Remove
+                </button>
+
+              </div>
+
+              <div className="grid w-full grid-cols-2 gap-3">
+
+                <div className="flex flex-col gap-1.5">
+
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                    Degree of Relatives
+                  </label>
+
+                  <div className="relative h-[38px]">
+
+                    <select
+                      value={entry.degree}
+                      onChange={(event) =>
+                        updateFamilyHistoryEntry(entry.id, {
+                          degree: event.target.value as FamilyDegree | "",
+                        })
+                      }
+                      className="h-[38px] w-full appearance-none rounded-md border border-slate-200 bg-white px-[13px] pr-10 text-[10px] leading-5 text-slate-700 outline-none focus:border-slate-400"
+                    >
+                      <option value="">Select</option>
+                      {FAMILY_DEGREES.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="#94a3b8"
+                      strokeWidth="1.8"
+                      className="pointer-events-none absolute right-3 top-2.5 h-4 w-4"
+                    >
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+
+                  </div>
+
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                    Relative Type
+                  </label>
+
+                  <SingleSelectDropdown
+                    options={relativeTypeOptions.map((option) => ({
+                      label: option.name,
+                      value: option.name,
+                      hint: option.degree ? `${option.degree} degree` : undefined,
+                    }))}
+                    value={entry.relativeType}
+                    valueLabel={entry.relativeType}
+                    onValueChange={(value) =>
+                      handleRelativeTypeChange(entry.id, value)
+                    }
+                    onCreateOption={(typed) =>
+                      handleRelativeTypeChange(entry.id, typed)
+                    }
+                    createLabel="+ Add relative"
+                    placeholder="Select relative type"
+                    className="h-[38px] rounded-md px-[13px] text-[10px]"
+                  />
+
+                </div>
+
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+
+                <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  Condition
+                </label>
+
+                <VoiceInput
+                  value={entry.condition}
+                  onChange={(text) =>
+                    updateFamilyHistoryEntry(entry.id, {
+                      condition: text.slice(0, 200),
+                    })
+                  }
+                  placeholder="e.g. Breast Cancer, Diabetes, Hypertension"
+                />
+
+              </div>
+
+              <div className="grid w-full grid-cols-3 gap-3">
+
+                <div className="flex flex-col gap-1.5">
+
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                    Age at Diagnosis
+                  </label>
+
+                  <input
+                    type="number"
+                    min={0}
+                    max={150}
+                    inputMode="numeric"
+                    value={entry.ageAtDiagnosis}
+                    onChange={(event) =>
+                      updateFamilyHistoryEntry(entry.id, {
+                        ageAtDiagnosis: event.target.value,
+                      })
+                    }
+                    placeholder="Years"
+                    className="h-[38px] w-full rounded-md border border-slate-200 bg-white px-[13px] text-[10px] leading-5 text-slate-700 outline-none focus:border-slate-400"
+                  />
+
+                </div>
+
+                <div className="col-span-2 flex flex-col gap-1.5">
+
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                    Remarks
+                  </label>
+
+                  <VoiceInput
+                    value={entry.remarks}
+                    onChange={(text) =>
+                      updateFamilyHistoryEntry(entry.id, {
+                        remarks: text.slice(0, 500),
+                      })
+                    }
+                    placeholder="Optional notes"
+                  />
+
+                </div>
+
+              </div>
+
+            </div>
+          ))}
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+
+            <button
+              type="button"
+              onClick={addFamilyHistoryEntry}
+              className="rounded-md border border-[#004785] bg-white px-3 py-1.5 text-[10px] font-semibold uppercase leading-4 text-[#004785] transition-colors hover:bg-[#004785] hover:text-white"
+            >
+              + Add Relative
+            </button>
+
+            <span className="text-[10px] leading-4 text-slate-500">
+              {familyHistoryEntries.filter((entry) => entry.relativeType.trim())
+                .length}{" "}
+              relative(s) recorded
+            </span>
+
+          </div>
+
+        </div>
+      )}
+
+    </div>
+    </div>
+    )}
     </section>
 
     {/* =================================================
@@ -1823,12 +2340,28 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="text-[10px] font-bold leading-7 text-slate-800">
-      General Examination
-    </div>
+    <button
+      type="button"
+      onClick={() => toggleSection("generalExamination")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          General Examination
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform duration-200",
+            expandedSections.generalExamination && "rotate-180",
+          )}
+        />
+      </div>
+    </button>
+    {expandedSections.generalExamination && (
+      <div className="pt-4">
 
     <div className="flex flex-col gap-2 pt-2">
-      <label className="text-[10px] font-bold leading-4 text-slate-800">
+      <label className="text-[10px] uppercase leading-4 text-slate-800">
         Findings
       </label>
       <MultiSelectDropdown
@@ -1842,7 +2375,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
     {/* Other findings: search general_examination_master; "+ Add" adds a
         finding to the master and ticks it for this patient. */}
     <div className="flex flex-col gap-2">
-      <label className="text-[10px] font-bold leading-4 text-slate-800">
+      <label className="text-[10px] uppercase leading-4 text-slate-800">
         Other Findings
       </label>
       <MultiSelectDropdown
@@ -1866,7 +2399,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         placeholder="Search or add other findings"
       />
     </div>
-
+    </div>
+    )}
     </section>
 
     {/* =================================================
@@ -1875,9 +2409,25 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="text-[10px] font-bold leading-7 text-slate-800">
-      Systemic Examination
-    </div>
+    <button
+      type="button"
+      onClick={() => toggleSection("systemicExamination")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          Systemic Examination
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform duration-200",
+            expandedSections.systemicExamination && "rotate-180",
+          )}
+        />
+      </div>
+    </button>
+    {expandedSections.systemicExamination && (
+      <div className="pt-4">
 
     <div className="grid w-full grid-cols-1 gap-x-5 gap-y-6 pt-2 sm:grid-cols-2 lg:grid-cols-4">
 
@@ -1888,7 +2438,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         { label: "Per Abdomen", value: systemicPerAbdomen, onChange: setSystemicPerAbdomen },
       ].map((item) => (
         <div key={item.label} className="flex flex-col gap-2">
-          <label className="text-[10px] font-bold leading-4 text-slate-800">
+          <label className="text-[10px] uppercase leading-4 text-slate-800">
             {item.label}
           </label>
           <input
@@ -1904,7 +2454,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
     </div>
 
     <div className="flex flex-col gap-2 pt-2">
-      <label className="text-[10px] font-bold leading-4 text-slate-800">
+      <label className="text-[10px] uppercase leading-4 text-slate-800">
         Clinical Findings
       </label>
       <VoiceToText
@@ -1942,7 +2492,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
         Apply Normal To All
       </button>
     </div>
-
+    </div>
+    )}
     </section>
 
     {/* =================================================
@@ -1951,9 +2502,25 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="text-[10px] font-bold leading-7 text-slate-800">
-      Patient Details
-    </div>
+    <button
+      type="button"
+      onClick={() => toggleSection("patientDetails")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          Patient Details
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform duration-200",
+            expandedSections.patientDetails && "rotate-180",
+          )}
+        />
+      </div>
+    </button>
+    {expandedSections.patientDetails && (
+      <div className="pt-4">
 
     {/* PATIENT DETAILS GRID */}
 
@@ -1967,7 +2534,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex flex-col gap-2">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           History of Present Illness(HOPI)
         </label>
 
@@ -1983,7 +2550,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex flex-col gap-2">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           Reports (Previous)
         </label>
 
@@ -2020,12 +2587,12 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
                 className="flex flex-col gap-2 rounded-md border border-slate-200 bg-slate-50 p-3"
               >
 
-                <div className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-500">
+                <div className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-500">
                   {reportTestName(key)}
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Date
                   </label>
                   <input
@@ -2039,7 +2606,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Enter Result
                   </label>
                   <VoiceToText
@@ -2050,7 +2617,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Enter Impression
                   </label>
                   <VoiceToText
@@ -2086,7 +2653,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex flex-col gap-2">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           Past History
         </label>
 
@@ -2121,12 +2688,12 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
                 className="flex flex-col gap-2 rounded-md border border-slate-200 bg-slate-50 p-3"
               >
 
-                <div className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-500">
+                <div className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-500">
                   {name}
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Date
                   </label>
                   <input
@@ -2140,7 +2707,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Enter Brief Note
                   </label>
                   <VoiceToText
@@ -2151,7 +2718,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Treatment Response
                   </label>
                   <VoiceToText
@@ -2181,7 +2748,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
       <div className="flex flex-col gap-2">
 
-        <label className="text-[10px] font-bold leading-4 text-slate-800">
+        <label className="text-[10px] uppercase leading-4 text-slate-800">
           Molecular Testing
         </label>
 
@@ -2207,12 +2774,12 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
                 className="flex flex-col gap-2 rounded-md border border-slate-200 bg-slate-50 p-3"
               >
 
-                <div className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-500">
+                <div className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-500">
                   {name}
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Date
                   </label>
                   <input
@@ -2226,7 +2793,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Enter Result
                   </label>
                   <VoiceToText
@@ -2239,7 +2806,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.5px] text-slate-800">
+                  <label className="text-[10px] uppercase leading-[15px] tracking-[0.5px] text-slate-800">
                     Enter Impression
                   </label>
                   <VoiceToText
@@ -2262,7 +2829,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       </div>
 
     </div>
-
+    </div>
+    )}
     </section>
 
     {/* =================================================
@@ -2271,16 +2839,30 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <section className="flex w-full flex-col gap-4 rounded-xl border border-slate-200 bg-white p-5">
 
-    <div className="flex items-center justify-between gap-2">
-      <div className="text-[10px] font-bold leading-7 text-slate-800">
-        Investigations / Scans
+    <button
+      type="button"
+      onClick={() => toggleSection("investigations")}
+      className="flex w-full items-center justify-between gap-2 px-2 py-1.5 border-b border-slate-100"
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[14px] font-bold uppercase leading-7 text-slate-800 tracking-wide">
+          Investigations / Scans
+        </div>
+        {selectedInvestigations.length > 0 && (
+          <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-semibold leading-4 text-blue-700">
+            {selectedInvestigations.length} selected
+          </span>
+        )}
       </div>
-      {selectedInvestigations.length > 0 && (
-        <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-semibold leading-4 text-blue-700">
-          {selectedInvestigations.length} selected
-        </span>
-      )}
-    </div>
+      <ChevronDown
+        className={cn(
+          "h-4 w-4 shrink-0 transition-transform duration-200",
+          expandedSections.investigations && "rotate-180",
+        )}
+      />
+    </button>
+    {expandedSections.investigations && (
+      <div className="pt-4">
 
     {labTestsLoading && (
       <div className="flex items-center gap-2 text-[10px] leading-5 text-slate-500">
@@ -2388,6 +2970,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
             index={index}
             name={investigation}
             detail={investigationDetail(investigation)}
+            showMethod={isMolecularTest(investigation)}
             onChange={(patch) =>
               updateInvestigationDetail(investigation, patch)
             }
@@ -2404,7 +2987,7 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
 
     <div className="flex w-full flex-col gap-2 pt-2">
 
-      <label className="text-[10px] font-bold leading-4 text-slate-800">
+      <label className="text-[10px] uppercase leading-4 text-slate-800">
         Additional Instructions (if any)
       </label>
 
@@ -2415,7 +2998,8 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       />
 
     </div>
-
+    </div>
+    )}
     </section>
 
     {/* =================================================
@@ -2427,51 +3011,16 @@ const ConsultationStep: React.FC<ConsultationStepProps> = ({
       encounter={encounter}
       patientId={consultationState?.patientId}
       onToast={showToast}
+      expanded={expandedSections.advice}
+      onToggle={() => toggleSection("advice")}
     />
 
     {/* =================================================
       ACTION BUTTONS
     ================================================= */}
 
-    <div className="flex w-full items-center justify-between">
-
-    {/* PRINT */}
-
-    <div className="h-9 w-[213px]">
-
-      <button
-        onClick={printSummary}
-        className="flex h-9 w-[213px] items-center justify-center gap-2 rounded-lg border-0 bg-blue-700 px-[25px] py-[9px] text-[10px] font-bold leading-5 text-white"
-      >
-
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="white"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="h-6 w-6"
-        >
-          <path d="M6 9V2h12v7" />
-
-          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-
-          <rect
-            x="6"
-            y="14"
-            width="12"
-            height="8"
-          />
-        </svg>
-
-        <span>
-          Print Summary
-        </span>
-
-      </button>
-
-    </div>
+    {/* The visit's printout lives on the Summary step ("Add To Print"). */}
+    <div className="flex w-full items-center justify-end">
 
     {/* RIGHT ACTIONS */}
 

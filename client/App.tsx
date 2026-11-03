@@ -53,6 +53,7 @@ import Security from "@/components/Forms/view/Security";
 
 import Appointments from "./pages/Appointments";
 import InpatientAdmissions from "./pages/InpatientAdmissions";
+import InpatientDutyRoster from "./pages/InpatientDutyRoster";
 import BedMaster from "./pages/BedMaster";
 import Departments from "./pages/Departments";
 import Login from "./pages/Login";
@@ -77,7 +78,9 @@ import Scheduled from "./pages/Scheduled";
 import DayView from "./pages/Day view";
 import TransferDoctor from "./pages/TransferDoctor";
 import RescheduleQueue from "./pages/RescheduleQueue";
+import PendingBookings from "./pages/PendingBookings";
 import WeekView from "./pages/Week view";
+import ComponentShowcase from "./pages/ComponentShowcase";
 
 // ============================================================
 // ADMIN
@@ -150,6 +153,10 @@ const doctorRoutes = [
     element: <AddAppointment />,
   },
   {
+    path: "/doctor/appointments/edit/:id",
+    element: <AddAppointment />,
+  },
+  {
     path: "/doctor/schedule",
     element: <DoctorSchedule />,
   },
@@ -176,6 +183,14 @@ const doctorRoutes = [
 // ============================================================
 
 const protectedRoutes = [
+  // ----------------------------------------------------------
+  // Temporary Component Showcase
+  // ----------------------------------------------------------
+  {
+    path: "/component-showcase",
+    element: <ComponentShowcase />,
+  },
+
   // ----------------------------------------------------------
   // Profile & Security
   // ----------------------------------------------------------
@@ -313,6 +328,18 @@ const protectedRoutes = [
   },
 
   {
+    path: "/appointments/pending",
+    element: <PendingBookings />,
+    permission: "appointment.read",
+  },
+
+  {
+    path: "/appointments/pending-bookings",
+    element: <PendingBookings />,
+    permission: "appointment.read",
+  },
+
+  {
     path: "/appointments/add",
     element: <AddAppointment />,
     permission: "appointment.create",
@@ -343,6 +370,12 @@ const protectedRoutes = [
   {
     path: "/inpatient/admissions",
     element: <InpatientAdmissions />,
+    permission: "admission.read",
+  },
+
+  {
+    path: "/inpatient/duty-roster",
+    element: <InpatientDutyRoster />,
     permission: "admission.read",
   },
 

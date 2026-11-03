@@ -37,6 +37,12 @@ interface VitalsSignsPopoverProps {
   encounterType?: string;
   /** Fired after vitals were successfully created/updated so parents can refresh their lists. */
   onSaved?: () => void;
+  /**
+   * Nurse currently assigned to this inpatient, shown as a hint only. The
+   * reading is always recorded under the logged-in user (accountability), so
+   * a covering colleague is never mis-attributed.
+   */
+  dutyNurseName?: string;
 }
 
 type Tone = "danger" | "warning" | "success" | "purple" | "accent";
@@ -140,6 +146,7 @@ const VitalsSignsPopover = ({
   patientId,
   encounterType,
   onSaved,
+  dutyNurseName,
 }: VitalsSignsPopoverProps) => {
   const { toast } = useToast();
   const isIPD = encounterType === "Inpatient (IPD)";
@@ -621,6 +628,11 @@ const VitalsSignsPopover = ({
                 {vitalsHistory.length} previous recording{vitalsHistory.length > 1 ? "s" : ""} on file for this stay
               </p>
             ) : null}
+            {isIPD && dutyNurseName && (
+              <p className="mt-0.5 text-[11px] text-[#6B7A83]">
+                Duty nurse: <span className="font-semibold">{dutyNurseName}</span> · saved under your login
+              </p>
+            )}
           </div>
           {isIPD && lastRecordedSnapshot && (
             <button

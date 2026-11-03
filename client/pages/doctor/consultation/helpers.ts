@@ -6,9 +6,15 @@ import { ipdApi, type AdmissionRecord } from "../../../api/ipd.api";
 import {
   chemotherapyApi,
   isChemoPlanClosed,
+  type ChemoPlanInvestigation,
   type ChemoPlanOrderHeader,
   type ChemoPlanOrderPayload,
 } from "../../../api/chemotherapy.api";
+import {
+  labOrderApi,
+  labOrderItemApi,
+  type LabOrderRecord,
+} from "../../../api/labOrder.api";
 import type {
   FormData,
   RegimenProtocolDetail,
@@ -96,6 +102,62 @@ export const dateOnlyDMY = (value?: string | null) => {
   const iso = value?.match(/^(\d{4})-(\d{2})-(\d{2})/);
   return iso ? `${iso[3]}-${iso[2]}-${iso[1]}` : "";
 };
+
+/* ---------------- Follow Up block on the encounter advice ----------------
+   The Follow Up step saves its values as a "[Follow Up]" block at the end
+   of the visit encounter's advice ("Next Visit: ...", "Next Cycle: ...",
+   "Plan: ...", "New Visit: ...", "Notes: ..."). */
+export type FollowUpValues = {
+  nextVisit: string;
+  nextCycle: string;
+  plan: string;
+  newVisit: string;
+  notes: string;
+};
+
+const FOLLOW_UP_KEYS: [string, keyof FollowUpValues][] = [
+  ["Next Visit", "nextVisit"],
+  ["Next Cycle", "nextCycle"],
+  ["Plan", "plan"],
+  ["New Visit", "newVisit"],
+  ["Notes", "notes"],
+];
+
+/* One "[Name]" block of the advice - up to the next block, so re-saving a
+   step never drops another step's block (e.g. Discharge Medication saved
+   after Follow Up). */
+export const adviceBlockPattern = (name: string) =>
+  new RegExp(`\\n*\\[${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\][\\s\\S]*?(?=\\n*\\[[A-Z][^\\]\\n]*\\]\\s*(?:\\n|$)|$)`);
+
+export const FOLLOW_UP_BLOCK_PATTERN = adviceBlockPattern("Follow Up");
+
+/* The saved Follow Up values (empty strings when there is no block). A line
+   without a known key continues the value above it (multi-line notes). */
+export const parseFollowUpAdvice = (advice?: string | null): FollowUpValues => {
+  const values: FollowUpValues = { nextVisit: "", nextCycle: "", plan: "", newVisit: "", notes: "" };
+  const start = (advice ?? "").indexOf("[Follow Up]");
+  if (start === -1) return values;
+  let current: keyof FollowUpValues | null = null;
+  const lines = (advice ?? "").slice(start + "[Follow Up]".length).split("\n");
+  for (const line of lines) {
+    /* The next step's block (e.g. "[Discharge Medication]") ends this one. */
+    if (/^\[[A-Z][^\]]*\]$/.test(line.trim())) break;
+    const known = FOLLOW_UP_KEYS.find(([label]) => line.startsWith(`${label}:`));
+    if (known) {
+      current = known[1];
+      values[current] = line.slice(known[0].length + 1).trim();
+    } else if (current && line.trim()) {
+      values[current] = `${values[current]}\n${line}`.trim();
+    }
+  }
+  return values;
+};
+
+/* The block's lines for the values that are set. */
+export const followUpAdviceLines = (values: FollowUpValues): string[] =>
+  FOLLOW_UP_KEYS.filter(([, key]) => values[key].trim()).map(
+    ([label, key]) => `${label}: ${values[key].trim()}`
+  );
 
 /* Whole days since the epoch of a "YYYY-MM-DD..." value (UTC-safe). */
 const isoDayNumber = (value?: string | null) => {
@@ -321,6 +383,775 @@ export const resolveEffectiveStartDate = (
    Consultation Notes. This marker separates the two sections so they
    can be split back apart when the encounter is loaded again. */
 export const PAST_HISTORY_MARKER = "[Past History]";
+
+/* ---------------- Visit investigations ----------------
+   Investigations typed by the doctor that are not lab tests can't be lab
+   order items; they are kept on the visit's lab order description. */
+export const OTHER_INVESTIGATIONS_PREFIX = "Other investigations: ";
+
+export const otherInvestigationsOf = (labDescription?: string | null): string[] => {
+  const text = labDescription ?? "";
+  const at = text.indexOf(OTHER_INVESTIGATIONS_PREFIX);
+  if (at === -1) return [];
+  return text
+    .slice(at + OTHER_INVESTIGATIONS_PREFIX.length)
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+};
+
+/* Adds newly advised non-lab investigations to a lab order's description.
+   The prefix is written once, names are de-duplicated, and any free text
+   already on the description is kept ahead of the investigations block
+   (never clobbered). The block is found wherever it sits, so a description
+   that started as free text is parsed correctly afterwards. */
+export const mergeOtherInvestigations = (
+  labDescription: string | null | undefined,
+  names: string[]
+): string => {
+  const addition = names.map((name) => name.trim()).filter(Boolean);
+  const existing = otherInvestigationsOf(labDescription);
+  const text = (labDescription ?? "").trim();
+  const at = text.indexOf(OTHER_INVESTIGATIONS_PREFIX);
+  const freeText = (at === -1 ? text : text.slice(0, at))
+    .replace(/[,\s]+$/, "")
+    .trim();
+  const merged = [...new Set([...existing, ...addition])];
+
+  if (merged.length === 0) return text;
+
+  const block = `${OTHER_INVESTIGATIONS_PREFIX}${merged.join(", ")}`;
+  return freeText ? `${freeText}, ${block}` : block;
+};
+
+/* ---------------- Ordering a plan's investigations ----------------
+   The Chemotherapy Order's Investigations tab (protocol-driven LAB rows plus
+   name-only NON_LAB / TISSUE rows) is ordered once - from Discharge
+   Medication > Next, or the tab's own "Order Investigations" button.
+
+   LAB rows become lab_order_item rows carrying the tab's clinical notes,
+   priority and target date; name-only rows are kept on the visit's lab order
+   description. Ordering is idempotent: a test already on one of this visit's
+   orders is not ordered again, and a name already recorded is not repeated.
+   Nothing outside this patient's visit is ever read or written. */
+
+export type PlanInvestigationOrderInput = {
+  investigation_id?: string | null;
+  lab_test_id?: string | null;
+  investigation_name: string;
+  investigation_category: "LAB" | "NON_LAB" | "TISSUE";
+  investigation_type?: string | null;
+  priority?: string | null;
+  target_date?: string | null;
+  clinical_notes?: string | null;
+  item_status?: string | null;
+  lab_order_id?: string | null;
+  lab_order_item_id?: string | null;
+};
+
+export type PlanInvestigationOrderResult = {
+  created: number;
+  skipped: number;
+  updated: number;
+  errors: string[];
+};
+
+/* Testing methods accepted on a Molecular-category lab test. */
+const LAB_ORDER_ITEM_METHODS = [
+  "Germline Testing",
+  "Tissue Biopsy Testing",
+  "Liquid Biopsy Testing",
+];
+
+const LAB_PRIORITY_RANK: Record<string, number> = {
+  Normal: 0,
+  Urgent: 1,
+  Stat: 2,
+};
+
+/* The Investigations tab's Normal / High / Urgent map onto the lab order's
+   Normal / Urgent / Stat. */
+export const labOrderPriorityOf = (
+  priority?: string | null
+): "Normal" | "Urgent" | "Stat" => {
+  const value = (priority ?? "").trim().toLowerCase();
+  if (value === "stat" || value === "critical") return "Stat";
+  if (value === "urgent" || value === "high") return "Urgent";
+  return "Normal";
+};
+
+export const highestLabOrderPriority = (
+  priorities: (string | null | undefined)[]
+): "Normal" | "Urgent" | "Stat" =>
+  priorities.reduce<"Normal" | "Urgent" | "Stat">((highest, priority) => {
+    const candidate = labOrderPriorityOf(priority);
+    return LAB_PRIORITY_RANK[candidate] > LAB_PRIORITY_RANK[highest]
+      ? candidate
+      : highest;
+  }, "Normal");
+
+/* A cancelled / completed order can no longer take items. */
+const isOpenLabOrder = (order: { order_status?: string | null }) => {
+  const status = (order.order_status ?? "").trim().toLowerCase();
+  return status !== "cancelled" && status !== "completed";
+};
+
+const resolveActingDoctorId = async (): Promise<string> => {
+  const user = getUser();
+  if (user?.employee_id) return user.employee_id;
+  /* The login payload usually carries employee_id; when it does not, ask the
+     server before falling back to the user id (doctor_employee_id is an
+     employee reference). */
+  try {
+    const me = await API.get<{ user?: { employee_id?: string | null } }>(
+      "/auth/me"
+    );
+    const employeeId = me.data?.user?.employee_id;
+    if (employeeId) return employeeId;
+  } catch {
+    /* Fall through to the id we have. */
+  }
+  return user?.user_id ?? "";
+};
+
+const resolveOrderingEncounter = async (
+  patientId: string,
+  encounterNo?: string | null,
+  appointmentId?: string | null
+): Promise<EncounterRecord | null> => {
+  if (encounterNo) {
+    try {
+      const found = (await encounterApi.getByNumber(encounterNo)).data?.data;
+      if (found && found.patient_id === patientId) return found;
+    } catch (error) {
+      console.error("Failed to load the order's encounter:", error);
+    }
+  }
+  if (appointmentId) {
+    try {
+      const found = (await encounterApi.getByAppointment(appointmentId)).data
+        ?.data;
+      if (found && found.patient_id === patientId) return found;
+    } catch (error) {
+      console.error("Failed to load the order's encounter:", error);
+    }
+  }
+  return null;
+};
+
+/* ---------------- Ordering a visit's investigations ----------------
+   One implementation for every screen that places lab tests: the
+   Chemotherapy Order tab / Discharge Medication (plan rows) and Lab Review
+   (the consultation's selected tests). It reuses the visit's open lab order
+   and never orders the same test twice.
+
+   Identity is matched on the lab test id, its catalog code AND its name: the
+   same real test exists in lab_test_master under more than one id (legacy
+   DDC-* rows plus the newer catalog rows), so an id-only check still placed
+   it twice from two screens. */
+
+export type VisitLabTestInput = {
+  lab_test_id?: string | null;
+  test_name?: string | null;
+  test_code?: string | null;
+  clinical_notes?: string | null;
+  priority?: string | null;
+  target_date?: string | null;
+  method?: string | null;
+};
+
+export type VisitLabOrderResult = {
+  created: number;
+  skipped: number;
+  errors: string[];
+  labOrderId: string;
+  /* Every requested test, including ones already on an open order. */
+  resolvedTestIds: string[];
+  resolvedById: Map<string, { labOrderId: string; itemId: string }>;
+  resolvedByName: Map<string, { labOrderId: string; itemId: string }>;
+  /* The lab_order_item ids involved (new and already-ordered). */
+  orderedItemIds: string[];
+  /* Lower-cased non-lab names recorded on one of the visit's orders. */
+  recordedOtherNames: Set<string>;
+};
+
+const normalizedTestName = (name?: string | null) =>
+  (name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+
+const normalizedTestCode = (code?: string | null) =>
+  (code ?? "").trim().toLowerCase();
+
+export const orderVisitInvestigations = async ({
+  patientId,
+  encounterNo,
+  appointmentId,
+  branchId,
+  tests,
+  otherInvestigations = [],
+  clinicalNotes,
+}: {
+  patientId: string;
+  encounterNo?: string | null;
+  appointmentId?: string | null;
+  branchId?: string | null;
+  tests: VisitLabTestInput[];
+  otherInvestigations?: string[] | null;
+  clinicalNotes?: string | null;
+}): Promise<VisitLabOrderResult> => {
+  const result: VisitLabOrderResult = {
+    created: 0,
+    skipped: 0,
+    errors: [],
+    labOrderId: "",
+    resolvedTestIds: [],
+    resolvedById: new Map(),
+    resolvedByName: new Map(),
+    orderedItemIds: [],
+    recordedOtherNames: new Set(),
+  };
+
+  if (!patientId) {
+    result.errors.push("A patient is required to order investigations.");
+    return result;
+  }
+
+  const encounter = await resolveOrderingEncounter(
+    patientId,
+    encounterNo,
+    appointmentId
+  );
+  const patientHistoryId = encounter?.patient_history_id ?? undefined;
+  const visitAppointmentId =
+    appointmentId || encounter?.appointment_id || undefined;
+  const visitBranchId =
+    encounter?.branch_id ||
+    branchId ||
+    getActiveBranchId() ||
+    getUser()?.branch_id ||
+    undefined;
+
+  /* This visit's lab orders only - never another patient's / visit's. The
+     encounter's patient_history row is the visit; the appointment narrows it
+     as well, so orders created before the visit link was written are still
+     found (older rows on this visit were attached to the patient's latest
+     history instead of the appointment's). */
+  const visitScopes: {
+    patientHistoryId?: string;
+    patientId?: string;
+    appointmentId?: string;
+  }[] = [];
+  if (patientHistoryId) visitScopes.push({ patientHistoryId });
+  if (visitAppointmentId) {
+    visitScopes.push({ patientId, appointmentId: visitAppointmentId });
+  }
+
+  let visitOrders: LabOrderRecord[] = [];
+  if (visitScopes.length > 0) {
+    try {
+      const batches = await Promise.all(
+        visitScopes.map((scope) =>
+          labOrderApi.getAll({
+            ...scope,
+            limit: 200,
+          })
+        )
+      );
+      const byId = new Map<string, LabOrderRecord>();
+      batches.forEach((batch) => {
+        (batch.data.data ?? []).forEach((order) => {
+          byId.set(order.lab_order_id, order);
+        });
+      });
+      visitOrders = [...byId.values()];
+    } catch (error: any) {
+      result.errors.push(
+        error?.response?.data?.message ||
+          error?.message ||
+          "Failed to load this visit's lab orders."
+      );
+      return result;
+    }
+  }
+
+  const orderedTests = new Map<
+    string,
+    { labOrderId: string; itemId: string }
+  >();
+
+  const linkExisting = (
+    test: VisitLabTestInput,
+    resolved: { labOrderId: string; itemId: string }
+  ) => {
+    const id = (test.lab_test_id ?? "").trim();
+    const name = normalizedTestName(test.test_name);
+    const code = normalizedTestCode(test.test_code);
+    if (resolved.itemId && !result.orderedItemIds.includes(resolved.itemId)) {
+      result.orderedItemIds.push(resolved.itemId);
+    }
+    if (id) {
+      result.resolvedById.set(id, resolved);
+      orderedTests.set(`id:${id}`, resolved);
+      result.resolvedTestIds.push(id);
+    }
+    if (name) {
+      result.resolvedByName.set(name, resolved);
+      orderedTests.set(`name:${name}`, resolved);
+    }
+    if (code) orderedTests.set(`code:${code}`, resolved);
+  };
+
+  /* Every test already on one of the visit's open orders. */
+  visitOrders.filter(isOpenLabOrder).forEach((visitOrder) => {
+    (visitOrder.lab_order_item ?? []).forEach((item) => {
+      if (!item) return;
+      const resolved = {
+        labOrderId: visitOrder.lab_order_id,
+        itemId: item.lab_order_item_id,
+      };
+      const id = (item.lab_test_id ?? "").trim();
+      const name = normalizedTestName(item.lab_test_master?.test_name);
+      const code = normalizedTestCode(item.lab_test_master?.test_code);
+      if (id) {
+        result.resolvedById.set(id, resolved);
+        orderedTests.set(`id:${id}`, resolved);
+      }
+      if (name) {
+        result.resolvedByName.set(name, resolved);
+        orderedTests.set(`name:${name}`, resolved);
+      }
+      if (code) orderedTests.set(`code:${code}`, resolved);
+    });
+  });
+
+  const recordedNames = new Set(
+    visitOrders
+      .flatMap((visitOrder) => otherInvestigationsOf(visitOrder.lab_description))
+      .map((name) => normalizedTestName(name))
+  );
+
+  const openOrder = visitOrders.find(isOpenLabOrder) ?? null;
+  let labOrderId = openOrder?.lab_order_id ?? "";
+  result.labOrderId = labOrderId;
+
+  const requestedOtherNames = [
+    ...new Set(
+      (otherInvestigations ?? [])
+        .map((name) => name.trim())
+        .filter(Boolean)
+    ),
+  ];
+  const namesToAdd = requestedOtherNames.filter(
+    (name) => !recordedNames.has(normalizedTestName(name))
+  );
+
+  /* New tests only: an id, catalog code or name already on an open order of
+     this visit counts as ordered. Duplicates inside the request itself are
+     collapsed too. */
+  const newTests: VisitLabTestInput[] = [];
+  const requestedIdentities = new Set<string>();
+  for (const test of tests) {
+    const id = (test.lab_test_id ?? "").trim();
+    const name = normalizedTestName(test.test_name);
+    const code = normalizedTestCode(test.test_code);
+    if (!id && !name) continue;
+
+    const existing =
+      (id ? orderedTests.get(`id:${id}`) : undefined) ??
+      (code ? orderedTests.get(`code:${code}`) : undefined) ??
+      (name ? orderedTests.get(`name:${name}`) : undefined);
+
+    if (existing) {
+      linkExisting(test, existing);
+      result.skipped += 1;
+      continue;
+    }
+
+    const identity = id ? `id:${id}` : `name:${name}`;
+    if (
+      requestedIdentities.has(identity) ||
+      (name && requestedIdentities.has(`name:${name}`))
+    ) {
+      result.skipped += 1;
+      continue;
+    }
+    requestedIdentities.add(identity);
+    if (name) requestedIdentities.add(`name:${name}`);
+    newTests.push(test);
+  }
+
+  let namesWritten = false;
+
+  if (newTests.length > 0 || namesToAdd.length > 0) {
+    const highest = highestLabOrderPriority(tests.map((test) => test.priority));
+
+    if (!labOrderId) {
+      const doctorId = await resolveActingDoctorId();
+      if (!doctorId) {
+        result.errors.push(
+          "Could not resolve the logged-in doctor. Please log in again."
+        );
+        return result;
+      }
+      try {
+        const created = (
+          await labOrderApi.create({
+            patient_id: patientId,
+            ...(patientHistoryId
+              ? { patient_history_id: patientHistoryId }
+              : {}),
+            doctor_employee_id: doctorId,
+            ...(visitBranchId ? { branch_id: visitBranchId } : {}),
+            ...(visitAppointmentId
+              ? { appointment_id: visitAppointmentId }
+              : {}),
+            priority: highest,
+            ...(namesToAdd.length > 0
+              ? {
+                  lab_description: mergeOtherInvestigations("", namesToAdd),
+                }
+              : {}),
+            ...(clinicalNotes?.trim()
+              ? { clinical_notes: clinicalNotes.trim() }
+              : {}),
+          })
+        ).data.data;
+        labOrderId = created?.lab_order_id ?? "";
+        if (!labOrderId) throw new Error("Failed to create the lab order.");
+        result.labOrderId = labOrderId;
+        namesWritten = namesToAdd.length > 0;
+      } catch (error: any) {
+        result.errors.push(
+          error?.response?.data?.message ||
+            error?.message ||
+            "Failed to create the lab order."
+        );
+        return result;
+      }
+    }
+
+    /* An order reused from earlier in the visit keeps its description and
+       notes; the new names / instructions are merged in, nothing clobbered. */
+    if (labOrderId && (namesToAdd.length > 0 || clinicalNotes?.trim())) {
+      try {
+        const current = (await labOrderApi.getById(labOrderId)).data.data;
+        const merged = mergeOtherInvestigations(
+          current?.lab_description,
+          namesToAdd
+        );
+        const nextNotes = clinicalNotes?.trim() ?? "";
+        const currentNotes = (current?.clinical_notes ?? "").trim();
+        const mergedNotes =
+          nextNotes && !currentNotes.includes(nextNotes)
+            ? currentNotes
+              ? `${currentNotes}\n${nextNotes}`
+              : nextNotes
+            : currentNotes;
+        const patch: Partial<LabOrderRecord> = {};
+        if (merged && merged !== (current?.lab_description ?? "")) {
+          patch.lab_description = merged;
+        }
+        if (mergedNotes !== currentNotes) patch.clinical_notes = mergedNotes;
+        if (Object.keys(patch).length > 0) {
+          await labOrderApi.update(labOrderId, patch);
+        }
+        if (namesToAdd.length > 0) namesWritten = true;
+      } catch (error: any) {
+        result.errors.push(
+          error?.response?.data?.message ||
+            error?.message ||
+            "Failed to update the visit's lab order."
+        );
+      }
+    }
+
+    /* The order's priority is the highest of the tests it carries - a reused
+       order is raised when this request adds a more urgent test. */
+    if (labOrderId && newTests.length > 0) {
+      const currentOrder = visitOrders.find(
+        (visitOrder) => visitOrder.lab_order_id === labOrderId
+      );
+      if (
+        currentOrder &&
+        LAB_PRIORITY_RANK[highest] >
+          LAB_PRIORITY_RANK[labOrderPriorityOf(currentOrder.priority)]
+      ) {
+        try {
+          await labOrderApi.update(labOrderId, { priority: highest });
+        } catch (error: any) {
+          console.error(
+            "Failed to raise the lab order priority:",
+            error?.response?.data?.message ?? error?.message
+          );
+        }
+      }
+    }
+  }
+
+  for (const test of newTests) {
+    if (!labOrderId) {
+      result.errors.push(
+        `No lab order is available for ${test.test_name ?? test.lab_test_id}.`
+      );
+      continue;
+    }
+
+    const id = (test.lab_test_id ?? "").trim();
+    if (!id) continue;
+
+    try {
+      const targetDate = toIsoDate(test.target_date);
+      const method = (test.method ?? "").trim();
+      const item = (
+        await labOrderItemApi.create({
+          lab_order_id: labOrderId,
+          lab_test_id: id,
+          ...(test.clinical_notes?.trim()
+            ? { clinical_notes: test.clinical_notes.trim() }
+            : {}),
+          priority: labOrderPriorityOf(test.priority),
+          ...(targetDate ? { target_date: targetDate } : {}),
+          ...(LAB_ORDER_ITEM_METHODS.includes(method) ? { method } : {}),
+          ...(visitBranchId ? { branch_id: visitBranchId } : {}),
+        })
+      ).data.data;
+
+      if (!item?.lab_order_item_id) {
+        throw new Error("The lab order item was not created.");
+      }
+
+      result.created += 1;
+      linkExisting(test, {
+        labOrderId,
+        itemId: item.lab_order_item_id,
+      });
+    } catch (error: any) {
+      result.errors.push(
+        `${test.test_name ?? id}: ${
+          error?.response?.data?.message ||
+          error?.message ||
+          "could not be ordered"
+        }`
+      );
+    }
+  }
+
+  /* Non-lab / tissue names have no item - they are ordered once recorded on
+     the visit's lab order. */
+  const writtenNames = new Set(recordedNames);
+  if (namesWritten) {
+    namesToAdd.forEach((name) =>
+      writtenNames.add(normalizedTestName(name))
+    );
+  }
+  result.recordedOtherNames = writtenNames;
+
+  return result;
+};
+
+/* Orders the Chemotherapy Order tab's Investigations rows for this visit.
+   LAB rows become lab_order_item rows carrying the tab's clinical notes,
+   priority and target date; NON_LAB / TISSUE names are kept on the visit's
+   lab order description. Idempotent - see orderVisitInvestigations. */
+export const orderPlanInvestigations = async ({
+  planId,
+  cycle,
+  day,
+  encounterNo,
+  patientId,
+  appointmentId,
+  branchId,
+  investigations,
+}: {
+  planId: string;
+  cycle: number;
+  day: number;
+  encounterNo?: string | null;
+  patientId: string;
+  appointmentId?: string | null;
+  branchId?: string | null;
+  /* The tab's saved rows; fetched from the cycle day order when omitted. */
+  investigations?: PlanInvestigationOrderInput[] | null;
+}): Promise<PlanInvestigationOrderResult> => {
+  const result: PlanInvestigationOrderResult = {
+    created: 0,
+    skipped: 0,
+    updated: 0,
+    errors: [],
+  };
+
+  if (!planId || !patientId) {
+    result.errors.push(
+      "A chemotherapy plan and patient are required to order investigations."
+    );
+    return result;
+  }
+
+  let rows: PlanInvestigationOrderInput[];
+  try {
+    rows =
+      investigations ??
+      ((await chemotherapyApi.getPlanOrder(planId, cycle, day)).data.data
+        ?.chemotherapy_plan_order_investigation as
+        | ChemoPlanInvestigation[]
+        | undefined) ??
+      [];
+  } catch (error: any) {
+    result.errors.push(
+      error?.response?.data?.message ||
+        error?.message ||
+        "Failed to load the plan's investigations."
+    );
+    return result;
+  }
+
+  /* Only rows still to be ordered. Already ordered rows keep their link. */
+  const openRows = rows.filter(
+    (row) => (row.item_status ?? "PLANNED") === "PLANNED"
+  );
+  const labRows = openRows.filter(
+    (row) =>
+      row.investigation_category === "LAB" &&
+      Boolean(row.lab_test_id) &&
+      Boolean(row.investigation_name?.trim())
+  );
+  const nonLabNames = [
+    ...new Set(
+      openRows
+        .filter((row) => row.investigation_category !== "LAB")
+        .map((row) => row.investigation_name?.trim())
+        .filter(Boolean) as string[]
+    ),
+  ];
+
+  if (labRows.length === 0 && nonLabNames.length === 0) return result;
+
+  const placed = await orderVisitInvestigations({
+    patientId,
+    encounterNo,
+    appointmentId,
+    branchId,
+    tests: labRows.map((row) => ({
+      lab_test_id: row.lab_test_id,
+      test_name: row.investigation_name,
+      clinical_notes: row.clinical_notes,
+      priority: row.priority,
+      target_date: row.target_date,
+      method: row.investigation_type,
+    })),
+    otherInvestigations: nonLabNames,
+  });
+
+  result.created += placed.created;
+  result.skipped += placed.skipped;
+  result.errors.push(...placed.errors);
+
+  const statusUpdates: {
+    investigation_id?: string | null;
+    item_status: "ORDERED";
+    lab_order_id?: string | null;
+    lab_order_item_id?: string | null;
+  }[] = [];
+
+  for (const row of labRows) {
+    if (!row.investigation_id) continue;
+    const resolved =
+      placed.resolvedById.get(row.lab_test_id ?? "") ??
+      placed.resolvedByName.get(normalizedTestName(row.investigation_name));
+    if (!resolved) continue;
+    statusUpdates.push({
+      investigation_id: row.investigation_id,
+      item_status: "ORDERED",
+      lab_order_id: resolved.labOrderId,
+      lab_order_item_id: resolved.itemId,
+    });
+  }
+
+  openRows
+    .filter((row) => row.investigation_category !== "LAB")
+    .forEach((row) => {
+      const name = normalizedTestName(row.investigation_name);
+      if (!name || !row.investigation_id) return;
+      if (!placed.recordedOtherNames.has(name)) return;
+      statusUpdates.push({
+        investigation_id: row.investigation_id,
+        item_status: "ORDERED",
+        ...(placed.labOrderId ? { lab_order_id: placed.labOrderId } : {}),
+      });
+    });
+
+  if (statusUpdates.length > 0) {
+    try {
+      const response = await chemotherapyApi.updatePlanInvestigationStatus(
+        planId,
+        cycle,
+        day,
+        statusUpdates
+      );
+      result.updated = response.data.data?.updated ?? 0;
+    } catch (error: any) {
+      result.errors.push(
+        error?.response?.data?.message ||
+          error?.message ||
+          "Failed to update the investigations' status."
+      );
+    }
+  }
+
+  return result;
+};
+
+/* ---------------- Consultation draft ("Save as Draft") ----------------
+   One draft per visit (encounter), else per patient - never one shared
+   key, which let one patient's notes show up for another. A draft left in
+   the old shared key is taken over only by its own patient. */
+const LEGACY_CONSULTATION_DRAFT_KEY = "hms_consultation_draft";
+
+const consultationDraftKey = (encounterNo?: string | null, patientId?: string | null) =>
+  encounterNo
+    ? `hms_consultation_draft_${encounterNo}`
+    : patientId
+      ? `hms_consultation_draft_patient_${patientId}`
+      : "";
+
+export const readConsultationDraft = (
+  encounterNo?: string | null,
+  patientId?: string | null
+): Record<string, any> => {
+  const key = consultationDraftKey(encounterNo, patientId);
+  if (!key) return {};
+  try {
+    const own = localStorage.getItem(key);
+    if (own) return JSON.parse(own) ?? {};
+    const legacy = localStorage.getItem(LEGACY_CONSULTATION_DRAFT_KEY);
+    if (legacy) {
+      const parsed = JSON.parse(legacy) ?? {};
+      if (patientId && parsed.patientId === patientId) {
+        localStorage.setItem(key, legacy);
+        localStorage.removeItem(LEGACY_CONSULTATION_DRAFT_KEY);
+        return parsed;
+      }
+    }
+  } catch {
+    /* Malformed draft - ignore it. */
+  }
+  return {};
+};
+
+export const writeConsultationDraft = (
+  encounterNo: string | null | undefined,
+  patientId: string | null | undefined,
+  data: Record<string, unknown>
+) => {
+  const key = consultationDraftKey(encounterNo, patientId);
+  if (key) localStorage.setItem(key, JSON.stringify({ ...data, patientId }));
+};
+
+/* The visit's consultation was saved: its draft is no longer needed. */
+export const clearConsultationDraft = (encounterNo?: string | null, patientId?: string | null) => {
+  const key = consultationDraftKey(encounterNo, patientId);
+  if (key) localStorage.removeItem(key);
+  if (patientId) localStorage.removeItem(consultationDraftKey(null, patientId));
+};
 
 /* ============================================================
    ACTIVE ENCOUNTER LOOKUP
@@ -745,6 +1576,7 @@ export type PlanOrderTarget = {
   cycle: number;
   day: number;
   hydration?: ChemoPlanOrderPayload["hydration"];
+  investigations?: ChemoPlanOrderPayload["investigations"];
   /* The order's Post Chemo Instructions / Additional Notes; left out keeps
      what the day's order already has. */
   chemoInstructions?: string;
@@ -773,6 +1605,35 @@ const resolveVisitEncounter = async (
 
 export const COURSE_CLOSED_MESSAGE =
   "This chemotherapy course is completed. Start a new plan from the Treatment Plan step.";
+
+/* Which cycle day of the plan the current visit's order is on: the saved
+   draft's values win, else the day whose order was saved in this encounter,
+   else the latest cycle day, else Cycle 1 / Day 1. Used before saving the
+   discharge medications and before ordering the plan's investigations so
+   both target the day the doctor actually worked on. */
+export const resolvePlanCycleDay = async (
+  planId?: string | null,
+  encounterNo?: string | null
+): Promise<{ cycle: number; day: number }> => {
+  if (!planId) return { cycle: 1, day: 1 };
+  try {
+    const orders =
+      (await chemotherapyApi.listPlanOrders(planId)).data.data ?? [];
+    const inEncounter = encounterNo
+      ? orders.filter((order) => order.encounter_no === encounterNo)
+      : [];
+    const order = inEncounter[inEncounter.length - 1] ?? orders[orders.length - 1];
+    if (order?.cycle_number && order?.cycle_day) {
+      return { cycle: order.cycle_number, day: order.cycle_day };
+    }
+  } catch (error: any) {
+    console.error(
+      "Failed to resolve the plan's cycle day:",
+      error?.response?.data?.message ?? error?.message
+    );
+  }
+  return { cycle: 1, day: 1 };
+};
 
 /* Ensure a chemotherapy plan exists for the patient, returning its id.
    Used by the ChemotherapyOrder Save button and as a safety net before
@@ -836,7 +1697,9 @@ export const createChemotherapyPlanForPatient = async (
     orders: ChemoPlanOrderHeader[] | null | undefined
   ): Promise<string | undefined> => {
     const target = options?.order;
-    if (!target || !planItems || planItems.length === 0) return undefined;
+    const hasItems = Boolean(planItems && planItems.length > 0);
+    const hasInvestigations = target?.investigations !== undefined;
+    if (!target || (!hasItems && !hasInvestigations)) return undefined;
     if (target.planId && target.planId !== planId) return undefined;
     const saved = (orders ?? []).find(
       (order) =>
@@ -847,8 +1710,9 @@ export const createChemotherapyPlanForPatient = async (
     }
     try {
       await chemotherapyApi.savePlanOrder(planId, target.cycle, target.day, {
-        items: planItems,
+        items: planItems ?? [],
         ...(target.hydration ? { hydration: target.hydration } : {}),
+        ...(target.investigations !== undefined ? { investigations: target.investigations } : {}),
         dosing: orderDosingFromSnapshot(dosing),
         encounter_no: encounter.encounter_no ?? null,
         ...(target.chemoInstructions !== undefined

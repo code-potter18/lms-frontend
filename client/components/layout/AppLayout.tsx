@@ -200,6 +200,11 @@ export function AppLayout({ children }: { children?: React.ReactNode }) {
       permission: "doctor.transfer",
     },
     {
+      label: "Pending Follow-ups",
+      to: "/appointments/pending",
+      permission: "appointment.read",
+    },
+    {
       label: "Inpatient (IPD)",
       permission: "admission.read",
       children: ipdChildren,

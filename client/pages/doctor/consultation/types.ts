@@ -17,11 +17,19 @@ export interface ConsultationState {
    it on each lab_order_item. */
 export type InvestigationPriority = "Normal" | "Urgent";
 
+/* Testing method, only offered for Molecular-category investigations. */
+export type InvestigationMethod =
+  | "Germline Testing"
+  | "Tissue Biopsy Testing"
+  | "Liquid Biopsy Testing";
+
 export interface InvestigationOrderDetail {
   notes: string;
   priority: InvestigationPriority;
   /* DD-MM-YYYY, as typed or picked; may be empty. */
   targetDate: string;
+  /* Molecular tests only; empty for other categories. */
+  method: InvestigationMethod | "";
 }
 
 export interface MeasurementValues {
@@ -93,6 +101,7 @@ export type DischargeMedicineRecord = {
   medicine_master?: {
     medicine_name: string | null;
     generic_name?: string | null;
+    generic_id?: string | null;
     dosage_form?: string | null;
     unit?: string | null;
   } | null;
@@ -167,6 +176,7 @@ export type RegimenProtocolItem = {
   timing_relative_to_primary: string | null;
   remarks: string | null;
   administration_detail: string | null;
+  generic_name?: string | null;
   medicine_master: {
     medicine_name: string;
     generic_name: string | null;
@@ -188,7 +198,7 @@ export type RegimenProtocolDilution = {
   comment: string | null;
   hydration_stage: string | null;
   drug_brand_name: string | null;
-  medicine_master: { medicine_name: string } | null;
+  medicine_master: { medicine_name: string | null; generic_name?: string | null } | null;
 };
 
 export type RegimenProtocolDetail = {

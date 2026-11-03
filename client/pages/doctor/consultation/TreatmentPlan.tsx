@@ -208,18 +208,8 @@ const TreatmentPlan: React.FC<{
     "Radioiodine therapy",
   ];
 
-  /* Single-select behaviour - only one treatment type can be
-     active at a time (clicking it again clears the selection). */
-  const toggleTreatmentType = (
-    type: TreatmentType
-  ) => {
-    setTreatmentTypes((current) =>
-      current.includes(type) ? [] : [type]
-    );
-  };
-
   /* Chemo-specific inputs (Line of Therapy, Planned Start Date,
-     Protocol) stay hidden unless Chemotherapy is ticked above. */
+     Protocol) stay hidden unless Chemotherapy is selected above. */
   const isChemotherapySelected =
     treatmentTypes.includes("Chemotherapy");
 
@@ -580,8 +570,10 @@ const TreatmentPlan: React.FC<{
       <div className="space-y-8 p-8">
 
         {/* ============================================
-            TREATMENT INTENT
+            TREATMENT INTENT + TREATMENT TYPE
         ============================================= */}
+
+        <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
 
         <div>
 
@@ -592,7 +584,7 @@ const TreatmentPlan: React.FC<{
             Treatment Intent
           </label>
 
-          <div className="relative w-full max-w-md">
+          <div className="relative w-full">
 
             <select
               id="treatmentIntent"
@@ -632,46 +624,48 @@ const TreatmentPlan: React.FC<{
           </div>
         </div>
 
-        {/* ============================================
-            TREATMENT TYPE
-        ============================================= */}
-
+        {/* Treatment Type (single-select) */}
         <div>
 
-          <label className="mb-3 block text-[10px] font-bold text-slate-800">
+          <label
+            htmlFor="treatmentType"
+            className="mb-3 block text-[10px] font-bold text-slate-800"
+          >
             Treatment Type
           </label>
 
-          <div className="flex flex-wrap gap-6">
+          <div className="relative w-full">
 
-            {treatmentOptions.map((type) => {
-              const checked =
-                treatmentTypes.includes(type);
+            <select
+              id="treatmentType"
+              value={treatmentTypes[0] ?? ""}
+              onChange={(event) =>
+                setTreatmentTypes(
+                  event.target.value
+                    ? [event.target.value as TreatmentType]
+                    : []
+                )
+              }
+              className="block w-full appearance-none rounded-lg border border-slate-300 bg-white p-3 text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            >
+              <option value="">
+                Select Treatment Type
+              </option>
 
-              return (
-                <label
-                  key={type}
-                  className="flex cursor-pointer items-center"
-                >
+              {treatmentOptions.map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
+            </select>
 
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() =>
-                      toggleTreatmentType(type)
-                    }
-                    className="h-5 w-5 cursor-pointer rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500"
-                  />
-
-                  <span className="ml-2 text-slate-700">
-                    {type}
-                  </span>
-
-                </label>
-              );
-            })}
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-500">
+              <ChevronDownIcon />
+            </div>
 
           </div>
+        </div>
+
         </div>
 
         {/* ============================================

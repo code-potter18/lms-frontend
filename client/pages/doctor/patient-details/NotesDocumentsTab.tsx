@@ -1828,15 +1828,15 @@ const NotesDocumentsTab: React.FC<{
               <table className="w-full border-collapse text-left">
                 <thead>
                   <tr className="border-b border-slate-200 bg-white text-[10px] text-slate-500">
-                    <th className="w-1/4 p-4 pl-6 font-medium">
+                    <th className="w-1/4 p-4 pl-6 text-[10px] font-medium">
                       Test Name
                     </th>
 
-                    <th className="w-1/5 p-4 font-medium">
+                    <th className="w-1/5 p-4 text-[10px] font-medium">
                       Date
                     </th>
 
-                    <th className="w-1/5 p-4 font-medium">
+                    <th className="w-1/5 p-4 text-[10px] font-medium">
                       Result
                     </th>
 
@@ -1844,7 +1844,7 @@ const NotesDocumentsTab: React.FC<{
                       Trend
                     </th>
 
-                    <th className="p-4 pr-6 text-center font-medium">
+                    <th className="p-4 pr-6 text-center text-[10px] font-medium">
                       Action
                     </th>
                   </tr>
@@ -2167,7 +2167,7 @@ const NotesDocumentsTab: React.FC<{
               </div>
 
               <div>
-                <label className="mb-1 block font-bold text-slate-800">Chief Complaint</label>
+                <label className="mb-1 block text-[10px] font-bold text-slate-800">Chief Complaint</label>
                 <input
                   type="text"
                   required
@@ -2180,7 +2180,7 @@ const NotesDocumentsTab: React.FC<{
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block font-bold text-slate-800">Clinical Assessment (1 per line)</label>
+                  <label className="mb-1 block text-[10px] font-bold text-slate-800">Clinical Assessment (1 per line)</label>
                   <textarea
                     rows={3}
                     value={editingNote.clinicalAssessment}
@@ -2190,7 +2190,7 @@ const NotesDocumentsTab: React.FC<{
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block font-bold text-slate-800">Examination (1 per line)</label>
+                  <label className="mb-1 block text-[10px] font-bold text-slate-800">Examination (1 per line)</label>
                   <textarea
                     rows={3}
                     value={editingNote.examination}
@@ -2202,7 +2202,7 @@ const NotesDocumentsTab: React.FC<{
               </div>
 
               <div>
-                <label className="mb-1 block font-bold text-slate-800">Diagnosis</label>
+                <label className="mb-1 block text-[10px] font-bold text-slate-800">Diagnosis</label>
                 <input
                   type="text"
                   value={editingNote.diagnosis}
@@ -2213,7 +2213,7 @@ const NotesDocumentsTab: React.FC<{
               </div>
 
               <div>
-                <label className="mb-1 block font-bold text-slate-800">Treatment / Plan (1 item per line)</label>
+                <label className="mb-1 block text-[10px] font-bold text-slate-800">Treatment / Plan (1 item per line)</label>
                 <textarea
                   rows={3}
                   value={editingNote.treatmentPlan}
@@ -2225,7 +2225,7 @@ const NotesDocumentsTab: React.FC<{
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block font-bold text-slate-800">Medications</label>
+                  <label className="mb-1 block text-[10px] font-bold text-slate-800">Medications</label>
                   <input
                     type="text"
                     value={editingNote.medications}
@@ -2235,7 +2235,7 @@ const NotesDocumentsTab: React.FC<{
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block font-bold text-slate-800">Investigations (1 per line)</label>
+                  <label className="mb-1 block text-[10px] font-bold text-slate-800">Investigations (1 per line)</label>
                   <input
                     type="text"
                     value={editingNote.investigations}
@@ -2247,7 +2247,7 @@ const NotesDocumentsTab: React.FC<{
               </div>
 
               <div>
-                <label className="mb-1 block font-bold text-slate-800">Follow-up</label>
+                <label className="mb-1 block text-[10px] font-bold text-slate-800">Follow-up</label>
                 <input
                   type="text"
                   value={editingNote.followUp}
