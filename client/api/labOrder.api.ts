@@ -14,6 +14,9 @@ export interface LabOrderRecord {
   branch_id?: string | null;
   user_id?: string | null;
   patient_history_id?: string | null;
+  /* Investigations advised at the visit that are not lab tests (typed by
+     the doctor), as "Other investigations: A, B". */
+  lab_description?: string | null;
   created_at?: string;
   updated_at?: string;
   patient_history?: {
@@ -97,15 +100,21 @@ export const labOrderApi = {
     branch_id?: string;
     priority?: "Normal" | "Urgent" | "Stat";
     clinical_notes?: string;
+    /* The visit the order belongs to. */
+    appointment_id?: string;
+    lab_description?: string;
   }) => API.post<{ success: boolean; data: LabOrderRecord }>("/lab-order", payload),
 
+  /* The latest orders - all, or a patient's / one visit's (appointment or
+     encounter). The filtered calls never return another patient's order. */
   getAll: (params?: {
-    priority?: string;
-    branch_id?: string;
+    patientId?: string;
+    appointmentId?: string;
+    patientHistoryId?: string;
     limit?: number;
   }) =>
     API.get<{ success: boolean; data: LabOrderRecord[] }>("/lab-order", {
-      params,
+      params: params ?? {},
     }),
 
   getById: (id: string) =>
@@ -140,8 +149,11 @@ export const labOrderItemApi = {
       payload,
     ),
 
-  getAll: () =>
-    API.get<{ success: boolean; data: LabOrderItemRecord[] }>("/lab-order-item"),
+  /* The latest items - all, or a patient's / one visit's (appointment). */
+  getAll: (params?: { patientId?: string; appointmentId?: string }) =>
+    API.get<{ success: boolean; data: LabOrderItemRecord[] }>("/lab-order-item", {
+      params: params ?? {},
+    }),
 
   getById: (id: string) =>
     API.get<{ success: boolean; data: LabOrderItemRecord }>(

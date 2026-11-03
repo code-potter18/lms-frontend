@@ -31,6 +31,7 @@ export interface PersonalHistoryRecord {
   encounter_no: string;
   immunization: PersonalHistoryItem[] | null;
   drug_consumption: PersonalHistoryItem[] | null;
+  family_history: FamilyHistoryRecord | null;
   diet_type: string | null;
 }
 
@@ -38,12 +39,42 @@ export interface PersonalHistoryItem {
   code: string;
   name: string;
   others?: string;
+  /* Drug Consumption only: duration (value + day/week/month/year unit)
+     and Command(s), stored inside the drug_consumption JSON. */
+  duration_value?: number | null;
+  duration_unit?: "day" | "week" | "month" | "year" | null;
+  commands?: string | null;
 }
 
 export interface PersonalHistoryPayload {
   immunization?: PersonalHistoryItem[] | null;
   drug_consumption?: PersonalHistoryItem[] | null;
+  family_history?: FamilyHistoryRecord | null;
   diet_type?: string | null;
+}
+
+/* Consultation > Personal History > Family History. Stored as JSON on the
+   encounter's personal-history row; null status means "not answered yet". */
+export type FamilyHistoryStatus = "PRESENT" | "NOT_PRESENT";
+
+export type FamilyDegree = "1st" | "2nd" | "3rd";
+
+export interface FamilyHistoryEntry {
+  degree: FamilyDegree;
+  relative_type: string;
+  condition?: string | null;
+  age_at_diagnosis?: string | null;
+  remarks?: string | null;
+}
+
+export interface FamilyHistoryRecord {
+  status: FamilyHistoryStatus;
+  entries: FamilyHistoryEntry[];
+}
+
+export interface RelativeTypeOption {
+  name: string;
+  degree: FamilyDegree | null;
 }
 
 export interface EncounterReportRecord {
@@ -186,6 +217,11 @@ export const consultationApi = {
 
   getDietTypes: () =>
     API.get<{ success: boolean; data: string[] }>("/consultation/masters/diet-types"),
+
+  getRelativeTypes: () =>
+    API.get<{ success: boolean; data: RelativeTypeOption[] }>(
+      "/consultation/masters/relative-types",
+    ),
 
   // ---------------- Personal history ----------------
   getPersonalHistory: (encounterNo: string) =>

@@ -117,7 +117,7 @@ export const synthesizeLabNotifications = async (): Promise<LabNotificationItem[
       // 1. Order Alert
       alerts.push({
         id: `synth-order-${order.lab_order_id}`,
-        category: isStat ? "STAT" : isUrgent ? "URGENT" : "ORDER",
+        category: isStat ? "STAT" : "ORDER",
         type: isStat ? "STAT_ALERT" : "NEW_ORDER",
         title: isStat ? `STAT Test: ${order.lab_order_id}` : `New Order: ${order.lab_order_id}`,
         message: `${doctorName} ordered ${testNames} for ${patientName}`,

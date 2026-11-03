@@ -73,6 +73,8 @@ export interface EncounterPerformanceStatus {
   clinicalNotes: string | null;
 }
 
+export type DurationUnit = "day" | "week" | "month" | "year";
+
 export interface EncounterSymptom {
   id: string;
   symptomId: string;
@@ -80,6 +82,8 @@ export interface EncounterSymptom {
   symptomName: string;
   severity: string | null;
   durationDays: number | null;
+  /* The unit chosen in the editor; durationDays stays the canonical value. */
+  durationUnit: string | null;
   onsetDate: string | null;
   clinicalNotes: string | null;
   status: string;
@@ -95,10 +99,13 @@ export interface PatientAllergy {
   substanceType: string;
   reaction: string | null;
   severity: string | null;
+  durationValue: number | null;
+  durationUnit: string | null;
   status: string;
   identifiedAt: string;
   identifiedBy: string | null;
   identifiedAtEncounterNo: string | null;
+  /* Command(s) entered in the consultation (stored in clinical_notes). */
   clinicalNotes: string | null;
 }
 
@@ -111,9 +118,12 @@ export interface PatientComorbidity {
   icdCode: string | null;
   status: string;
   onsetDate: string | null;
+  durationValue: number | null;
+  durationUnit: string | null;
   identifiedAt: string;
   identifiedBy: string | null;
   identifiedAtEncounterNo: string | null;
+  /* Command(s) entered in the consultation (stored in clinical_notes). */
   clinicalNotes: string | null;
 }
 
@@ -142,47 +152,57 @@ export interface SetPerformanceStatusPayload {
 export interface AddEncounterSymptomPayload {
   symptomId: number;
   severity?: string;
-  durationDays?: number;
-  onsetDate?: string;
-  clinicalNotes?: string;
+  durationDays?: number | null;
+  durationUnit?: DurationUnit | null;
+  onsetDate?: string | null;
+  clinicalNotes?: string | null;
 }
 
 export interface UpdateEncounterSymptomPayload {
   severity?: string;
-  durationDays?: number;
-  onsetDate?: string;
-  clinicalNotes?: string;
+  durationDays?: number | null;
+  durationUnit?: DurationUnit | null;
+  onsetDate?: string | null;
+  clinicalNotes?: string | null;
   status?: string;
 }
 
 export interface AddPatientAllergyPayload {
   allergyId: number;
-  reaction?: string;
+  reaction?: string | null;
   severity?: string;
+  durationValue?: number | null;
+  durationUnit?: DurationUnit | null;
   status?: string;
   identifiedAtEncounterNo?: string;
-  clinicalNotes?: string;
+  clinicalNotes?: string | null;
 }
 
 export interface UpdatePatientAllergyPayload {
-  reaction?: string;
+  reaction?: string | null;
   severity?: string;
+  durationValue?: number | null;
+  durationUnit?: DurationUnit | null;
   status?: string;
-  clinicalNotes?: string;
+  clinicalNotes?: string | null;
 }
 
 export interface AddPatientComorbidityPayload {
   comorbidityId: string;
   status?: string;
-  onsetDate?: string;
+  onsetDate?: string | null;
+  durationValue?: number | null;
+  durationUnit?: DurationUnit | null;
   identifiedAtEncounterNo?: string;
-  clinicalNotes?: string;
+  clinicalNotes?: string | null;
 }
 
 export interface UpdatePatientComorbidityPayload {
   status?: string;
-  onsetDate?: string;
-  clinicalNotes?: string;
+  onsetDate?: string | null;
+  durationValue?: number | null;
+  durationUnit?: DurationUnit | null;
+  clinicalNotes?: string | null;
 }
 
 export interface CreateCustomSymptomPayload {

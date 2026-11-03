@@ -4,6 +4,7 @@ import {
   getApiErrorMessage,
   type AllergyOption,
   type ComorbidityOption,
+  type DurationUnit,
   type EncounterClinicalDetails,
   type PerformanceStatusOption,
   type SymptomOption,
@@ -14,20 +15,26 @@ export interface ClinicalDetailsDraft {
   symptoms: Array<{
     symptomId: number;
     severity?: string;
-    durationDays?: number;
-    onsetDate?: string;
-    clinicalNotes?: string;
+    durationDays?: number | null;
+    durationUnit?: DurationUnit | null;
+    onsetDate?: string | null;
+    clinicalNotes?: string | null;
   }>;
   allergies: Array<{
     allergyId: number;
-    reaction?: string;
+    reaction?: string | null;
     severity?: string;
-    clinicalNotes?: string;
+    durationValue?: number | null;
+    durationUnit?: DurationUnit | null;
+    clinicalNotes?: string | null;
   }>;
   comorbidities: Array<{
     /* comorbidity_master.id */
     comorbidityId: string;
-    clinicalNotes?: string;
+    onsetDate?: string | null;
+    durationValue?: number | null;
+    durationUnit?: DurationUnit | null;
+    clinicalNotes?: string | null;
   }>;
 }
 
@@ -64,6 +71,11 @@ interface UseClinicalDetailsResult {
     icdCode?: string;
   }) => Promise<ComorbidityOption | null>;
 }
+
+/* The API returns timestamps, the editors hold YYYY-MM-DD; compare the
+   date part only so unchanged dates never trigger a write. */
+const dateOnly = (value?: string | null) =>
+  value ? String(value).slice(0, 10) : "";
 
 const EMPTY_SAVED: EncounterClinicalDetails = {
   encounter: { encounterNo: "", patientId: "", encounterTs: "", status: "" },
@@ -256,9 +268,12 @@ export function useClinicalDetails({
 
           const payload = {
             severity: symptom.severity || undefined,
-            durationDays: symptom.durationDays,
-            onsetDate: symptom.onsetDate,
-            clinicalNotes: symptom.clinicalNotes || undefined,
+            durationDays: symptom.durationDays ?? null,
+            durationUnit: symptom.durationDays == null
+              ? null
+              : symptom.durationUnit ?? null,
+            onsetDate: symptom.onsetDate ?? null,
+            clinicalNotes: symptom.clinicalNotes ?? null,
           };
 
           if (!existing) {
@@ -276,7 +291,9 @@ export function useClinicalDetails({
             (existing.severity ?? "") !== (symptom.severity ?? "") ||
             (existing.durationDays ?? null) !==
               (symptom.durationDays ?? null) ||
-            (existing.onsetDate ?? "") !== (symptom.onsetDate ?? "") ||
+            (existing.durationUnit ?? null) !==
+              (symptom.durationUnit ?? null) ||
+            dateOnly(existing.onsetDate) !== dateOnly(symptom.onsetDate) ||
             (existing.clinicalNotes ?? "") !==
               (symptom.clinicalNotes ?? "")
           ) {
@@ -318,9 +335,13 @@ export function useClinicalDetails({
           );
 
           const payload = {
-            reaction: allergy.reaction || undefined,
+            reaction: allergy.reaction ?? null,
             severity: allergy.severity || undefined,
-            clinicalNotes: allergy.clinicalNotes || undefined,
+            durationValue: allergy.durationValue ?? null,
+            durationUnit: allergy.durationValue == null
+              ? null
+              : allergy.durationUnit ?? null,
+            clinicalNotes: allergy.clinicalNotes ?? null,
           };
 
           if (!existing) {
@@ -338,6 +359,10 @@ export function useClinicalDetails({
           } else if (
             (existing.reaction ?? "") !== (allergy.reaction ?? "") ||
             (existing.severity ?? "") !== (allergy.severity ?? "") ||
+            (existing.durationValue ?? null) !==
+              (allergy.durationValue ?? null) ||
+            (existing.durationUnit ?? null) !==
+              (allergy.durationUnit ?? null) ||
             (existing.clinicalNotes ?? "") !==
               (allergy.clinicalNotes ?? "")
           ) {
@@ -385,11 +410,20 @@ export function useClinicalDetails({
               String(comorbidity.comorbidityId),
           );
 
+          const comorbidityPayload = {
+            onsetDate: comorbidity.onsetDate ?? null,
+            durationValue: comorbidity.durationValue ?? null,
+            durationUnit: comorbidity.durationValue == null
+              ? null
+              : comorbidity.durationUnit ?? null,
+            clinicalNotes: comorbidity.clinicalNotes ?? null,
+          };
+
           if (!existing) {
             try {
               await clinicalDetailsApi.addPatientComorbidity(patientId, {
                 comorbidityId: comorbidity.comorbidityId,
-                clinicalNotes: comorbidity.clinicalNotes || undefined,
+                ...comorbidityPayload,
                 identifiedAtEncounterNo: encounterNo,
               });
             } catch (err) {
@@ -402,16 +436,19 @@ export function useClinicalDetails({
               }
             }
           } else if (
+            dateOnly(existing.onsetDate) !== dateOnly(comorbidity.onsetDate) ||
+            (existing.durationValue ?? null) !==
+              (comorbidity.durationValue ?? null) ||
+            (existing.durationUnit ?? null) !==
+              (comorbidity.durationUnit ?? null) ||
             (existing.clinicalNotes ?? "") !==
-            (comorbidity.clinicalNotes ?? "")
+              (comorbidity.clinicalNotes ?? "")
           ) {
             try {
               await clinicalDetailsApi.updatePatientComorbidity(
                 patientId,
                 Number(existing.id),
-                {
-                  clinicalNotes: comorbidity.clinicalNotes || undefined,
-                },
+                comorbidityPayload,
               );
             } catch (err) {
               noteWriteError(

@@ -101,6 +101,7 @@ export type DischargeMedicineRecord = {
   medicine_master?: {
     medicine_name: string | null;
     generic_name?: string | null;
+    generic_id?: string | null;
     dosage_form?: string | null;
     unit?: string | null;
   } | null;
@@ -175,6 +176,7 @@ export type RegimenProtocolItem = {
   timing_relative_to_primary: string | null;
   remarks: string | null;
   administration_detail: string | null;
+  generic_name?: string | null;
   medicine_master: {
     medicine_name: string;
     generic_name: string | null;
@@ -196,7 +198,7 @@ export type RegimenProtocolDilution = {
   comment: string | null;
   hydration_stage: string | null;
   drug_brand_name: string | null;
-  medicine_master: { medicine_name: string } | null;
+  medicine_master: { medicine_name: string | null; generic_name?: string | null } | null;
 };
 
 export type RegimenProtocolDetail = {
