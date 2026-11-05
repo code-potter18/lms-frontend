@@ -194,6 +194,7 @@ interface BranchPerfBranch {
   totalSlots: number;
   systemShare: number;
   color: string;
+  appointments?: AppointmentRecord[];
 }
 
 /**
@@ -403,30 +404,65 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
 
       const { dateFrom, dateTo, prevDateFrom, prevDateTo, dateLabel, compareLabel } = getBranchPerfRangeDates(branchPerfRange, selectedDate, customDateRange);
 
-      const results = await Promise.all(
-        branchList.map(async (b) => {
-          const currentCount = await appointmentApi
-            .getAll({ branchId: b.branch_id, limit: 1, dateFrom, dateTo, excludeStatuses: "CANCELLED,NO_SHOW" })
-            .then((res) => res.data?.data?.total ?? 0)
-            .catch(() => 0);
-          const previousCount = await appointmentApi
-            .getAll({ branchId: b.branch_id, limit: 1, dateFrom: prevDateFrom, dateTo: prevDateTo, excludeStatuses: "CANCELLED,NO_SHOW" })
-            .then((res) => res.data?.data?.total ?? 0)
-            .catch(() => 0);
-          const totalSlots = await appointmentApi
-            .getAll({ branchId: b.branch_id, limit: 1, dateFrom, dateTo })
-            .then((res) => res.data?.data?.total ?? 0)
-            .catch(() => 0);
-          return { currentCount, previousCount, totalSlots };
-        }),
-      );
+      // Helper to fetch all appointments for a date range in consolidated batches
+      async function fetchAllAppointmentsInRange(dFrom: string, dTo: string): Promise<AppointmentRecord[]> {
+        const res = await appointmentApi.getAll({ dateFrom: dFrom, dateTo: dTo, limit: 100 }).catch(() => null);
+        if (!res?.data?.data) return [];
+        const records = [...(res.data.data.appointments || [])];
+        const totalPages = res.data.data.totalPages || 1;
+        if (totalPages > 1 && totalPages <= 5) {
+          const pagePromises = [];
+          for (let p = 2; p <= totalPages; p++) {
+            pagePromises.push(appointmentApi.getAll({ dateFrom: dFrom, dateTo: dTo, limit: 100, page: p }).catch(() => null));
+          }
+          const pageResults = await Promise.all(pagePromises);
+          for (const pr of pageResults) {
+            if (pr?.data?.data?.appointments) {
+              records.push(...pr.data.data.appointments);
+            }
+          }
+        }
+        return records;
+      }
 
-      const branchData = branchList.map((b, index) => ({
+      // 2 consolidated requests instead of 42 per-branch requests
+      const [currentAppts, prevAppts] = await Promise.all([
+        fetchAllAppointmentsInRange(dateFrom, dateTo),
+        fetchAllAppointmentsInRange(prevDateFrom, prevDateTo),
+      ]);
+
+      // Group appointments by branch in memory
+      const currentByBranch: Record<string, { booked: number; total: number; appointments: AppointmentRecord[] }> = {};
+      const prevByBranch: Record<string, number> = {};
+
+      currentAppts.forEach((a: AppointmentRecord) => {
+        const bId = a.branch_id;
+        if (!bId) return;
+        if (!currentByBranch[bId]) currentByBranch[bId] = { booked: 0, total: 0, appointments: [] };
+        currentByBranch[bId].total++;
+        currentByBranch[bId].appointments.push(a);
+        const s = (a.status || "").toUpperCase();
+        if (s !== "CANCELLED" && s !== "NO_SHOW") {
+          currentByBranch[bId].booked++;
+        }
+      });
+
+      prevAppts.forEach((a: AppointmentRecord) => {
+        const bId = a.branch_id;
+        if (!bId) return;
+        const s = (a.status || "").toUpperCase();
+        if (s !== "CANCELLED" && s !== "NO_SHOW") {
+          prevByBranch[bId] = (prevByBranch[bId] || 0) + 1;
+        }
+      });
+
+      const branchData = branchList.map((b) => ({
         id: b.branch_id,
         name: b.branch_area ? `${b.branch_name} (${b.branch_area})` : (b.branch_name || b.branch_id),
-        count: results[index]?.currentCount ?? 0,
-        previousCount: results[index]?.previousCount ?? 0,
-        totalSlots: results[index]?.totalSlots ?? 0,
+        count: currentByBranch[b.branch_id]?.booked ?? 0,
+        previousCount: prevByBranch[b.branch_id] ?? 0,
+        totalSlots: currentByBranch[b.branch_id]?.total ?? 0,
+        appointments: currentByBranch[b.branch_id]?.appointments ?? [],
       }));
 
       const ranked = [...branchData].sort((a, b) => b.count - a.count);
@@ -466,49 +502,34 @@ export default function BranchPerformance({ selectedDate = new Date() }: BranchP
     setBranches([]);
   }, [branchPerfQuery.error]);
 
-  // Detailed KPIs for the hovered branch (status breakdown for the range).
-  const fetchBranchHoverDetails = useCallback(async (branchId: string) => {
-    setIsHoverDetailsLoading(true);
-    try {
-      const { dateFrom, dateTo } = getBranchPerfRangeDates(branchPerfRange, selectedDate, customDateRange);
-      const res = await appointmentApi.getAll({
-        branchId,
-        limit: 100,
-        dateFrom,
-        dateTo,
-      });
+  // Detailed KPIs for the hovered branch computed instantly from in-memory branch appointments.
+  const fetchBranchHoverDetails = useCallback((branchId: string) => {
+    const branch = branches.find((b) => b.id === branchId);
+    const appointments = branch?.appointments || [];
 
-      const appointments = res.data?.data?.appointments || [];
+    let completed = 0;
+    let cancelled = 0;
+    let noShow = 0;
+    let scheduled = 0;
 
-      let completed = 0;
-      let cancelled = 0;
-      let noShow = 0;
-      let scheduled = 0;
+    appointments.forEach((a: AppointmentRecord) => {
+      const s = (a.status || "").toUpperCase();
+      if (s === "COMPLETED") completed++;
+      else if (s === "CANCELLED") cancelled++;
+      else if (s === "NO_SHOW") noShow++;
+      else if (s === "SCHEDULED" || s === "RESCHEDULED" || s === "NOT_CHECKED_IN" || s === "IN_CONSULTATION") scheduled++;
+    });
 
-      appointments.forEach((a: AppointmentRecord) => {
-        const s = (a.status || "").toUpperCase();
-        if (s === "COMPLETED") completed++;
-        else if (s === "CANCELLED") cancelled++;
-        else if (s === "NO_SHOW") noShow++;
-        else if (s === "SCHEDULED" || s === "RESCHEDULED" || s === "NOT_CHECKED_IN" || s === "IN_CONSULTATION") scheduled++;
-      });
-
-
-      setHoveredBranchDetails({
-        total: appointments.length,
-        booked: appointments.length - cancelled - noShow,
-        completed,
-        cancelled,
-        noShow,
-        scheduled,
-      });
-
-    } catch {
-      setHoveredBranchDetails(null);
-    } finally {
-      setIsHoverDetailsLoading(false);
-    }
-  }, [branchPerfRange, selectedDate, customDateRange]);
+    setHoveredBranchDetails({
+      total: appointments.length,
+      booked: appointments.length - cancelled - noShow,
+      completed,
+      cancelled,
+      noShow,
+      scheduled,
+    });
+    setIsHoverDetailsLoading(false);
+  }, [branches]);
 
   useEffect(() => {
     if (!hoveredBranchId) return;

@@ -21,6 +21,9 @@ export interface ConfirmationDialogProps {
   showCloseButton?: boolean;
   closeOnBackdrop?: boolean;
   closeOnEscape?: boolean;
+  // Overrides the default `max-w-md` content width — useful for forms that
+  // need more horizontal room (e.g. the assign/re-assign slot dialog).
+  maxWidth?: string;
   // Replaces the default Cancel/Confirm button row entirely (e.g. a custom
   // "OK / Home" footer after the action has completed).
   footer?: ReactNode;

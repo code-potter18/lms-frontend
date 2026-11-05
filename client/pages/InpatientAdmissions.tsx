@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   Plus,
@@ -84,6 +85,7 @@ const InpatientAdmissions: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { can } = usePermission();
+  const queryClient = useQueryClient();
   // Nurses can discharge directly (with the clinical fields); admins only
   // confirm what the doctor saved in the consultation.
   const userRole = String(getUser()?.role ?? "").toUpperCase();
@@ -101,13 +103,11 @@ const InpatientAdmissions: React.FC = () => {
   // ---------------------------------------------------------------
   // IPD (admissions) roster -- this page is IPD-only.
   // ---------------------------------------------------------------
-  const [admissions, setAdmissions] = useState<AdmissionRecord[]>([]);
-  const [admissionsLoading, setAdmissionsLoading] = useState(true);
+  // Admissions and loading managed by React Query below
   const [ipdSearch, setIpdSearch] = useState("");
   const [ipdPage, setIpdPage] = useState(1);
   const [ipdRowsPerPage, setIpdRowsPerPage] = useState(10);
-  const [ipdTotal, setIpdTotal] = useState(0);
-  const [ipdTotalPages, setIpdTotalPages] = useState(1);
+  // ipdTotal and ipdTotalPages derived from React Query below
 
   // IPD sort state — same header-toggling mechanism as the OPD table.
   const [ipdSortField, setIpdSortField] = useState("admission_date");
@@ -124,7 +124,6 @@ const InpatientAdmissions: React.FC = () => {
 
   // IPD workflow state (transfer / discharge / details)
   const [activeAdmission, setActiveAdmission] = useState<AdmissionRecord | null>(null);
-  const [wards, setWards] = useState<WardRecord[]>([]);
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferData, setTransferData] = useState<TransferAdmissionPayload>({
     targetWardId: "",
@@ -166,16 +165,6 @@ const InpatientAdmissions: React.FC = () => {
   const [wardRosterOpen, setWardRosterOpen] = useState(false);
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [submittingPlanned, setSubmittingPlanned] = useState(false);
-
-  // Critical-patient indicators for the IPD patient column, mirroring how the
-  // OPD table marks critical patients (admissions state must exist first).
-  const admissionPatientIds = useMemo(() => {
-    return [...new Set(admissions.map((a) => a.patient_id).filter(Boolean))];
-  }, [admissions]);
-
-  const { getCriticalInfo: getAdmissionCriticalInfo } = useCriticalPatients(
-    admissionPatientIds.map((id) => ({ patientId: id })),
-  );
 
   const effectiveBranchId = useMemo(() => {
     if (!selectedBranchId || selectedBranchId === ALL_BRANCHES_VALUE || selectedBranchId === NO_BRANCH_VALUE) {
@@ -224,67 +213,94 @@ const InpatientAdmissions: React.FC = () => {
   const ipdShowActiveCount =
     !ipdDateFilter && ipdAppliedStatus.length === 0 && !ipdSearch.trim();
 
-  // Load Wards (for the transfer dialog)
-  const fetchWards = useCallback(async () => {
-    try {
-      const res = await ipdApi.getWards(effectiveBranchId);
-      if (res.data?.success && Array.isArray(res.data.data)) {
-        setWards(res.data.data);
+  // Load Wards with React Query (cached per branch for 5 min)
+  const { data: wards = [] } = useQuery<WardRecord[]>({
+    queryKey: ["ipd-wards", effectiveBranchId || "all"],
+    queryFn: async () => {
+      try {
+        const res = await ipdApi.getWards(effectiveBranchId);
+        return (res.data?.success && Array.isArray(res.data.data)) ? res.data.data : [];
+      } catch {
+        return [];
       }
-    } catch {
-      // fallback silent
-    }
-  }, [effectiveBranchId]);
+    },
+    staleTime: 5 * 60 * 1000,
+  });
 
-  // Load Admissions
-  const fetchAdmissions = useCallback(async () => {
-    setAdmissionsLoading(true);
-    try {
-      // Date mode turns the roster into a single-day admissions log, so the
-      // implicit "currently in hospital" status default is dropped there (an
-      // admission from that day may already be discharged). Explicit status
-      // picks from the filter panel still win in either mode.
-      const statusFilter = ipdAppliedStatus.length
-        ? ipdAppliedStatus
-        : ipdDateFilter
-          ? []
-          : IPD_ACTIVE_STATUSES;
+  const statusFilter = useMemo(() => {
+    return ipdAppliedStatus.length
+      ? ipdAppliedStatus
+      : ipdDateFilter
+        ? []
+        : IPD_ACTIVE_STATUSES;
+  }, [ipdAppliedStatus, ipdDateFilter]);
 
-      const res = await ipdApi.getAll({
-        branchId: effectiveBranchId,
-        status: statusFilter.length ? statusFilter.join(",") : undefined,
-        date: ipdDateFilter ? format(ipdDateFilter, "yyyy-MM-dd") : undefined,
-        search: ipdSearch.trim() || undefined,
-        assignedToMe: assignedToMe || undefined,
-        page: ipdPage,
-        limit: ipdRowsPerPage,
-        sortField: ipdSortField,
-        sortDirection: ipdSortDirection,
-      });
+  const dateFilterStr = useMemo(() => {
+    return ipdDateFilter ? format(ipdDateFilter, "yyyy-MM-dd") : "";
+  }, [ipdDateFilter]);
 
-      if (res.data?.success) {
-        setAdmissions(res.data.data.admissions || []);
-        setIpdTotal(res.data.data.total || 0);
-        setIpdTotalPages(res.data.data.totalPages || 1);
+  // Load Admissions with React Query (cached per filter combination for 5 min)
+  const {
+    data: admissionsData,
+    isLoading: admissionsLoading,
+    refetch: fetchAdmissions,
+  } = useQuery<{ admissions: AdmissionRecord[]; total: number; totalPages: number }>({
+    queryKey: [
+      "ipd-admissions",
+      effectiveBranchId || "all",
+      statusFilter.join(","),
+      dateFilterStr,
+      ipdSearch.trim(),
+      assignedToMe ? "mine" : "all",
+      ipdPage,
+      ipdRowsPerPage,
+      ipdSortField,
+      ipdSortDirection,
+    ],
+    queryFn: async () => {
+      try {
+        const res = await ipdApi.getAll({
+          branchId: effectiveBranchId,
+          status: statusFilter.length ? statusFilter.join(",") : undefined,
+          date: dateFilterStr || undefined,
+          search: ipdSearch.trim() || undefined,
+          assignedToMe: assignedToMe || undefined,
+          page: ipdPage,
+          limit: ipdRowsPerPage,
+          sortField: ipdSortField,
+          sortDirection: ipdSortDirection,
+        });
+
+        return {
+          admissions: res.data?.data?.admissions || [],
+          total: res.data?.data?.total || 0,
+          totalPages: res.data?.data?.totalPages || 1,
+        };
+      } catch (err: any) {
+        toast({
+          title: "Failed to load admissions",
+          description: err?.message || "Please check your network connection.",
+          variant: "destructive",
+        });
+        return { admissions: [], total: 0, totalPages: 1 };
       }
-    } catch (err: any) {
-      toast({
-        title: "Failed to load admissions",
-        description: err?.message || "Please check your network connection.",
-        variant: "destructive",
-      });
-    } finally {
-      setAdmissionsLoading(false);
-    }
-  }, [effectiveBranchId, ipdAppliedStatus, ipdDateFilter, ipdSearch, assignedToMe, ipdPage, ipdRowsPerPage, ipdSortField, ipdSortDirection, toast]);
+    },
+    staleTime: 5 * 60 * 1000,
+  });
 
-  useEffect(() => {
-    fetchWards();
-  }, [fetchWards]);
+  const admissions = admissionsData?.admissions ?? [];
+  const ipdTotal = admissionsData?.total ?? 0;
+  const ipdTotalPages = admissionsData?.totalPages ?? 1;
 
-  useEffect(() => {
-    fetchAdmissions();
-  }, [fetchAdmissions]);
+  // Critical-patient indicators for the IPD patient column, mirroring how the
+  // OPD table marks critical patients (admissions state must exist first).
+  const admissionPatientIds = useMemo(() => {
+    return [...new Set(admissions.map((a) => a.patient_id).filter(Boolean))];
+  }, [admissions]);
+
+  const { getCriticalInfo: getAdmissionCriticalInfo } = useCriticalPatients(
+    admissionPatientIds.map((id) => ({ patientId: id })),
+  );
 
   // Same asc/desc toggle as the OPD table, routed through the backend sort.
   const handleIpdSort = (field: string) => {
@@ -354,6 +370,7 @@ const InpatientAdmissions: React.FC = () => {
           description: `Patient successfully transferred to new bed.`,
         });
         setTransferOpen(false);
+        queryClient.invalidateQueries({ queryKey: ["ipd-admissions"] });
         fetchAdmissions();
       }
     } catch (err: any) {
@@ -443,6 +460,7 @@ const InpatientAdmissions: React.FC = () => {
           description: `Admission ${activeAdmission.ip_number} has been discharged and bed released.`,
         });
         setDischargeOpen(false);
+        queryClient.invalidateQueries({ queryKey: ["ipd-admissions"] });
         fetchAdmissions();
       }
     } catch (err: any) {
@@ -487,6 +505,7 @@ const InpatientAdmissions: React.FC = () => {
         description: `Bed ${updated.bed_master?.bed_number || "—"} is held for ${updated.ip_number} until the end of the planned day.`,
       });
     }
+    queryClient.invalidateQueries({ queryKey: ["ipd-admissions"] });
     fetchAdmissions();
   };
 
@@ -519,6 +538,7 @@ const InpatientAdmissions: React.FC = () => {
       }
       setPlannedAction(null);
       setPlannedReason("");
+      queryClient.invalidateQueries({ queryKey: ["ipd-admissions"] });
       fetchAdmissions();
     } catch (err: any) {
       toast({
@@ -808,7 +828,10 @@ const InpatientAdmissions: React.FC = () => {
           }
           patientId={row.patient_id}
           encounterNo={row.encounter_no}
-          onVitalsSaved={fetchAdmissions}
+          onVitalsSaved={() => {
+          queryClient.invalidateQueries({ queryKey: ["ipd-admissions"] });
+          fetchAdmissions();
+        }}
         />
       ),
     },
@@ -1427,6 +1450,7 @@ const InpatientAdmissions: React.FC = () => {
             title: "Doctor assigned",
             description: `${updated.ip_number} is now under Dr. ${[updated.employees?.first_name, updated.employees?.last_name].filter(Boolean).join(" ")}.`,
           });
+          queryClient.invalidateQueries({ queryKey: ["ipd-admissions"] });
           fetchAdmissions();
         }}
       />
@@ -1442,6 +1466,7 @@ const InpatientAdmissions: React.FC = () => {
         admission={careTeamFor}
         onDone={() => {
           toast({ title: "Care team updated", description: `${careTeamFor?.ip_number ?? "Admission"} care team saved.` });
+          queryClient.invalidateQueries({ queryKey: ["ipd-admissions"] });
           fetchAdmissions();
         }}
       />
@@ -1450,7 +1475,10 @@ const InpatientAdmissions: React.FC = () => {
         open={wardRosterOpen}
         onOpenChange={setWardRosterOpen}
         branchId={effectiveBranchId}
-        onDone={fetchAdmissions}
+        onDone={() => {
+          queryClient.invalidateQueries({ queryKey: ["ipd-admissions"] });
+          fetchAdmissions();
+        }}
       />
 
       {/* ======================================================== */}

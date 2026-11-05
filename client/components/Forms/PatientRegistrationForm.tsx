@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useMemo, ChangeEvent, FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, Check, ChevronDown, Loader2, Mail, MessageCircle, Plus, Send, UserRound, X } from "lucide-react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
@@ -13,6 +14,7 @@ import { PhoneInput } from "@/components/ui/phone-input";
 import { State as CSState, City } from "country-state-city";
 import type { IState } from "country-state-city";
 import { branchApi, Branch } from "@/api/branch.api";
+import { useBranches } from "@/hooks/useMasterData";
 import { patientApi } from "@/api/patient.api";
 import { referralApi } from "@/api/referral.api";
 import type { ReferralRecordDetails } from "@/api/referral.api";
@@ -535,13 +537,14 @@ export default function PatientRegistrationForm({
   patientId?: string;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { toast } = useToast();
 
   const [formData, setFormData] = useState<FormData>(emptyFormData);
   const [sameAsCurrent, setSameAsCurrent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(editMode);
-  const [branches, setBranches] = useState<Branch[]>([]);
+  const { branches } = useBranches();
   const [insuranceFiles, setInsuranceFiles] = useState<File[]>([]);
   const [indianStates, setIndianStates] = useState<IState[]>([]);
   const [districtOptions, setDistrictOptions] = useState<string[]>([]);
@@ -685,16 +688,7 @@ export default function PatientRegistrationForm({
     setInsuranceFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // Fetch the real branch list on mount for the Branch dropdown.
-  useEffect(() => {
-    branchApi
-      .getAll()
-      .then((res) => {
-        if (res.data?.data) setBranches(res.data.data);
-        else if (Array.isArray(res.data)) setBranches(res.data as unknown as Branch[]);
-      })
-      .catch(() => {});
-  }, []);
+
 
 
   useEffect(() => {
@@ -1255,6 +1249,7 @@ export default function PatientRegistrationForm({
           setReferralTypes((prev) => Array.from(new Set([...prev, customType])));
         }
 
+        queryClient.invalidateQueries({ queryKey: ["patients"] });
         toast({
           title: "Patient updated",
           description: `${formData.patient_first_name} ${formData.patient_last_name} was updated successfully.`,
@@ -1368,6 +1363,7 @@ export default function PatientRegistrationForm({
         setReferralTypes((prev) => Array.from(new Set([...prev, customType])));
       }
 
+      queryClient.invalidateQueries({ queryKey: ["patients"] });
       toast({
         title: "Patient added",
         description: `${formData.patient_first_name} ${formData.patient_last_name} was added successfully.`,
