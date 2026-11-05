@@ -15,10 +15,7 @@ export interface ResolvedMedicationLine {
   medicine_id?: string | null;
   drug_name?: string | null;
   brand_name?: string | null;
-<<<<<<< HEAD
   dosage_form?: string | null;
-=======
->>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
   patient_dose?: string | null;
   dose?: string | null;
   dose_unit?: string | null;
@@ -55,10 +52,7 @@ export interface PharmacySlipItem {
   medicine_id: string | null;
   drug_name: string | null;
   brand_name: string | null;
-<<<<<<< HEAD
   dosage_form?: string | null;
-=======
->>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
   patient_dose?: string | null;
   dose: string | null;
   dose_unit: string | null;
@@ -71,10 +65,7 @@ export interface PharmacySlipItem {
   pharmacy_item_id?: string | null;
 }
 
-<<<<<<< HEAD
 /* One row of GET /pharmacy/master-items: a brand's pack with its strength. */
-=======
->>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
 export interface PharmacyMasterItem {
   pharmacy_item_id: string;
   medicine_id: string | null;
@@ -87,7 +78,6 @@ export interface PharmacyMasterItem {
   strength_text: string | null;
   strength_value: string | number | null;
   strength_unit: string | null;
-<<<<<<< HEAD
 }
 
 /* One line the Discharge Medication popup saves for its cycle day. */
@@ -115,8 +105,6 @@ export interface SaveSlipFromOrderPayload {
   encounter_no?: string | null;
   appointment_id?: string | null;
   items: PharmacySlipOrderItemPayload[];
-=======
->>>>>>> a0b6c255a658ee3f17cf7d4e8e6b5d9bc84f2447
 }
 
 export interface PharmacySlipRecord {
