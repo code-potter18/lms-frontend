@@ -22,7 +22,7 @@
     "pdfjs-dist": "^6.3.289",
     "react-international-phone": "^4.8.0",
     "react-phone-number-input": "^3.4.17",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@hookform/resolvers": "^5.2.1",
