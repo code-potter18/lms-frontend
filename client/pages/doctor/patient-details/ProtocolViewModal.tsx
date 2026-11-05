@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { chemotherapyApi, type RegimenProtocol, type RegimenProtocolItem } from "@/api/chemotherapy.api";
 import { DetailTable, InfoGrid, ModalButton, ModalLoadState, ModalSection, ModalShell } from "./ModalShell";
 import { doseText } from "./adminFormat";
@@ -11,7 +11,7 @@ const ROLE_SECTIONS: { role: string; title: string; icon: string }[] = [
 ];
 
 const itemName = (item: RegimenProtocolItem) =>
-  item.medicine_master?.medicine_name || item.drug_brand_name || "—";
+  item.generic_name || item.medicine_master?.generic_name || item.medicine_master?.medicine_name || item.drug_brand_name || "—";
 
 const infusion = (item: RegimenProtocolItem) =>
   [item.infusion_type, item.infusion_duration_minutes ? `${item.infusion_duration_minutes} min` : ""]
@@ -24,7 +24,7 @@ const dayOf = (item: RegimenProtocolItem) => {
 };
 
 /* "View Protocol" of the Administration tab: the regimen protocol the
-   plan was built from, read-only. */
+   plan was built from, read-only. Cached with React Query. */
 export default function ProtocolViewModal({
   protocolId,
   cycleIntervalDays,
@@ -35,31 +35,26 @@ export default function ProtocolViewModal({
   cycleIntervalDays?: number | null;
   onClose: () => void;
 }) {
-  const [protocol, setProtocol] = useState<RegimenProtocol | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const {
+    data: protocol = null,
+    isLoading: loading,
+    error: queryError,
+    refetch,
+  } = useQuery<RegimenProtocol | null>({
+    queryKey: ["chemo-protocol", protocolId],
+    queryFn: async () => {
+      const response = await chemotherapyApi.getRegimenProtocol(protocolId);
+      return response.data.data;
+    },
+    enabled: Boolean(protocolId),
+    staleTime: 15 * 60 * 1000, // 15 minutes cache
+  });
 
-  const load = useCallback(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError("");
-    chemotherapyApi
-      .getRegimenProtocol(protocolId)
-      .then(response => { if (!cancelled) setProtocol(response.data.data); })
-      .catch((err: any) => {
-        if (!cancelled) {
-          setError(
-            err?.response?.status === 403
-              ? "You don't have access to protocol details."
-              : err?.response?.data?.message || "Failed to load the protocol."
-          );
-        }
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [protocolId]);
-
-  useEffect(() => load(), [load]);
+  const error = queryError
+    ? (queryError as any)?.response?.status === 403
+      ? "You don't have access to protocol details."
+      : (queryError as any)?.response?.data?.message || "Failed to load the protocol."
+    : "";
 
   const items = protocol?.chemotherapy_regimen_protocol_items ?? [];
   const cancers = (protocol?.chemotherapy_protocol_cancers ?? [])
@@ -84,7 +79,7 @@ export default function ProtocolViewModal({
       }
     >
       {!protocol ? (
-        <ModalLoadState loading={loading} error={error} onRetry={load} />
+        <ModalLoadState loading={loading} error={error} onRetry={() => refetch()} />
       ) : (
         <div className="space-y-5">
           <InfoGrid

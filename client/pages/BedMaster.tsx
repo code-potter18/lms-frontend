@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Plus, Bed as BedIcon, Search, Lock, LockOpen, Loader2, Pencil, Trash2, Sparkles } from "lucide-react";
 import { ipdApi, type BedRecord, type WardRecord } from "@/api/ipd.api";
 import { branchApi, type Branch } from "@/api/branch.api";
+import { useBranches } from "@/hooks/useMasterData";
 import { useBranchFilter } from "@/context/BranchFilterContext";
 import { usePermission } from "@/context/PermissionContext";
 import { useToast } from "@/hooks/use-toast";
@@ -55,7 +56,7 @@ export default function BedMaster() {
   const [addBedOpen, setAddBedOpen] = useState(false);
   const [editWard, setEditWard] = useState<WardRecord | null>(null);
   const [editBed, setEditBed] = useState<BedRecord | null>(null);
-  const [branchList, setBranchList] = useState<Branch[]>([]);
+  const { branches: branchList } = useBranches();
 
   // "Beds" (per-bed table) | "Wards" (per-ward occupancy overview) |
   // "Board" (live colour-coded bed board).
@@ -128,15 +129,6 @@ useEffect(fetchWards, [branchId]);
     return () => clearInterval(id);
   }, [activeTab, branchId]);
 
-  useEffect(() => {
-    branchApi
-      .getAll()
-      .then((res) => {
-        if (res.data?.data) setBranchList(res.data.data);
-        else if (Array.isArray(res.data)) setBranchList(res.data);
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     setCurrentPage(1);

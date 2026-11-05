@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   Plus,
@@ -168,54 +169,55 @@ const AppointmentPage: React.FC = () => {
   const { selectedBranchId, isAllBranches } = useBranchFilter();
 
   
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [isAppointmentsLoading, setIsAppointmentsLoading] = useState(true);
+  const queryClient = useQueryClient();
+
+  // Date selection
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const dateStr = format(selectedDate, "yyyy-MM-dd");
+  const branchKey = isAllBranches ? "all" : (selectedBranchId || "all");
+
+  const {
+    data: appointments = [],
+    isLoading: isAppointmentsLoading,
+    refetch: fetchAppointments,
+  } = useQuery<Appointment[]>({
+    queryKey: ["appointments", branchKey, dateStr],
+    queryFn: async () => {
+      try {
+        const res = await appointmentApi.getAll({
+          branchId: isAllBranches ? undefined : selectedBranchId,
+          date: dateStr,
+          limit: 100,
+        });
+        const records = res.data?.data?.appointments || [];
+        if (records.length === 0) {
+          toast({
+            title: "No appointment records found",
+            description: "The appointments API returned no records.",
+          });
+        }
+        return records.map(mapAppointmentRecord);
+      } catch (err: any) {
+        console.error("[Appointments Page] Error:", err);
+        toast({
+          title: "Failed to load appointments",
+          description: err.response?.data?.message || "Couldn't reach the appointments API.",
+          variant: "destructive",
+        });
+        return [];
+      }
+    },
+    staleTime: 5 * 60 * 1000,
+  });
 
   const appointmentPatientIds = useMemo(() => {
     return [...new Set(appointments.map((a) => a.patientId).filter(Boolean))];
   }, [appointments]);
 
-
-
   const { getCriticalInfo } = useCriticalPatients(
     appointmentPatientIds.map((id) => ({ patientId: id }))
   );
-
-  // Date selection
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-
-  const fetchAppointments = useCallback(async () => {
-    setIsAppointmentsLoading(true);
-    try {
-      const res = await appointmentApi.getAll({
-        branchId: isAllBranches ? undefined : selectedBranchId,
-        date: format(selectedDate, "yyyy-MM-dd"),
-        limit: 100,
-      });
-      const records = res.data?.data?.appointments || [];
-      setAppointments(records.map(mapAppointmentRecord));
-      if (records.length === 0) {
-        toast({
-          title: "No appointment records found",
-          description: "The appointments API returned no records.",
-        });
-      }
-    } catch (err: any) {
-      console.error("[Appointments Page] Error:", err);
-      toast({
-        title: "Failed to load appointments",
-        description: err.response?.data?.message || "Couldn't reach the appointments API.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsAppointmentsLoading(false);
-    }
-  }, [toast, selectedBranchId, isAllBranches, selectedDate]);
-
-  useEffect(() => {
-    fetchAppointments();
-  }, [fetchAppointments]);
 
   const [cancelTarget, setCancelTarget] = useState<Appointment | null>(null);
   const [cancelReason, setCancelReason] = useState("");
@@ -241,16 +243,7 @@ const AppointmentPage: React.FC = () => {
         cancelReason.trim(),
         getUser()?.employee_id ?? "",
       );
-      const cancelled = res.data?.data;
-      setAppointments((prev) =>
-        prev.map((appt) =>
-          appt.id === cancelTarget.id
-            ? cancelled && cancelled.patient_bio_data
-              ? mapAppointmentRecord(cancelled, 0)
-              : { ...appt, status: "Cancelled" }
-            : appt,
-        ),
-      );
+      queryClient.invalidateQueries({ queryKey: ["appointments"] });
       fetchAppointments();
       toast({
         title: "Appointment cancelled",
@@ -274,6 +267,7 @@ const AppointmentPage: React.FC = () => {
     try {
       await appointmentApi.updateStatus(appointment.id, "CHECKED_IN");
       await encounterApi.create({ appointment_id: appointment.id });
+      queryClient.invalidateQueries({ queryKey: ["appointments"] });
       await fetchAppointments();
       toast({
         title: "Patient checked in",
@@ -296,6 +290,7 @@ const AppointmentPage: React.FC = () => {
       if (encounter) {
         await encounterApi.close(encounter.encounter_no, "DOCTOR");
       }
+      queryClient.invalidateQueries({ queryKey: ["appointments"] });
       await fetchAppointments();
       toast({
         title: "Patient checked out",

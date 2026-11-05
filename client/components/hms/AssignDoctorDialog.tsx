@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Stethoscope } from "lucide-react";
 import { ipdApi, type AdmissionRecord } from "@/api/ipd.api";
-import { departmentApi, type Department } from "@/api/department.api";
-import { employeeApi, type EmployeeRecord } from "@/api/employee.api";
+import { type EmployeeRecord } from "@/api/employee.api";
+import { useDepartments, useDoctors } from "@/hooks/useMasterData";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
@@ -30,35 +30,28 @@ interface AssignDoctorDialogProps {
 
 /**
  * Assigns (or changes) the doctor and department of an admitted patient --
- * mainly for emergencies admitted before a doctor was known. The server moves
- * the patient's open IPD encounter to the new doctor too.
+ * mainly for emergencies admitted before a doctor was known. Cached with React Query.
  */
 export function AssignDoctorDialog({ open, onOpenChange, admission, onDone }: AssignDoctorDialogProps) {
   const { toast } = useToast();
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [doctors, setDoctors] = useState<EmployeeRecord[]>([]);
   const [departmentId, setDepartmentId] = useState("");
   const [doctorId, setDoctorId] = useState("");
-  const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Cached master data hooks
+  const { departments, loadingDepartments } = useDepartments();
+  const { doctors: allBranchDoctors, loadingDoctors } = useDoctors(admission?.branch_id, open && Boolean(admission));
+
+  const doctors = useMemo(
+    () => allBranchDoctors.filter((e) => e.user_table?.role_type === "DOCTOR" && e.emp_status !== false),
+    [allBranchDoctors]
+  );
+  const loading = loadingDepartments || loadingDoctors;
 
   useEffect(() => {
     if (!open || !admission) return;
     setDepartmentId(admission.department_id || "");
     setDoctorId(admission.employee_id || "");
-    setLoading(true);
-    Promise.all([
-      departmentApi.getAll().then((res) => res.data?.data || []).catch(() => [] as Department[]),
-      employeeApi
-        .getAll({ branchId: admission.branch_id, limit: 1000 })
-        .then((res) => res.data?.data?.employees || [])
-        .catch(() => [] as EmployeeRecord[]),
-    ])
-      .then(([depts, employees]) => {
-        setDepartments(depts);
-        setDoctors(employees.filter((e) => e.user_table?.role_type === "DOCTOR" && e.emp_status !== false));
-      })
-      .finally(() => setLoading(false));
   }, [open, admission]);
 
   // Departments that actually have a doctor at this branch.

@@ -125,7 +125,7 @@ function getAvailablePatientTypes(context?: {
 }
 
 const VISIT_TYPES_BY_PATIENT_TYPE: Record<string, string[]> = {
-  "Outpatient (OPD)": ["New consultation", "Follow-up", "Lab Visit", "Chemotherapy Visit", "New Complaints", "Others"],
+  "Outpatient (OPD)": ["First Consultation ", "Follow-up", "Lab Visit", "Chemotherapy Visit", "New Complaints","Survivor Visit","Others"],
   "Inpatient (IPD)": ["Emergency Visit", "Admission", "Daycare", "Others"],
 };
 
@@ -2757,21 +2757,23 @@ onClick={() => setAddWardOpen(true)}
                   Email confirmation will be sent to the patient's registered email address upon booking.
                 </div>
               </div>
-{/* Patient Comment / Reason for Visit */}
-<div className="lg:col-span-3">
-  <label className={labelClass}>Reason for Visit</label>
+{/* Patient Comment / Reason for Visit -- hidden for Inpatient (IPD) bookings */}
+{!isIpdBooking && (
+  <div className="lg:col-span-3">
+    <label className={labelClass}>Reason for Visit</label>
 
-  <VoiceToText
-    value={formData.patientComment}
-    onChange={(text) =>
-      setFormData((prev) => ({
-        ...prev,
-        patientComment: text,
-      }))
-    }
-    placeholder="Describe the reason for the visit (optional)"
-  />
-</div>
+    <VoiceToText
+      value={formData.patientComment}
+      onChange={(text) =>
+        setFormData((prev) => ({
+          ...prev,
+          patientComment: text,
+        }))
+      }
+      placeholder="Describe the reason for the visit (optional)"
+    />
+  </div>
+)}
                        {/* Actions Footer -- spans the full grid so the buttons sit at the right edge */}
             <div className="lg:col-span-3 flex flex-col-reverse sm:flex-row items-center justify-end gap-4 mt-10 pt-6 border-t border-gray-100">
               <button

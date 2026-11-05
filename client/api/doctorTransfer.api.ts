@@ -172,7 +172,7 @@ export const doctorTransferApi = {
       { params: { effective_date: effectiveDate } }
     ),
 
-  getRescheduleQueue: (params?: { branchId?: string; patientId?: string; status?: string; page?: number; limit?: number }) =>
+  getRescheduleQueue: (params?: { branchId?: string; patientId?: string; status?: string; priority?: string; page?: number; limit?: number }) =>
     API.get<RescheduleQueueResult>("/appointments/reschedule-queue", { params }),
 
   processRescheduleAction: (appointmentId: string, data: ProcessRescheduleActionPayload) =>
