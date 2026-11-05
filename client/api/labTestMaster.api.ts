@@ -1,4 +1,6 @@
 import API from "./axios";
+import { LabTestParameterRecord } from "./labOrder.api";
+export type { LabTestParameterRecord };
 
 export interface LabTestCategoryRecord {
   id: string;
@@ -28,6 +30,7 @@ export interface LabTestMasterRecord {
   created_at: string;
   updated_at: string;
   lab_test_category?: LabTestCategoryRecord | null;
+  lab_test_parameter?: LabTestParameterRecord[];
 }
 
 export const labTestMasterApi = {
@@ -39,5 +42,27 @@ export const labTestMasterApi = {
   getById: (labTestId: string) =>
     API.get<{ success: boolean; data: LabTestMasterRecord }>(
       `/lab-test-master/${labTestId}`,
+    ),
+
+  getParameters: () =>
+    API.get<{ success: boolean; data: LabTestParameterRecord[] }>(
+      "/lab-test-master/parameters",
+    ),
+
+  create: (data: any) =>
+    API.post<{ success: boolean; data: LabTestMasterRecord }>(
+      "/lab-test-master",
+      data,
+    ),
+
+  update: (id: string, data: any) =>
+    API.put<{ success: boolean; data: LabTestMasterRecord }>(
+      `/lab-test-master/${id}`,
+      data,
+    ),
+
+  delete: (id: string) =>
+    API.delete<{ success: boolean; data: any }>(
+      `/lab-test-master/${id}`,
     ),
 };

@@ -1,10 +1,25 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+} from "lucide-react";
 import { getUser, remove } from "@/utils/token";
 import { toast } from "@/hooks/use-toast";
 import LabNav from "./labnav";
 import { LabNotificationBell } from "@/components/hms/LabNotificationBell";
+import { UserProfileDropdown } from "@/components/ui/User_profile_dropdown";
 import { getDisplayBarcode } from "./reportgeneration";
+import {
+  downloadLabReportPdf,
+  resolveStandardParameterUnit,
+  resolveStandardParameterRefRange,
+  formatGenderReferenceRange,
+} from "@/utils/labReportPdf";
 import { labReportApi, LabReportRecord } from "@/api/labReport.api";
 import { labOrderApi, labOrderItemApi, LabOrderRecord, LabOrderItemRecord } from "@/api/labOrder.api";
 import { patientApi, PatientRecord } from "@/api/patient.api";
@@ -42,67 +57,139 @@ export interface TransferItem {
   clinicalRemarks?: string;
   clinicalCorrelation?: string;
   parameters?: DiagnosticParameter[];
+  targetDate?: string;
+  targetDateIso?: string;
+  transferTimestamp?: number;
 }
 
 const DEFAULT_CBC_PARAMETERS: DiagnosticParameter[] = [
   {
-    parameter: "WBC (White Blood Cells)",
-    result: "6.80",
-    unit: "10^3/µL",
-    referenceRange: "4.0 - 10.0",
-    status: "NORMAL",
-  },
-  {
-    parameter: "RBC (Red Blood Cells)",
-    result: "4.82",
-    unit: "10^6/µL",
-    referenceRange: "4.2 - 5.8",
-    status: "NORMAL",
-  },
-  {
-    parameter: "HGB (Hemoglobin)",
+    parameter: "Hemoglobin",
     result: "14.2",
     unit: "g/dL",
-    referenceRange: "13.0 - 17.0",
+    referenceRange: "13-17 g/dL",
     status: "NORMAL",
   },
   {
-    parameter: "HCT (Hematocrit)",
+    parameter: "Total WBC count (TC)",
+    result: "6800",
+    unit: "cells/µL",
+    referenceRange: "4000 - 11000",
+    status: "NORMAL",
+  },
+  {
+    parameter: "RBC count",
+    result: "4.82",
+    unit: "million/µL",
+    referenceRange: "4.5-5.5 million/µL",
+    status: "NORMAL",
+  },
+  {
+    parameter: "PCV / HCT",
     result: "43.1",
     unit: "%",
-    referenceRange: "40 - 50",
+    referenceRange: "40-50 %",
     status: "NORMAL",
   },
   {
-    parameter: "MCV (Mean Corpuscular Vol)",
+    parameter: "MCV",
     result: "87.6",
     unit: "fL",
-    referenceRange: "80 - 100",
+    referenceRange: "83 - 101",
     status: "NORMAL",
   },
   {
-    parameter: "MCH (Mean Corpuscular Hb)",
+    parameter: "MCH",
     result: "29.1",
     unit: "pg",
-    referenceRange: "27 - 34",
+    referenceRange: "27 - 32",
     status: "NORMAL",
   },
   {
-    parameter: "MCHC (MCH Concentration)",
+    parameter: "MCHC",
     result: "33.0",
     unit: "g/dL",
-    referenceRange: "32 - 36",
+    referenceRange: "31.5 - 34.5",
     status: "NORMAL",
   },
   {
-    parameter: "PLT (Platelet Count)",
-    result: "235",
-    unit: "10^3/µL",
-    referenceRange: "150 - 450",
+    parameter: "RDW-CV",
+    result: "12.8",
+    unit: "%",
+    referenceRange: "11.6 - 14",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Platelet count",
+    result: "235000",
+    unit: "cells/µL",
+    referenceRange: "150000 - 410000",
+    status: "NORMAL",
+  },
+  {
+    parameter: "MPV",
+    result: "9.2",
+    unit: "fL",
+    referenceRange: "7.5 - 11.5",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Neutrophils",
+    result: "58",
+    unit: "%",
+    referenceRange: "40 - 80",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Lymphocytes",
+    result: "32",
+    unit: "%",
+    referenceRange: "20 - 40",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Eosinophils",
+    result: "3",
+    unit: "%",
+    referenceRange: "1 - 6",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Monocytes",
+    result: "6",
+    unit: "%",
+    referenceRange: "2 - 10",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Basophils",
+    result: "1",
+    unit: "%",
+    referenceRange: "0 - 2",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Absolute Neutrophil Count (ANC)",
+    result: "3944",
+    unit: "cells/µL",
+    referenceRange: "2000 - 7000",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Absolute Lymphocyte Count",
+    result: "2176",
+    unit: "cells/µL",
+    referenceRange: "1000 - 3000",
+    status: "NORMAL",
+  },
+  {
+    parameter: "Absolute Eosinophil Count",
+    result: "204",
+    unit: "cells/µL",
+    referenceRange: "20 - 500",
     status: "NORMAL",
   },
 ];
-
 
 function calculateAge(dob: string): number {
   const birth = new Date(dob);
@@ -113,11 +200,111 @@ function calculateAge(dob: string): number {
   return Math.max(0, age);
 }
 
+function normalizeToIsoDate(dateVal?: string | Date | null): string | null {
+  if (!dateVal) return null;
+  if (typeof dateVal === "string") {
+    const trimmed = dateVal.trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+      return trimmed.slice(0, 10);
+    }
+    const dmyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+    if (dmyMatch) {
+      const day = dmyMatch[1].padStart(2, "0");
+      const month = dmyMatch[2].padStart(2, "0");
+      const year = dmyMatch[3];
+      return `${year}-${month}-${day}`;
+    }
+  }
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+function formatTargetDate(dateVal?: string | Date | null): string {
+  if (!dateVal) return "";
+  const iso = normalizeToIsoDate(dateVal);
+  if (iso) {
+    const [y, m, d] = iso.split("-");
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthName = months[parseInt(m, 10) - 1] || m;
+    return `${d} ${monthName} ${y}`;
+  }
+  return String(dateVal);
+}
+
+function isTransferOverdue(item?: TransferItem | null): boolean {
+  if (!item) return false;
+  if (item.status === "DELIVERED") return false;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const targetIso = item.targetDateIso || normalizeToIsoDate(item.targetDate);
+  if (!targetIso) return false;
+  return targetIso < todayIso;
+}
+
 function formatReportDate(dateVal?: string | Date | null): string {
   if (!dateVal) return new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
   const d = new Date(dateVal);
   if (isNaN(d.getTime())) return String(dateVal);
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function getStatusRank(status: string): number {
+  switch (status) {
+    case "QUEUED":
+      return 1;
+    case "FAILED":
+      return 2;
+    case "SENT":
+      return 3;
+    case "DELIVERED":
+      return 4;
+    default:
+      return 2;
+  }
+}
+
+function getTransferTimestamp(t?: TransferItem | null): number {
+  if (!t) return 0;
+  if (t.transferTimestamp && typeof t.transferTimestamp === "number") {
+    return t.transferTimestamp;
+  }
+  if (t.reportedOn) {
+    const d = new Date(t.reportedOn).getTime();
+    if (!isNaN(d)) return d;
+  }
+  if (t.collectedOn) {
+    const d = new Date(t.collectedOn).getTime();
+    if (!isNaN(d)) return d;
+  }
+  if (
+    t.dispatchedAt &&
+    t.dispatchedAt !== "Queued" &&
+    t.dispatchedAt !== "Dispatched" &&
+    t.dispatchedAt !== "Just now"
+  ) {
+    const d = new Date(t.dispatchedAt).getTime();
+    if (!isNaN(d)) return d;
+  }
+  return 0;
+}
+
+export function compareTransferItems(a: TransferItem, b: TransferItem): number {
+  // 1. Status: QUEUED at the top (rank 1), DELIVERED at the bottom (rank 4)
+  const rankA = getStatusRank(a.status);
+  const rankB = getStatusRank(b.status);
+  if (rankA !== rankB) {
+    return rankA - rankB;
+  }
+
+  // 2. Most recent date and time at the top
+  const timeA = getTransferTimestamp(a);
+  const timeB = getTransferTimestamp(b);
+  if (timeA !== timeB) {
+    return timeB - timeA;
+  }
+
+  // 3. Fallback: by ID descending
+  return (b.id || b.reportId || "").localeCompare(a.id || a.reportId || "");
 }
 
 export default function ReportTransfer() {
@@ -238,6 +425,10 @@ export default function ReportTransfer() {
           ? new Date(rep.delivered_datetime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
           : "11:35 AM";
 
+        const rawTargetDate = (orderItem as any)?.target_date || (order as any)?.target_date || (rep as any)?.target_date;
+        const targetDateIso = normalizeToIsoDate(rawTargetDate) || undefined;
+        const targetDate = formatTargetDate(rawTargetDate);
+
         mappedTransfers.push({
           id: rep.lab_report_id,
           dispatchId,
@@ -249,8 +440,9 @@ export default function ReportTransfer() {
           patientName,
           patientAgeGender,
           patientAvatar:
+            patient?.patient_photo_url ||
             (patient as any)?.avatar ||
-            "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=256&h=256",
+            undefined,
           patientEmail: patient?.patient_email || `${patientName.toLowerCase().replace(/\s+/g, ".")}@email.com`,
           doctorName,
           doctorEmail,
@@ -265,6 +457,12 @@ export default function ReportTransfer() {
           clinicalRemarks: parsedMeta?.text || commentString || "All parameters evaluated. Laboratory diagnostics complete.",
           clinicalCorrelation: parsedMeta?.clinicalCorrelation || "Correlate clinically with physical findings and history.",
           parameters: parsedMeta?.parameters && parsedMeta.parameters.length > 0 ? parsedMeta.parameters : DEFAULT_CBC_PARAMETERS,
+          targetDate,
+          targetDateIso,
+          transferTimestamp: (() => {
+            const tStr = rep.generated_datetime || rep.created_at || (orderItem as any)?.created_at || order?.order_datetime;
+            return tStr ? new Date(tStr).getTime() : Date.now();
+          })(),
         });
       });
 
@@ -312,6 +510,10 @@ export default function ReportTransfer() {
           localStorage.getItem(`report_transferred_${item.lab_order_id}`) === "true"
         );
 
+        const rawTargetDate = (item as any)?.target_date || (parentOrder as any)?.target_date;
+        const targetDateIso = normalizeToIsoDate(rawTargetDate) || undefined;
+        const targetDate = formatTargetDate(rawTargetDate);
+
         mappedTransfers.push({
           id: `item-${item.lab_order_item_id}`,
           dispatchId: `DSP-${9100 + idx + 1}`,
@@ -323,8 +525,9 @@ export default function ReportTransfer() {
           patientName,
           patientAgeGender,
           patientAvatar:
+            patient?.patient_photo_url ||
             (patient as any)?.avatar ||
-            "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=256&h=256",
+            undefined,
           patientEmail: patient?.patient_email || `${patientName.toLowerCase().replace(/\s+/g, ".")}@email.com`,
           doctorName,
           doctorEmail,
@@ -339,10 +542,14 @@ export default function ReportTransfer() {
           clinicalRemarks: "Diagnostic results certified by Pathologist and ready for delivery.",
           clinicalCorrelation: "Correlate with attending physician assessment.",
           parameters: DEFAULT_CBC_PARAMETERS,
+          targetDate,
+          targetDateIso,
+          transferTimestamp: (() => {
+            const tStr = (item as any)?.updated_at || (item as any)?.created_at || parentOrder?.order_datetime;
+            return tStr ? new Date(tStr).getTime() : Date.now();
+          })(),
         });
       });
-
-      
 
       // Check any other sample completed & approved in Report Generation from registry
       if (typeof window !== "undefined") {
@@ -365,6 +572,10 @@ export default function ReportTransfer() {
             localStorage.getItem(`report_transferred_${cs.id}`) === "true" ||
             localStorage.getItem(`report_transferred_${reportId}`) === "true";
 
+          const rawTargetDate = cs.targetDate || cs.targetDateIso || cs.target_date;
+          const targetDateIso = normalizeToIsoDate(rawTargetDate) || undefined;
+          const targetDate = formatTargetDate(rawTargetDate);
+
           mappedTransfers.push({
             id: `tx-${cs.id}`,
             dispatchId: `DSP-${9300 + i}`,
@@ -375,7 +586,7 @@ export default function ReportTransfer() {
             patientPid: cs.patientId || "P000124",
             patientName: cs.patientName || "Patient",
             patientAgeGender: "32 Years / Male",
-            patientAvatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=256&h=256",
+            patientAvatar: undefined,
             patientEmail: "patient@email.com",
             doctorName: "Dr. Sarah Johnson",
             doctorEmail: "doctor@hospital.com",
@@ -396,6 +607,8 @@ export default function ReportTransfer() {
               referenceRange: p.referenceRange || "Normal",
               status: ((p.status || "NORMAL").toUpperCase() === "COMPLETED" ? "NORMAL" : (p.status || "NORMAL").toUpperCase()) as any,
             })) : DEFAULT_CBC_PARAMETERS,
+            targetDate,
+            targetDateIso,
           });
         });
       }
@@ -423,6 +636,7 @@ export default function ReportTransfer() {
       });
 
       if (generatedOnlyTransfers.length > 0) {
+        generatedOnlyTransfers.sort(compareTransferItems);
         setTransfers(generatedOnlyTransfers);
         setSelectedTransfer((prev) => {
           if (!prev) return generatedOnlyTransfers[0];
@@ -652,7 +866,7 @@ export default function ReportTransfer() {
         statusFilter === "ALL" || t.status === statusFilter;
 
       return matchesSearch && matchesStatus;
-    });
+    }).sort(compareTransferItems);
   }, [transfers, searchQuery, statusFilter]);
 
   const deliveredCount = useMemo(
@@ -678,6 +892,86 @@ export default function ReportTransfer() {
   const pendingTransferCount = useMemo(
     () => transfers.filter((t) => t.status !== "DELIVERED" && t.status !== "SENT").length,
     [transfers],
+  );
+
+  /* ---------- Admin Dashboard Horizontal KPI Track Scroll State ---------- */
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollButtons = useCallback(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }, []);
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    updateScrollButtons();
+    el.addEventListener("scroll", updateScrollButtons, { passive: true });
+    window.addEventListener("resize", updateScrollButtons);
+    return () => {
+      el.removeEventListener("scroll", updateScrollButtons);
+      window.removeEventListener("resize", updateScrollButtons);
+    };
+  }, [updateScrollButtons]);
+
+  const handleKpiScroll = (direction: "left" | "right") => {
+    const el = trackRef.current;
+    if (!el) return;
+    const scrollAmount = 450;
+    el.scrollBy({
+      left: direction === "left" ? -scrollAmount : scrollAmount,
+      behavior: "smooth",
+    });
+  };
+
+  /* ---------- KPI Cards configuration (Admin Dashboard style) ---------- */
+  const kpiCards = useMemo(
+    () => [
+      {
+        id: "total-dispatches",
+        label: "Total Dispatches",
+        subLabel: "Reports in dispatch pipeline",
+        value: transfers.length,
+        tag: "Total",
+        bg: "#D6E3FF",
+        valueColor: "#00488D",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <FileText className="w-[17px] h-[17px]" color="#00488D" />,
+        isActive: statusFilter === "ALL",
+        onClick: () => setStatusFilter("ALL"),
+      },
+      {
+        id: "report-transferred",
+        label: "Report Transferred",
+        subLabel: "Delivered to Doctor / EMR",
+        value: transferredCount,
+        tag: `${transfers.length > 0 ? Math.round((transferredCount / transfers.length) * 100) : 0}%`,
+        bg: "rgba(0, 200, 150, 0.12)",
+        valueColor: "#00A87E",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <CheckCircle2 className="w-[17px] h-[17px]" color="#00A87E" />,
+        isActive: statusFilter === "DELIVERED",
+        onClick: () => setStatusFilter((prev) => (prev === "DELIVERED" ? "ALL" : "DELIVERED")),
+      },
+      {
+        id: "transfer-pending",
+        label: "Transfer Pending",
+        subLabel: "Queued for portal delivery",
+        value: pendingTransferCount,
+        tag: "Pending",
+        bg: "rgba(255, 107, 53, 0.12)",
+        valueColor: "#7B3200",
+        iconBg: "#FFDBCB",
+        icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
+        isActive: statusFilter === "QUEUED",
+        onClick: () => setStatusFilter((prev) => (prev === "QUEUED" ? "ALL" : "QUEUED")),
+      },
+    ],
+    [transfers.length, transferredCount, pendingTransferCount, statusFilter]
   );
 
   const activeParameters: DiagnosticParameter[] =
@@ -735,6 +1029,20 @@ export default function ReportTransfer() {
                 </button>
               </div>
 
+              {/* Overdue Warning Banner */}
+              {isTransferOverdue(selectedTransfer) && (
+                <div className="mb-6 rounded-xl border border-rose-300 bg-rose-50/80 px-4 py-3 text-sm text-rose-900 flex items-center justify-between print-hide">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-2.5 w-2.5 rounded-full bg-rose-600 animate-pulse" />
+                    <span className="font-bold text-rose-800">TRANSFER OVERDUE:</span>
+                    <span>Target completion date was {selectedTransfer.targetDate || "passed"}. Expedite report dispatch immediately.</span>
+                  </div>
+                  <span className="px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide bg-rose-600 text-white rounded">
+                    OVERDUE
+                  </span>
+                </div>
+              )}
+
               {/* BEGIN: ReportHeader */}
               <header className="text-center pt-2">
                 <h2 className="text-2xl lg:text-[26px] font-black tracking-wider text-black uppercase">
@@ -758,19 +1066,21 @@ export default function ReportTransfer() {
               >
                 {/* Patient Info with circular avatar */}
                 <div className="flex items-center gap-5 w-full sm:w-1/2">
-                  <div className="w-16 h-16 rounded-full overflow-hidden shrink-0 border-2 border-slate-100 shadow-sm">
-                    <img
-                      alt={`Patient ${selectedTransfer.patientName}`}
-                      className="w-full h-full object-cover"
-                      src={
-                        selectedTransfer.patientAvatar ||
-                        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=256&h=256"
-                      }
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src =
-                          "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=256&h=256";
-                      }}
-                    />
+                  <div className="w-16 h-16 rounded-full overflow-hidden shrink-0 border-2 border-slate-100 shadow-sm flex items-center justify-center bg-[#E8F0FE]">
+                    {selectedTransfer.patientAvatar ? (
+                      <img
+                        alt={`Patient ${selectedTransfer.patientName}`}
+                        className="w-full h-full object-cover"
+                        src={selectedTransfer.patientAvatar}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    ) : (
+                      <span className="text-[#00488D] font-bold text-xl select-none">
+                        {selectedTransfer.patientName ? selectedTransfer.patientName.slice(0, 2).toUpperCase() : "P"}
+                      </span>
+                    )}
                   </div>
                   <div className="grid grid-cols-[130px_1fr] text-[13px] gap-y-1.5 font-medium">
                     <span className="font-bold text-black uppercase tracking-tight">
@@ -821,6 +1131,19 @@ export default function ReportTransfer() {
                     <span className="text-gray-900">
                       {selectedTransfer.reportedOn || "-"}
                     </span>
+                    <span className="font-bold text-black uppercase tracking-tight">
+                      TARGET DATE:
+                    </span>
+                    <span className="text-gray-900 font-semibold flex items-center gap-1.5">
+                      <span className={isTransferOverdue(selectedTransfer) ? "text-rose-700 font-bold" : ""}>
+                        {selectedTransfer.targetDate || "-"}
+                      </span>
+                      {isTransferOverdue(selectedTransfer) && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                          OVERDUE
+                        </span>
+                      )}
+                    </span>
                   </div>
                 </div>
               </section>
@@ -858,37 +1181,42 @@ export default function ReportTransfer() {
                       >
                         REFERENCE RANGE
                       </th>
-                      <th
-                        className="py-2.5 px-4 text-center font-bold border border-black"
-                        scope="col"
-                      >
-                        STATUS
-                      </th>
                     </tr>
                   </thead>
                   <tbody className="text-gray-900 font-medium">
-                    {activeParameters.map((p, idx) => (
-                      <tr
-                        key={idx}
-                        className="hover:bg-slate-50/50 border border-black"
-                      >
-                        <td className="py-2 px-4 font-semibold text-gray-900 border border-black">
-                          {p.parameter}
-                        </td>
-                        <td className="py-2 px-4 text-center font-medium font-mono border border-black">
-                          {p.result}
-                        </td>
-                        <td className="py-2 px-4 text-center border border-black">
-                          {p.unit}
-                        </td>
-                        <td className="py-2 px-4 text-center border border-black">
-                          {p.referenceRange}
-                        </td>
-                        <td className="py-2 px-4 text-center font-bold text-black tracking-wide border border-black">
-                          {p.status}
-                        </td>
-                      </tr>
-                    ))}
+                    {activeParameters.map((p, idx) => {
+                      const statusLower = String(p.status || "").toLowerCase();
+                      const isCritical = statusLower.includes("crit");
+                      const isAbnormal = !isCritical && (statusLower.includes("abnormal") || statusLower.includes("high") || statusLower.includes("low") || statusLower.includes("warn"));
+
+                      return (
+                        <tr
+                          key={idx}
+                          className="hover:bg-slate-50/50 border border-black"
+                        >
+                          <td className="py-2 px-4 font-semibold text-gray-900 border border-black">
+                            {p.parameter}
+                          </td>
+                          <td
+                            className={`py-2 px-4 text-center font-mono border border-black ${
+                              isCritical
+                                ? "text-red-600 font-bold"
+                                : isAbnormal
+                                ? "text-[#ca8a04] font-bold"
+                                : "text-black font-medium"
+                            }`}
+                          >
+                            {p.result}
+                          </td>
+                          <td className="py-2 px-4 text-center border border-black">
+                            {p.unit || resolveStandardParameterUnit(p.parameter, selectedTransfer.testProfile) || "—"}
+                          </td>
+                          <td className="py-2 px-4 text-center border border-black">
+                            {p.referenceRange || resolveStandardParameterRefRange(p.parameter, selectedTransfer.patientAgeGender, selectedTransfer.testProfile) || "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </section>
@@ -984,27 +1312,78 @@ export default function ReportTransfer() {
                   </svg>
                   <span>Back</span>
                 </button>
-                {/* Print Report Button */}
-                <button
-                  onClick={() => window.print()}
-                  className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#4f46e5] hover:bg-[#4338ca] text-white font-semibold text-sm rounded shadow-sm transition cursor-pointer"
-                  type="button"
-                >
-                  <svg
-                    className="w-4 h-4 text-white"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    viewBox="0 0 24 24"
+                <div className="flex items-center gap-3">
+                  {/* Download PDF Button */}
+                  <button
+                    onClick={() => {
+                      if (!selectedTransfer) return;
+                      const certifiedParameters = (selectedTransfer.parameters || DEFAULT_CBC_PARAMETERS).map((p) => ({
+                        parameter: p.parameter,
+                        result: p.result,
+                        unit: p.unit || resolveStandardParameterUnit(p.parameter, selectedTransfer.testProfile),
+                        referenceRange: p.referenceRange || resolveStandardParameterRefRange(p.parameter, selectedTransfer.patientAgeGender, selectedTransfer.testProfile),
+                        status: p.status === "CRITICAL" ? "Critical" : p.status === "ABNORMAL" ? "Abnormal" : "Normal",
+                        approved: true,
+                      }));
+                      downloadLabReportPdf({
+                        reportId: selectedTransfer.reportId,
+                        requestId: selectedTransfer.id,
+                        barcode: selectedTransfer.barcode,
+                        sampleId: selectedTransfer.sampleId,
+                        patientName: selectedTransfer.patientName,
+                        patientId: selectedTransfer.patientId,
+                        patientPid: selectedTransfer.patientPid,
+                        patientAgeGender: selectedTransfer.patientAgeGender,
+                        patientAvatar: selectedTransfer.patientAvatar,
+                        patientEmail: selectedTransfer.patientEmail,
+                        doctorName: selectedTransfer.doctorName,
+                        doctorEmail: selectedTransfer.doctorEmail,
+                        testPanel: selectedTransfer.testProfile,
+                        collectedOn: selectedTransfer.collectedOn,
+                        reportedOn: selectedTransfer.reportedOn,
+                        targetDate: selectedTransfer.targetDate || "—",
+                        clinicalRemarks: selectedTransfer.clinicalRemarks,
+                        clinicalCorrelation: selectedTransfer.clinicalCorrelation,
+                        approverName: "Sarah Johnson",
+                        approverRole: "Senior Pathologist (MD, DNB)",
+                        overallDecision: "Approved",
+                        parameters: certifiedParameters,
+                      });
+                      toast({
+                        title: "PDF Report Downloaded",
+                        description: `Diagnostic report for ${selectedTransfer.patientName} saved as PDF.`,
+                      });
+                    }}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#0b457f] hover:bg-[#093a6b] text-white font-semibold text-sm rounded shadow-sm transition cursor-pointer"
+                    type="button"
                   >
-                    <path
-                      d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  <span>Print Report</span>
-                </button>
+                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    <span>Download PDF</span>
+                  </button>
+                  {/* Print Report Button */}
+                  <button
+                    onClick={() => window.print()}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#4f46e5] hover:bg-[#4338ca] text-white font-semibold text-sm rounded shadow-sm transition cursor-pointer"
+                    type="button"
+                  >
+                    <svg
+                      className="w-4 h-4 text-white"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    <span>Print Report</span>
+                  </button>
+                </div>
               </div>
               {/* END: ActionButtons */}
             </div>
@@ -1042,9 +1421,23 @@ export default function ReportTransfer() {
               </div>
 
               {/* Page Title */}
-              <h1 className="text-2xl font-bold text-gray-900 tracking-tight mb-8">
+              <h1 className="text-2xl font-bold text-gray-900 tracking-tight mb-6">
                 Forward Test Reports
               </h1>
+
+              {/* Overdue Warning in Forward View */}
+              {isTransferOverdue(selectedTransfer) && (
+                <div className="mb-6 rounded-xl border border-rose-300 bg-rose-50/80 px-4 py-3 text-sm text-rose-900 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-2.5 w-2.5 rounded-full bg-rose-600 animate-pulse" />
+                    <span className="font-bold text-rose-800">TRANSFER OVERDUE:</span>
+                    <span>Target completion date was {selectedTransfer.targetDate || "passed"}. Expedite dispatch immediately.</span>
+                  </div>
+                  <span className="px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide bg-rose-600 text-white rounded">
+                    OVERDUE
+                  </span>
+                </div>
+              )}
 
               {/* Content Dual-Card Grid Layout */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
@@ -1095,6 +1488,22 @@ export default function ReportTransfer() {
                       <p className="text-[15px] font-semibold text-gray-900">
                         {selectedTransfer.testProfile}
                       </p>
+                    </div>
+                    {/* Field: Target Date */}
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 mb-1.5">
+                        Target Date
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className={`text-[15px] font-semibold ${isTransferOverdue(selectedTransfer) ? "text-rose-700 font-bold" : "text-gray-900"}`}>
+                          {selectedTransfer.targetDate || "Not Specified"}
+                        </p>
+                        {isTransferOverdue(selectedTransfer) && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                            OVERDUE
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {/* Preview Action Button */}
                     <div className="pt-3">
@@ -1268,175 +1677,146 @@ export default function ReportTransfer() {
           <>
             {/* TopNavbar */}
             <header
-              className="h-20 bg-white border-b border-slate-100 px-10 flex items-center justify-end sticky top-0 z-10"
+              className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-8 py-4 flex items-center justify-between"
               data-purpose="dashboard-header"
             >
-              <div className="flex items-center gap-6">
-                {/* Lab Notification Bell with Live Alerts */}
-                <LabNotificationBell size="md" />
-
-                {/* Role Label & Profile Avatar & Logout */}
-                <div className="flex items-center gap-3 pl-1">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-[#0b57d0] text-white font-bold text-xs flex items-center justify-center shadow-xs">
-                      {displayName.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex flex-col text-left">
-                      <span className="text-xs font-semibold text-slate-800 leading-tight">
-                        {displayName}
-                      </span>
-                      <span className="text-[10px] text-slate-500 leading-tight">
-                        {displayRole}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    title="Sign Out"
-                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                      />
-                    </svg>
-                  </button>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-[#0b4a8b]">
+                  <svg className="w-5 h-5 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
+                  </svg>
                 </div>
+                <div>
+                  <h1 className="text-xl font-bold text-slate-900 tracking-tight">Report Transfer</h1>
+                  <p className="text-xs text-slate-500">Dispatch completed diagnostic reports to consulting doctors and wards</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <LabNotificationBell size="md" />
+                <UserProfileDropdown
+                  userName={displayName}
+                  userSubtext={displayRole}
+                  onLogout={handleLogout}
+                  profilePath="/lab/profile"
+                  hideNotifications
+                />
               </div>
             </header>
 
             {/* DashboardBody */}
             <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
-              {/* StatCardsRow */}
-              <section
-                className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5"
-                data-purpose="kpi-metric-cards"
-              >
-                {/* Card 1: Report Transfer */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#def7ec] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#059669] stroke-[2.5]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        d="M5 13l4 4L19 7"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
+              {/* Key Performance Indicators - Admin Dashboard Style Scrollable Track */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between flex-wrap gap-2 px-1">
                   <div>
-                    <span className="text-[13px] font-semibold text-[#059669]">
-                      Report Transfer
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      {transferredCount}
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Reports transferred successfully
-                    </p>
+                    <h2 className="text-base font-bold text-[#1c1e21] tracking-tight">Key Performance Indicators</h2>
+                    <p className="text-xs text-[#70747c]">Real-time report dispatch pipeline and channel transmission logs</p>
                   </div>
                 </div>
 
-                {/* Card 2: Report Transfer Pending */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#e0edff] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#2563eb] stroke-[2.2]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+                <div className="relative">
+                  {canScrollLeft && (
+                    <button
+                      type="button"
+                      onClick={() => handleKpiScroll("left")}
+                      aria-label="Scroll left"
+                      className="absolute -left-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
                     >
-                      <path
-                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#2563eb]">
-                      Report Transfer Pending
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      {pendingTransferCount}
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Awaiting report transfer
-                    </p>
-                  </div>
-                </div>
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  )}
 
-                {/* Card 3: Test Overdue */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#fef3c7] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#d97706] stroke-[2.2]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#d97706]">
-                      Test Overdue
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      18
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Tests past the expected time
-                    </p>
-                  </div>
-                </div>
+                  <div
+                    className={`absolute left-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-r from-white to-transparent ${
+                      canScrollLeft ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
 
-                {/* Card 4: Repeat Test Required */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#fee2e2] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#dc2626] stroke-[2.2]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+                  <div
+                    ref={trackRef}
+                    className="flex gap-[14px] overflow-x-auto scroll-smooth py-[6px] px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  >
+                    {kpiCards.map((card) => (
+                      <div
+                        key={card.id}
+                        onClick={card.onClick}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            card.onClick?.();
+                          }
+                        }}
+                        style={{
+                          background: card.bg,
+                          border: card.isActive ? `2.5px solid ${card.valueColor}` : "2.5px solid transparent",
+                          boxShadow: card.isActive
+                            ? `0 0 0 1px ${card.valueColor}20, 0 6px 18px ${card.valueColor}28`
+                            : "0 2px 10px rgba(0,0,0,0.06)",
+                        }}
+                        className="flex-[0_0_206px] min-w-[206px] rounded-[12px] p-[14px_16px] flex flex-col gap-[10px] cursor-pointer transition-all duration-200 select-none hover:-translate-y-[2px] hover:shadow-[0_6px_20px_rgba(0,0,0,0.10)]"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div
+                            style={{ background: card.iconBg }}
+                            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm"
+                          >
+                            {card.icon}
+                          </div>
+                          {card.tag && (
+                            <span
+                              style={{ color: card.valueColor }}
+                              className="text-[11px] font-bold px-[7px] py-[2px] rounded-full tracking-[-0.2px] bg-white/60 shadow-sm inline-flex items-center gap-1"
+                            >
+                              <span>{card.tag}</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <div
+                          style={{ color: card.valueColor }}
+                          className="text-[26px] font-extrabold leading-[1.05] tracking-[-0.6px]"
+                        >
+                          {card.value}
+                        </div>
+
+                        <div className="flex flex-col gap-[2px] min-w-0">
+                          <span
+                            style={{ color: card.valueColor }}
+                            className="text-[12.5px] font-bold tracking-tight truncate"
+                          >
+                            {card.label}
+                          </span>
+                          <span
+                            style={{ color: card.valueColor, opacity: 0.75 }}
+                            className="text-[11px] font-medium truncate"
+                          >
+                            {card.subLabel}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div
+                    className={`absolute right-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-l from-white to-transparent ${
+                      canScrollRight ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+
+                  {canScrollRight && (
+                    <button
+                      type="button"
+                      onClick={() => handleKpiScroll("right")}
+                      aria-label="Scroll right"
+                      className="absolute -right-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
                     >
-                      <path
-                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#dc2626]">
-                      Repeat Test Required
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      11
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Tests need to be repeated
-                    </p>
-                  </div>
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
-              </section>
+              </div>
 
               {/* TableContainerCard */}
               <section
@@ -1452,28 +1832,6 @@ export default function ReportTransfer() {
                     <h1 className="text-2xl font-bold text-slate-800 tracking-tight">
                       Report Dispatch &amp; Transfer Log
                     </h1>
-                    <button
-                      type="button"
-                      onClick={() => fetchRealData()}
-                      disabled={isLoading}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50 cursor-pointer"
-                      title="Reload real reports from database"
-                    >
-                      <svg
-                        className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        />
-                      </svg>
-                      {isLoading ? "Refreshing..." : "Refresh"}
-                    </button>
                   </div>
                   {/* BEGIN: SearchAndFilters */}
                   <div
@@ -1640,28 +1998,6 @@ export default function ReportTransfer() {
                         </div>
                       )}
                     </div>
-
-                    {/* Batch Sync to EMR Button */}
-                    <button
-                      type="button"
-                      onClick={() => handleBatchSync()}
-                      className="px-4 py-2.5 bg-[#00875A] hover:bg-[#00744E] text-white text-sm font-semibold rounded-lg shadow-sm transition-colors cursor-pointer shrink-0 inline-flex items-center gap-2"
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        />
-                      </svg>
-                      <span>Batch Sync to EMR</span>
-                    </button>
                   </div>
                 </header>
                 {/* END: HeaderSection */}
@@ -1685,9 +2021,6 @@ export default function ReportTransfer() {
                         </th>
                         <th className="py-5 px-6 font-bold" scope="col">
                           RECIPIENT &amp; STATION
-                        </th>
-                        <th className="py-5 px-6 font-bold" scope="col">
-                          CHANNEL
                         </th>
                         <th
                           className="py-5 px-6 font-bold text-center"
@@ -1713,47 +2046,70 @@ export default function ReportTransfer() {
                       {filteredTransfers.length === 0 ? (
                         <tr>
                           <td
-                            colSpan={7}
+                            colSpan={6}
                             className="py-12 text-center text-slate-400 text-sm"
                           >
                             No dispatch logs found matching your criteria.
                           </td>
                         </tr>
                       ) : (
-                        filteredTransfers.map((t) => (
-                          <tr
-                            key={t.id}
-                            onClick={() => handleOpenForward(t)}
-                            className="hover:bg-slate-50/60 transition-colors cursor-pointer"
-                          >
-                            <td className="py-5 px-8 whitespace-nowrap">
-                              <span className="font-mono text-slate-900 text-sm font-semibold">
-                                {getDisplayBarcode(t)}
-                              </span>
-                            </td>
-                            <td className="py-5 px-6">
-                              <span className="font-semibold text-slate-900 block">
-                                {t.patientName}
-                              </span>
-                              <span className="text-xs text-slate-400 font-mono">
-                                {t.patientId}
-                              </span>
-                            </td>
-                            <td className="py-5 px-6">
-                              <span className="font-medium text-slate-800 block text-xs">
-                                {t.recipient}
-                              </span>
-                              {t.ackDetails && (
-                                <span className="text-xs text-slate-400 block truncate max-w-xs">
-                                  {t.ackDetails}
+                        filteredTransfers.map((t) => {
+                          const isOverdue = isTransferOverdue(t);
+                          return (
+                            <tr
+                              key={t.id}
+                              onClick={() => handleOpenForward(t)}
+                              className={`transition-colors cursor-pointer ${
+                                isOverdue
+                                  ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                                  : "hover:bg-slate-50/60"
+                              }`}
+                            >
+                              <td className="py-5 px-8 whitespace-nowrap">
+                                <span className="font-mono text-slate-900 text-sm font-semibold block">
+                                  {getDisplayBarcode(t)}
                                 </span>
-                              )}
-                            </td>
-                            <td className="py-5 px-6">
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                                {t.channel}
-                              </span>
-                            </td>
+                                {isOverdue && (
+                                  <span className="inline-flex items-center gap-1 mt-1 text-[11px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
+                                    <Clock className="w-3 h-3 text-rose-600" /> Overdue
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-5 px-6">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-semibold text-slate-900">
+                                    {t.patientName}
+                                  </span>
+                                  {isOverdue && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase shrink-0">
+                                      OVERDUE
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                  <span className="text-xs text-slate-400 font-mono">
+                                    {t.patientId}
+                                  </span>
+                                  <span className="text-xs text-slate-600 font-medium truncate max-w-[170px]" title={t.testProfile}>
+                                    · {t.testProfile}
+                                  </span>
+                                  {t.targetDate && (
+                                    <span className={`text-xs font-semibold ${isOverdue ? "text-rose-700" : "text-slate-500"}`}>
+                                      · Target: {t.targetDate}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-5 px-6">
+                                <span className="font-medium text-slate-800 block text-xs">
+                                  {t.recipient}
+                                </span>
+                                {t.ackDetails && (
+                                  <span className="text-xs text-slate-400 block truncate max-w-xs">
+                                    {t.ackDetails}
+                                  </span>
+                                )}
+                              </td>
                             <td className="py-5 px-6 text-center text-slate-600 font-mono text-xs">
                               {t.dispatchedAt}
                             </td>
@@ -1829,8 +2185,9 @@ export default function ReportTransfer() {
                               </div>
                             </td>
                           </tr>
-                        ))
-                      )}
+                        );
+                      })
+                    )}
                     </tbody>
                   </table>
                 </div>

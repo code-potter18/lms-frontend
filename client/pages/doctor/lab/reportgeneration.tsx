@@ -1,15 +1,35 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  CheckCircle2,
+  Clock,
+  Download,
+  Eye,
+  Printer,
+} from "lucide-react";
+import {
+  generateLabReportPdf,
+  downloadLabReportPdf,
+  openLabReportPdfPreview,
+  resolveStandardParameterUnit,
+  resolveStandardParameterRefRange,
+} from "@/utils/labReportPdf";
 import { getUser, remove } from "@/utils/token";
 import { toast } from "@/hooks/use-toast";
 import LabNav from "./labnav";
 import { LabNotificationBell } from "@/components/hms/LabNotificationBell";
-import { labOrderApi, labOrderItemApi, LabOrderRecord, LabOrderItemRecord } from "@/api/labOrder.api";
+import { UserProfileDropdown } from "@/components/ui/User_profile_dropdown";
+import { labOrderApi, labOrderItemApi, labResultApi, LabOrderRecord, LabOrderItemRecord } from "@/api/labOrder.api";
 import { patientApi, PatientRecord } from "@/api/patient.api";
 import { labReportApi, LabReportRecord, parseReportComment } from "@/api/labReport.api";
 import {
   INITIAL_TESTING_SAMPLES,
   TestingSampleItem,
+  formatGenderReferenceRange,
+  evaluateAbnormalFlag,
 } from "./testingsamples";
 
 export interface QualityCheckParameter {
@@ -52,156 +72,445 @@ export interface ReportItem {
   approverRole?: string;
   approvalDate?: string;
   signatureUrl?: string | null;
+  reportFile?: string | null;
   sentOn?: string;
   deliveredOn?: string;
+  targetDate?: string;
+  targetDateIso?: string;
 }
+
+const normalizeToIsoDate = (value?: string | null): string | null => {
+  if (!value || value === "—") return null;
+  const str = String(value).trim();
+  const ymdMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymdMatch) return `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
+  const dmy4Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy4Match) {
+    return `${dmy4Match[3]}-${dmy4Match[2].padStart(2, "0")}-${dmy4Match[1].padStart(2, "0")}`;
+  }
+  const dmy2Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2})$/);
+  if (dmy2Match) {
+    return `20${dmy2Match[3]}-${dmy2Match[2].padStart(2, "0")}-${dmy2Match[1].padStart(2, "0")}`;
+  }
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) {
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const day = String(parsed.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return null;
+};
+
+const formatTargetDate = (value?: string | null): string => {
+  if (!value) return "—";
+  const iso = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}-${iso[2]}-${iso[1]}`;
+  const d = new Date(value);
+  if (!Number.isNaN(d.getTime())) {
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    return `${day}-${month}-${d.getFullYear()}`;
+  }
+  return String(value);
+};
+
+const isReportOverdue = (r?: ReportItem | null): boolean => {
+  if (!r || r.status === "GENERATED") return false;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const iso = r.targetDateIso || (r.targetDate ? normalizeToIsoDate(r.targetDate) : null);
+  if (!iso) return false;
+  return iso < todayIso;
+};
+
+const compareReportItems = (a: ReportItem, b: ReportItem): number => {
+  // 1. Show reports that are UNDER_REVIEW at the top
+  const isUnderReviewA = a.status === "UNDER_REVIEW" ? 1 : 0;
+  const isUnderReviewB = b.status === "UNDER_REVIEW" ? 1 : 0;
+  if (isUnderReviewA !== isUnderReviewB) {
+    return isUnderReviewB - isUnderReviewA;
+  }
+
+  // 2. Overdue priority
+  const overdueA = isReportOverdue(a) ? 1 : 0;
+  const overdueB = isReportOverdue(b) ? 1 : 0;
+  if (overdueA !== overdueB) {
+    return overdueB - overdueA;
+  }
+
+  // 3. Fallback: by ID descending / requestId descending
+  return (b.id || b.reportId || "").localeCompare(a.id || a.reportId || "");
+};
 
 export const DEFAULT_QC_PARAMETERS: QualityCheckParameter[] = [
   {
-    id: "qc-1",
-    parameter: "WBC (White Blood Cells)",
-    result: "6.80",
-    unit: "10^3/µL",
-    referenceRange: "4.0 - 10.0",
-    status: "Normal",
-    approved: true,
-  },
-  {
-    id: "qc-2",
-    parameter: "RBC (Red Blood Cells)",
-    result: "4.82",
-    unit: "10^6/µL",
-    referenceRange: "4.2 - 5.8",
-    status: "Normal",
-    approved: true,
-  },
-  {
-    id: "qc-3",
-    parameter: "HGB (Hemoglobin)",
+    id: "qc-cbc-1",
+    parameter: "Hemoglobin",
     result: "14.2",
     unit: "g/dL",
-    referenceRange: "13.0 - 17.0",
+    referenceRange: "13-17 g/dL",
     status: "Normal",
-    approved: true,
+    approved: false,
   },
   {
-    id: "qc-4",
-    parameter: "HCT (Hematocrit)",
+    id: "qc-cbc-2",
+    parameter: "Total WBC count (TC)",
+    result: "6800",
+    unit: "cells/µL",
+    referenceRange: "4000 - 11000",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-3",
+    parameter: "RBC count",
+    result: "4.82",
+    unit: "million/µL",
+    referenceRange: "4.5-5.5 million/µL",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-4",
+    parameter: "PCV / HCT",
     result: "43.1",
     unit: "%",
-    referenceRange: "40 - 50",
+    referenceRange: "40-50 %",
     status: "Normal",
-    approved: true,
+    approved: false,
   },
   {
-    id: "qc-5",
-    parameter: "MCV (Mean Corpuscular Vol)",
+    id: "qc-cbc-5",
+    parameter: "MCV",
     result: "87.6",
     unit: "fL",
-    referenceRange: "80 - 100",
+    referenceRange: "83 - 101",
     status: "Normal",
-    approved: true,
+    approved: false,
   },
   {
-    id: "qc-6",
-    parameter: "MCH (Mean Corpuscular Hb)",
+    id: "qc-cbc-6",
+    parameter: "MCH",
     result: "29.1",
     unit: "pg",
-    referenceRange: "27 - 34",
+    referenceRange: "27 - 32",
     status: "Normal",
-    approved: true,
+    approved: false,
   },
   {
-    id: "qc-7",
-    parameter: "MCHC (MCH Concentration)",
+    id: "qc-cbc-7",
+    parameter: "MCHC",
     result: "33.0",
     unit: "g/dL",
-    referenceRange: "32 - 36",
+    referenceRange: "31.5 - 34.5",
     status: "Normal",
-    approved: true,
+    approved: false,
   },
   {
-    id: "qc-8",
-    parameter: "PLT (Platelet Count)",
-    result: "235",
-    unit: "10^3/µL",
-    referenceRange: "150 - 450",
+    id: "qc-cbc-8",
+    parameter: "RDW-CV",
+    result: "12.8",
+    unit: "%",
+    referenceRange: "11.6 - 14",
     status: "Normal",
-    approved: true,
+    approved: false,
+  },
+  {
+    id: "qc-cbc-9",
+    parameter: "Platelet count",
+    result: "235000",
+    unit: "cells/µL",
+    referenceRange: "150000 - 410000",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-10",
+    parameter: "MPV",
+    result: "9.2",
+    unit: "fL",
+    referenceRange: "7.5 - 11.5",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-11",
+    parameter: "Neutrophils",
+    result: "58",
+    unit: "%",
+    referenceRange: "40 - 80",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-12",
+    parameter: "Lymphocytes",
+    result: "32",
+    unit: "%",
+    referenceRange: "20 - 40",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-13",
+    parameter: "Eosinophils",
+    result: "3",
+    unit: "%",
+    referenceRange: "1 - 6",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-14",
+    parameter: "Monocytes",
+    result: "6",
+    unit: "%",
+    referenceRange: "2 - 10",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-15",
+    parameter: "Basophils",
+    result: "1",
+    unit: "%",
+    referenceRange: "0 - 2",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-16",
+    parameter: "Absolute Neutrophil Count (ANC)",
+    result: "3944",
+    unit: "cells/µL",
+    referenceRange: "2000 - 7000",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-17",
+    parameter: "Absolute Lymphocyte Count",
+    result: "2176",
+    unit: "cells/µL",
+    referenceRange: "1000 - 3000",
+    status: "Normal",
+    approved: false,
+  },
+  {
+    id: "qc-cbc-18",
+    parameter: "Absolute Eosinophil Count",
+    result: "204",
+    unit: "cells/µL",
+    referenceRange: "20 - 500",
+    status: "Normal",
+    approved: false,
   },
 ];
 
 export function getDefaultQCParametersForPanel(testName: string): QualityCheckParameter[] {
-  const lower = (testName || "").toLowerCase();
-  if (lower.includes("kft") || lower.includes("kidney") || lower.includes("renal")) {
+  const lower = (testName || "").toLowerCase().trim();
+
+  // 1. Single analyte tests: return strictly their own single parameter
+  if (/^(bilirubin|total bilirubin|serum bilirubin)$/i.test(lower)) {
     return [
-      { id: "qc-kft-1", parameter: "Serum Creatinine", result: "0.85", unit: "mg/dL", referenceRange: "0.6 - 1.2", status: "Normal", approved: true },
-      { id: "qc-kft-2", parameter: "Blood Urea Nitrogen (BUN)", result: "16.0", unit: "mg/dL", referenceRange: "7 - 20", status: "Normal", approved: true },
-      { id: "qc-kft-3", parameter: "Uric Acid", result: "4.8", unit: "mg/dL", referenceRange: "3.5 - 7.2", status: "Normal", approved: true },
-      { id: "qc-kft-4", parameter: "eGFR", result: "98", unit: "mL/min/1.73m²", referenceRange: "> 90", status: "Normal", approved: true },
+      { id: "qc-bil-1", parameter: "Total Bilirubin", result: "0.8", unit: "mg/dL", referenceRange: "0.3 - 1.2", status: "Normal", approved: false },
     ];
   }
-  if (lower.includes("lft") || lower.includes("liver") || lower.includes("bilirubin")) {
+  if (/^(direct bilirubin|bilirubin direct)$/i.test(lower)) {
     return [
-      { id: "qc-lft-1", parameter: "Bilirubin (Total)", result: "0.8", unit: "mg/dL", referenceRange: "0.2 - 1.2", status: "Normal", approved: true },
-      { id: "qc-lft-2", parameter: "Bilirubin (Direct)", result: "0.2", unit: "mg/dL", referenceRange: "0.0 - 0.3", status: "Normal", approved: true },
-      { id: "qc-lft-3", parameter: "SGOT / AST", result: "28", unit: "U/L", referenceRange: "10 - 40", status: "Normal", approved: true },
-      { id: "qc-lft-4", parameter: "SGPT / ALT", result: "32", unit: "U/L", referenceRange: "7 - 56", status: "Normal", approved: true },
-      { id: "qc-lft-5", parameter: "Alkaline Phosphatase (ALP)", result: "78", unit: "U/L", referenceRange: "44 - 147", status: "Normal", approved: true },
-      { id: "qc-lft-6", parameter: "Total Protein", result: "7.1", unit: "g/dL", referenceRange: "6.0 - 8.3", status: "Normal", approved: true },
-      { id: "qc-lft-7", parameter: "Albumin", result: "4.2", unit: "g/dL", referenceRange: "3.5 - 5.0", status: "Normal", approved: true },
+      { id: "qc-bil-dir", parameter: "Direct Bilirubin", result: "0.2", unit: "mg/dL", referenceRange: "0 - 0.3", status: "Normal", approved: false },
     ];
   }
-  if (lower.includes("lipid") || lower.includes("cholesterol") || lower.includes("triglyceride")) {
+  if (/^(tsh|thyroid stimulating hormone)$/i.test(lower)) {
     return [
-      { id: "qc-lip-1", parameter: "Total Cholesterol", result: "185", unit: "mg/dL", referenceRange: "< 200", status: "Normal", approved: true },
-      { id: "qc-lip-2", parameter: "Triglycerides", result: "140", unit: "mg/dL", referenceRange: "< 150", status: "Normal", approved: true },
-      { id: "qc-lip-3", parameter: "HDL Cholesterol", result: "48", unit: "mg/dL", referenceRange: "> 40", status: "Normal", approved: true },
-      { id: "qc-lip-4", parameter: "LDL Cholesterol", result: "109", unit: "mg/dL", referenceRange: "< 100", status: "Normal", approved: true },
-      { id: "qc-lip-5", parameter: "VLDL", result: "28", unit: "mg/dL", referenceRange: "< 30", status: "Normal", approved: true },
+      { id: "qc-tsh-1", parameter: "TSH", result: "2.85", unit: "µIU/mL", referenceRange: "0.4 - 4.2", status: "Normal", approved: false },
     ];
   }
-  if (lower.includes("thyroid") || lower.includes("t3") || lower.includes("t4") || lower.includes("tsh")) {
+  if (/^(total t3|t3)$/i.test(lower)) {
     return [
-      { id: "qc-th-1", parameter: "Total T3", result: "1.2", unit: "ng/mL", referenceRange: "0.8 - 2.0", status: "Normal", approved: true },
-      { id: "qc-th-2", parameter: "Total T4", result: "8.5", unit: "µg/dL", referenceRange: "5.1 - 14.1", status: "Normal", approved: true },
-      { id: "qc-th-3", parameter: "TSH (Thyroid Stimulating)", result: "2.85", unit: "µIU/mL", referenceRange: "0.4 - 4.2", status: "Normal", approved: true },
+      { id: "qc-t3-1", parameter: "Total T3", result: "1.2", unit: "ng/dL", referenceRange: "80 - 200", status: "Normal", approved: false },
     ];
   }
-  if (lower.includes("electrolyte") || lower.includes("na+") || lower.includes("k+")) {
+  if (/^(total t4|t4)$/i.test(lower)) {
     return [
-      { id: "qc-el-1", parameter: "Sodium (Na+)", result: "139", unit: "mmol/L", referenceRange: "135 - 145", status: "Normal", approved: true },
-      { id: "qc-el-2", parameter: "Potassium (K+)", result: "4.2", unit: "mmol/L", referenceRange: "3.5 - 5.1", status: "Normal", approved: true },
-      { id: "qc-el-3", parameter: "Chloride (Cl-)", result: "101", unit: "mmol/L", referenceRange: "98 - 107", status: "Normal", approved: true },
+      { id: "qc-t4-1", parameter: "Total T4", result: "8.5", unit: "µg/dL", referenceRange: "5.1 - 14.1", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(creatinine|serum creatinine)$/i.test(lower)) {
+    return [
+      { id: "qc-cr-1", parameter: "Creatinine", result: "0.9", unit: "mg/dL", referenceRange: "M 0.7–1.3; F 0.6–1.1", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(uric acid|serum uric acid)$/i.test(lower)) {
+    return [
+      { id: "qc-ua-1", parameter: "Uric Acid", result: "4.8", unit: "mg/dL", referenceRange: "M 3.5–7.2; F 2.6–6", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(calcium|serum calcium|total calcium)$/i.test(lower)) {
+    return [
+      { id: "qc-ca-1", parameter: "Calcium (Ca)", result: "9.4", unit: "mg/dL", referenceRange: "8.5 - 10.5", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(total cholesterol|cholesterol)$/i.test(lower)) {
+    return [
+      { id: "qc-chol-1", parameter: "Total Cholesterol", result: "185", unit: "mg/dL", referenceRange: "< 200", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(triglycerides|triglyceride)$/i.test(lower)) {
+    return [
+      { id: "qc-tg-1", parameter: "Triglycerides", result: "140", unit: "mg/dL", referenceRange: "< 150", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(wbc|total wbc count|total wbc count \(tc\)|wbc count|white blood cell count)$/i.test(lower)) {
+    return [
+      { id: "qc-wbc-1", parameter: "Total WBC count (TC)", result: "6.80", unit: "cells/µL", referenceRange: "4000 - 11000", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(platelet count|platelets|platelet)$/i.test(lower)) {
+    return [
+      { id: "qc-plt-1", parameter: "Platelet count", result: "235000", unit: "cells/µL", referenceRange: "150000 - 410000", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(esr|erythrocyte sedimentation rate)$/i.test(lower)) {
+    return [
+      { id: "qc-esr-1", parameter: "ESR (1st hour)", result: "12", unit: "mm/hr", referenceRange: "M 0–15; F 0–20", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(glucose random|random blood sugar|rbs)$/i.test(lower)) {
+    return [
+      { id: "qc-glu-r", parameter: "Random Blood Sugar", result: "105", unit: "mg/dL", referenceRange: "70 - 140", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(glucose fasting|fasting blood sugar|fbs)$/i.test(lower)) {
+    return [
+      { id: "qc-glu-f", parameter: "Fasting Blood Sugar", result: "88", unit: "mg/dL", referenceRange: "70 - 100", status: "Normal", approved: false },
+    ];
+  }
+  if (/^(glucose post prandial|post prandial blood sugar|ppbs)$/i.test(lower)) {
+    return [
+      { id: "qc-glu-pp", parameter: "Post Prandial Blood Sugar", result: "124", unit: "mg/dL", referenceRange: "70 - 140", status: "Normal", approved: false },
+    ];
+  }
+
+  // 2. Multi-parameter panel tests
+  if (lower.includes("kft") || lower.includes("kidney panel") || lower.includes("renal panel") || lower.includes("renal function test")) {
+    return [
+      { id: "qc-kft-1", parameter: "Serum Creatinine", result: "0.85", unit: "mg/dL", referenceRange: "0.6 - 1.2", status: "Normal", approved: false },
+      { id: "qc-kft-2", parameter: "Blood Urea Nitrogen (BUN)", result: "16.0", unit: "mg/dL", referenceRange: "7 - 20", status: "Normal", approved: false },
+      { id: "qc-kft-3", parameter: "Uric Acid", result: "4.8", unit: "mg/dL", referenceRange: "3.5 - 7.2", status: "Normal", approved: false },
+      { id: "qc-kft-4", parameter: "eGFR", result: "98", unit: "mL/min/1.73m²", referenceRange: "> 90", status: "Normal", approved: false },
+    ];
+  }
+  if (lower.includes("lft") || lower.includes("liver function test") || lower.includes("liver panel") || lower.includes("hepatic panel")) {
+    return [
+      { id: "qc-lft-1", parameter: "Bilirubin (Total)", result: "0.8", unit: "mg/dL", referenceRange: "0.2 - 1.2", status: "Normal", approved: false },
+      { id: "qc-lft-2", parameter: "Bilirubin (Direct)", result: "0.2", unit: "mg/dL", referenceRange: "0.0 - 0.3", status: "Normal", approved: false },
+      { id: "qc-lft-3", parameter: "SGOT / AST", result: "28", unit: "U/L", referenceRange: "10 - 40", status: "Normal", approved: false },
+      { id: "qc-lft-4", parameter: "SGPT / ALT", result: "32", unit: "U/L", referenceRange: "7 - 56", status: "Normal", approved: false },
+      { id: "qc-lft-5", parameter: "Alkaline Phosphatase (ALP)", result: "78", unit: "U/L", referenceRange: "44 - 147", status: "Normal", approved: false },
+      { id: "qc-lft-6", parameter: "Total Protein", result: "7.1", unit: "g/dL", referenceRange: "6.0 - 8.3", status: "Normal", approved: false },
+      { id: "qc-lft-7", parameter: "Albumin", result: "4.2", unit: "g/dL", referenceRange: "3.5 - 5.0", status: "Normal", approved: false },
+    ];
+  }
+  if (!lower.includes("phospholipid") && (lower.includes("lipid profile") || lower.includes("lipid panel") || lower === "lipids" || lower.includes("cholesterol panel"))) {
+    return [
+      { id: "qc-lip-1", parameter: "Total Cholesterol", result: "185", unit: "mg/dL", referenceRange: "< 200", status: "Normal", approved: false },
+      { id: "qc-lip-2", parameter: "Triglycerides", result: "140", unit: "mg/dL", referenceRange: "< 150", status: "Normal", approved: false },
+      { id: "qc-lip-3", parameter: "HDL Cholesterol", result: "48", unit: "mg/dL", referenceRange: "> 40", status: "Normal", approved: false },
+      { id: "qc-lip-4", parameter: "LDL Cholesterol", result: "109", unit: "mg/dL", referenceRange: "< 100", status: "Normal", approved: false },
+      { id: "qc-lip-5", parameter: "VLDL", result: "28", unit: "mg/dL", referenceRange: "< 30", status: "Normal", approved: false },
+    ];
+  }
+  if (lower.includes("thyroid panel") || lower.includes("thyroid profile") || lower.includes("tft") || lower.includes("thyroid function")) {
+    return [
+      { id: "qc-th-1", parameter: "Total T3", result: "1.2", unit: "ng/mL", referenceRange: "0.8 - 2.0", status: "Normal", approved: false },
+      { id: "qc-th-2", parameter: "Total T4", result: "8.5", unit: "µg/dL", referenceRange: "5.1 - 14.1", status: "Normal", approved: false },
+      { id: "qc-th-3", parameter: "TSH (Thyroid Stimulating)", result: "2.85", unit: "µIU/mL", referenceRange: "0.4 - 4.2", status: "Normal", approved: false },
+    ];
+  }
+  if (!lower.includes("urine") && (lower.includes("electrolyte complete") || lower.includes("electrolytes complete") || lower.includes("complete electrolytes"))) {
+    return [
+      { id: "qc-el-1", parameter: "Sodium (Na+)", result: "139", unit: "mmol/L", referenceRange: "135 - 145", status: "Normal", approved: false },
+      { id: "qc-el-2", parameter: "Potassium (K+)", result: "4.2", unit: "mmol/L", referenceRange: "3.5 - 5.1", status: "Normal", approved: false },
+      { id: "qc-el-3", parameter: "Chloride (Cl-)", result: "101", unit: "mmol/L", referenceRange: "98 - 107", status: "Normal", approved: false },
+      { id: "qc-el-4", parameter: "Calcium (Ca2+)", result: "9.4", unit: "mg/dL", referenceRange: "8.5 - 10.5", status: "Normal", approved: false },
+      { id: "qc-el-5", parameter: "Bicarbonate (HCO3)", result: "25", unit: "mmol/L", referenceRange: "22 - 29", status: "Normal", approved: false },
+      { id: "qc-el-6", parameter: "Magnesium (Mg)", result: "2.1", unit: "mg/dL", referenceRange: "1.7 - 2.4", status: "Normal", approved: false },
+      { id: "qc-el-7", parameter: "Phosphorus (PO4)", result: "3.4", unit: "mg/dL", referenceRange: "2.5 - 4.5", status: "Normal", approved: false },
+    ];
+  }
+  if (!lower.includes("urine") && (lower.includes("electrolyte") || lower.includes("lytes"))) {
+    return [
+      { id: "qc-el-1", parameter: "Sodium (Na+)", result: "139", unit: "mmol/L", referenceRange: "135 - 145", status: "Normal", approved: false },
+      { id: "qc-el-2", parameter: "Potassium (K+)", result: "4.2", unit: "mmol/L", referenceRange: "3.5 - 5.1", status: "Normal", approved: false },
+      { id: "qc-el-3", parameter: "Chloride (Cl-)", result: "101", unit: "mmol/L", referenceRange: "98 - 107", status: "Normal", approved: false },
+      { id: "qc-el-4", parameter: "Calcium (Ca2+)", result: "9.4", unit: "mg/dL", referenceRange: "8.5 - 10.5", status: "Normal", approved: false },
     ];
   }
   if (lower.includes("hba1c") || lower.includes("glycated")) {
     return [
-      { id: "qc-hba1c-1", parameter: "HbA1c Glycated Hemoglobin", result: "5.7", unit: "%", referenceRange: "< 5.7", status: "Normal", approved: true },
-      { id: "qc-hba1c-2", parameter: "Estimated Average Glucose (eAG)", result: "117", unit: "mg/dL", referenceRange: "70 - 126", status: "Normal", approved: true },
+      { id: "qc-hba1c-1", parameter: "HbA1c Glycated Hemoglobin", result: "5.7", unit: "%", referenceRange: "< 5.7", status: "Normal", approved: false },
+      { id: "qc-hba1c-2", parameter: "Estimated Average Glucose (eAG)", result: "117", unit: "mg/dL", referenceRange: "70 - 126", status: "Normal", approved: false },
     ];
   }
-  return DEFAULT_QC_PARAMETERS;
+  if (lower.includes("cbc") || lower.includes("complete blood count") || lower.includes("hemogram") || lower.includes("full blood count")) {
+    return DEFAULT_QC_PARAMETERS;
+  }
+
+  // 3. Fallback for any other single test: return single parameter with the test's own name
+  return [
+    {
+      id: `qc-${Math.random().toString(36).substring(2, 7)}`,
+      parameter: testName || "Result",
+      result: "Normal",
+      unit: "-",
+      referenceRange: "Normal / Negative",
+      status: "Normal",
+      approved: false,
+    },
+  ];
 }
 
 export function convertTestParamsToQCParams(params: any[]): QualityCheckParameter[] {
   if (!Array.isArray(params) || params.length === 0) return DEFAULT_QC_PARAMETERS;
   return params.map((p, idx) => {
     let status: "Normal" | "Abnormal" | "Critical" = "Normal";
-    const rawStatus = (p.status || "").toLowerCase();
-    if (rawStatus.includes("crit") || rawStatus.includes("high") || rawStatus.includes("flag")) {
+    const rawFlag = (p.abnormalFlag || p.status || "").toLowerCase();
+    if (rawFlag.includes("crit") || rawFlag === "critical") {
       status = "Critical";
-    } else if (rawStatus.includes("abnorm")) {
+    } else if (rawFlag.includes("high") || rawFlag.includes("low") || rawFlag.includes("abnorm") || rawFlag.includes("flag")) {
       status = "Abnormal";
     }
+    const paramName = p.parameter || `Parameter ${idx + 1}`;
+    const resolvedUnit = (
+      p.unit ||
+      p.units ||
+      p.unit_of_measure ||
+      resolveStandardParameterUnit(paramName) ||
+      ""
+    ).trim();
+
+    let resolvedRange = (
+      p.referenceRange ||
+      p.reference_range ||
+      p.ref_range ||
+      p.refRange ||
+      ""
+    ).trim();
+
+    if (!resolvedRange || resolvedRange === "—" || resolvedRange === "-" || resolvedRange.toLowerCase() === "normal") {
+      resolvedRange = resolveStandardParameterRefRange(paramName);
+    }
+
     return {
       id: p.id || `qc-${idx + 1}`,
-      parameter: p.parameter || `Parameter ${idx + 1}`,
+      parameter: paramName,
       result: p.result !== undefined && p.result !== null ? String(p.result) : "0.0",
-      unit: p.unit || "",
-      referenceRange: p.referenceRange || "Normal",
+      unit: resolvedUnit,
+      referenceRange: resolvedRange || "Normal",
       status,
-      approved: p.status === "Completed" || p.approved !== false,
+      // NOT approved by default. Only approved if someone previously approved and saved it.
+      approved: p.approved === true || p.result_status === "Approved",
     };
   });
 }
@@ -356,14 +665,15 @@ export default function ReportGeneration() {
         if (rep.report_number) existingReportIds.add(rep.report_number);
 
         const order = orderMap.get(rep.lab_order_id) || rep.lab_order;
-        const patientId = order?.patient_history?.patient_id || order?.patient_history_id || "PAT-001";
+        const bioData = (order?.patient_history as any)?.patient_bio_data || (rep.lab_order?.patient_history as any)?.patient_bio_data;
+        const patientId = bioData?.patient_id || order?.patient_history?.patient_id || order?.patient_history_id || "PAT-001";
         const patient = patientMap.get(patientId);
 
         const patientName = patient
           ? [patient.patient_first_name, patient.patient_middle_name, patient.patient_last_name].filter(Boolean).join(" ")
           : `Patient ${patientId}`;
         const age = patient?.patient_age || (patient?.patient_dob ? calculateAge(patient.patient_dob) : 34);
-        const gender = patient?.patient_gender || "Male";
+        const gender = bioData?.patient_gender || patient?.patient_gender || "Female";
         const patientAgeGender = `${gender} | ${age} Years`;
 
         const doctorName = order?.employees
@@ -409,6 +719,10 @@ export default function ReportGeneration() {
         existingSampleIds.add(sampleBarcode);
         if (orderItem?.lab_order_item_id) existingReportIds.add(orderItem.lab_order_item_id);
 
+        const rawTargetDate = (orderItem as any)?.target_date || (order as any)?.target_date;
+        const targetDateFormatted = rawTargetDate ? formatTargetDate(rawTargetDate) : undefined;
+        const targetDateIso = rawTargetDate ? (normalizeToIsoDate(rawTargetDate) || undefined) : undefined;
+
         mappedList.push({
           id: rep.lab_report_id,
           reportId: rep.report_number || `RPT-${rep.lab_report_id.slice(-6)}`,
@@ -429,7 +743,109 @@ export default function ReportGeneration() {
           sampleType,
           status,
           findingsSummary: parsedMeta?.text || commentString || "Diagnostic results verified within reference ranges.",
-          parameters: parsedMeta?.parameters && parsedMeta.parameters.length > 0 ? parsedMeta.parameters : getDefaultQCParametersForPanel(testPanel),
+          parameters: (() => {
+            if (parsedMeta?.parameters && Array.isArray(parsedMeta.parameters) && parsedMeta.parameters.length > 0) {
+              return parsedMeta.parameters.map((p: any, pIdx: number) => {
+                const paramName = p.parameter || `Parameter ${pIdx + 1}`;
+                const resolvedUnit = (
+                  p.unit ||
+                  p.units ||
+                  p.unit_of_measure ||
+                  resolveStandardParameterUnit(paramName, testPanel) ||
+                  ""
+                ).trim();
+
+                let resolvedRange = (
+                  p.referenceRange ||
+                  p.reference_range ||
+                  p.ref_range ||
+                  p.refRange ||
+                  ""
+                ).trim();
+
+                if (!resolvedRange || resolvedRange === "—" || resolvedRange === "-" || resolvedRange.toLowerCase() === "normal") {
+                  resolvedRange = resolveStandardParameterRefRange(paramName, patientAgeGender, testPanel);
+                } else {
+                  resolvedRange = formatGenderReferenceRange(resolvedRange, patientAgeGender, resolvedUnit);
+                }
+
+                return {
+                  ...p,
+                  parameter: paramName,
+                  result: p.result !== undefined && p.result !== null ? String(p.result) : "—",
+                  unit: resolvedUnit,
+                  referenceRange: resolvedRange || "Normal",
+                };
+              });
+            }
+            if ((orderItem as any)?.lab_result && Array.isArray((orderItem as any).lab_result) && (orderItem as any).lab_result.length > 0) {
+              return (orderItem as any).lab_result.map((r: any) => {
+                let qcStatus: "Normal" | "Abnormal" | "Critical" = "Normal";
+                const flag = (r.abnormal_flag || "").toUpperCase();
+                if (flag === "CRITICAL") qcStatus = "Critical";
+                else if (flag === "HIGH" || flag === "LOW" || flag === "ABNORMAL") qcStatus = "Abnormal";
+
+                const matchedMasterParam = (orderItem as any)?.lab_test_master?.lab_test_parameter?.find(
+                  (p: any) =>
+                    (r.lab_test_parameter_id && p.lab_test_parameter_id === r.lab_test_parameter_id) ||
+                    (p.parameter_name && p.parameter_name.toLowerCase().trim() === r.parameter_name.toLowerCase().trim())
+                );
+
+                const resolvedUnit = (
+                  r.lab_test_parameter?.unit ||
+                  matchedMasterParam?.unit ||
+                  (orderItem as any)?.lab_test_master?.unit ||
+                  resolveStandardParameterUnit(r.parameter_name, testPanel) ||
+                  ""
+                ).trim();
+
+                let rawRefRange =
+                  r.lab_test_parameter?.ref_range_text ||
+                  (r.lab_test_parameter?.ref_range_low != null && r.lab_test_parameter?.ref_range_high != null
+                    ? `${r.lab_test_parameter.ref_range_low} - ${r.lab_test_parameter.ref_range_high}`
+                    : null) ||
+                  matchedMasterParam?.ref_range_text ||
+                  (matchedMasterParam?.ref_range_low != null && matchedMasterParam?.ref_range_high != null
+                    ? `${matchedMasterParam.ref_range_low} - ${matchedMasterParam.ref_range_high}`
+                    : null) ||
+                  orderItem.lab_test_master?.reference_range ||
+                  "";
+
+                if (!rawRefRange || rawRefRange === "—" || rawRefRange === "-" || rawRefRange.toLowerCase() === "normal") {
+                  rawRefRange = resolveStandardParameterRefRange(r.parameter_name, gender, testPanel);
+                } else {
+                  rawRefRange = formatGenderReferenceRange(rawRefRange, gender, resolvedUnit);
+                }
+
+                // Check if critical
+                if (qcStatus === "Normal" && r.result_value) {
+                  const evalFlag = evaluateAbnormalFlag(r.result_value, {
+                    referenceRange: rawRefRange !== "—" ? rawRefRange : undefined,
+                    unit: resolvedUnit,
+                  });
+                  if (evalFlag === "CRITICAL") qcStatus = "Critical";
+                  else if (evalFlag === "HIGH" || evalFlag === "LOW") qcStatus = "Abnormal";
+                }
+
+                const isApprovedParam =
+                  r.result_status === "Approved" ||
+                  parsedMeta?.overallDecision === "Approved" ||
+                  (Array.isArray(parsedMeta?.parameters) && parsedMeta.parameters.find((p: any) => p.parameter === r.parameter_name)?.approved === true);
+
+                return {
+                  id: r.lab_result_id || `res_${Math.random()}`,
+                  parameter: r.parameter_name,
+                  result: r.result_value || "—",
+                  approved: Boolean(isApprovedParam),
+                  observedValue: r.result_value || "—",
+                  unit: resolvedUnit,
+                  referenceRange: rawRefRange || "Normal",
+                  status: qcStatus,
+                };
+              });
+            }
+            return getDefaultQCParametersForPanel(testPanel);
+          })(),
           overallDecision: parsedMeta?.overallDecision || "Approved",
           reviewComments: parsedMeta?.text || commentString || "",
           clinicalCorrelation: parsedMeta?.clinicalCorrelation || "Correlate clinically with physical examination and history.",
@@ -438,8 +854,17 @@ export default function ReportGeneration() {
           approverRole: rep.employees?.designation || "Senior Pathologist",
           approvalDate: formatReportDate(rep.approved_datetime),
           signatureUrl: rep.digital_signature || "certified-default",
+          reportFile:
+            rep.report_file ||
+            (typeof window !== "undefined"
+              ? localStorage.getItem(`report_pdf_${rep.lab_report_id}`) ||
+                (rep.report_number ? localStorage.getItem(`report_pdf_${rep.report_number}`) : null)
+              : null) ||
+            null,
           sentOn: rep.delivered_datetime ? formatReportDate(rep.delivered_datetime) : undefined,
           deliveredOn: rep.delivered_datetime ? formatReportDate(rep.delivered_datetime) : undefined,
+          targetDate: targetDateFormatted,
+          targetDateIso,
         });
       });
 
@@ -461,14 +886,15 @@ export default function ReportGeneration() {
         if (existingReportIds.has(item.lab_order_item_id)) return;
 
         const parentOrder = orderMap.get(item.lab_order_id) || item.lab_order;
-        const patientId = parentOrder?.patient_history?.patient_id || parentOrder?.patient_history_id || `PAT00${idx + 1}`;
+        const orderBioData = (parentOrder?.patient_history as any)?.patient_bio_data || (item.lab_order?.patient_history as any)?.patient_bio_data;
+        const patientId = orderBioData?.patient_id || parentOrder?.patient_history?.patient_id || parentOrder?.patient_history_id || `PAT00${idx + 1}`;
         const patient = patientMap.get(patientId);
 
         const patientName = patient
           ? [patient.patient_first_name, patient.patient_middle_name, patient.patient_last_name].filter(Boolean).join(" ")
           : `Patient ${patientId}`;
         const age = patient?.patient_age || (patient?.patient_dob ? calculateAge(patient.patient_dob) : 32);
-        const gender = patient?.patient_gender || "Male";
+        const gender = orderBioData?.patient_gender || patient?.patient_gender || "Female";
         const patientAgeGender = `${gender} | ${age} Years`;
 
         const doctor = parentOrder?.employees;
@@ -491,37 +917,167 @@ export default function ReportGeneration() {
           localStorage.getItem(`report_approved_${item.lab_order_item_id}`) === "GENERATED"
         );
 
-        const status: "GENERATED" | "UNDER_REVIEW" =
-          isApproved || rawItemStatus === "REPORT GENERATED"
-            ? "GENERATED"
-            : "UNDER_REVIEW";
-
-        // Read custom test parameters if recorded in Testing Samples
-        const storedParamsStr = typeof window !== "undefined"
-          ? localStorage.getItem(`testing_sample_params_${item.lab_order_item_id}`)
+        // Read any previously reviewed approval status from localStorage
+        const storedReviewedParamsStr = typeof window !== "undefined"
+          ? localStorage.getItem(`report_params_${item.lab_order_item_id}`) ||
+            localStorage.getItem(`report_params_item-${item.lab_order_item_id}`)
           : null;
-        let itemParameters = getDefaultQCParametersForPanel(testName);
-        if (storedParamsStr) {
+
+        const storedReviewStatus = typeof window !== "undefined"
+          ? localStorage.getItem(`report_status_${item.lab_order_item_id}`) ||
+            localStorage.getItem(`report_status_item-${item.lab_order_item_id}`)
+          : null;
+
+        const reviewedParamsMap = new Map<string, boolean>();
+        if (storedReviewedParamsStr) {
           try {
-            const parsed = JSON.parse(storedParamsStr);
-            itemParameters = convertTestParamsToQCParams(parsed);
+            const parsed = JSON.parse(storedReviewedParamsStr);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((p: any) => {
+                if (p.parameter && p.approved != null) {
+                  reviewedParamsMap.set(p.parameter.toLowerCase().trim(), Boolean(p.approved));
+                }
+                if (p.id && p.approved != null) {
+                  reviewedParamsMap.set(p.id, Boolean(p.approved));
+                }
+              });
+            }
           } catch {}
         }
+
+        // Read custom test parameters from database lab_result first, with localStorage fallback
+        const storedParamsStr = typeof window !== "undefined"
+          ? localStorage.getItem(`testing_sample_params_${item.lab_order_item_id}`) ||
+            localStorage.getItem(`testing_sample_params_item-${item.lab_order_item_id}`) ||
+            localStorage.getItem(`testing_sample_params_smp-${item.lab_order_item_id}`)
+          : null;
+        let itemParameters = getDefaultQCParametersForPanel(testName);
+        if (item.lab_result && Array.isArray(item.lab_result) && item.lab_result.length > 0) {
+          itemParameters = item.lab_result.map((r) => {
+            let qcStatus: "Normal" | "Abnormal" | "Critical" = "Normal";
+            const flag = (r.abnormal_flag || "").toUpperCase();
+            if (flag === "CRITICAL" || flag.includes("CRIT")) qcStatus = "Critical";
+            else if (flag === "HIGH" || flag === "LOW" || flag === "ABNORMAL") qcStatus = "Abnormal";
+
+            // Fallback lookup from item.lab_test_master parameters if r.lab_test_parameter is null
+            const matchedMasterParam = item.lab_test_master?.lab_test_parameter?.find(
+              (p) =>
+                (r.lab_test_parameter_id && p.lab_test_parameter_id === r.lab_test_parameter_id) ||
+                (p.parameter_name && p.parameter_name.toLowerCase().trim() === r.parameter_name.toLowerCase().trim())
+            );
+
+            const resolvedUnit = (
+              r.lab_test_parameter?.unit ||
+              matchedMasterParam?.unit ||
+              item.lab_test_master?.unit ||
+              resolveStandardParameterUnit(r.parameter_name, testName) ||
+              ""
+            ).trim();
+
+            let rawRefRange =
+              r.lab_test_parameter?.ref_range_text ||
+              (r.lab_test_parameter?.ref_range_low != null && r.lab_test_parameter?.ref_range_high != null
+                ? `${r.lab_test_parameter.ref_range_low} - ${r.lab_test_parameter.ref_range_high}`
+                : null) ||
+              matchedMasterParam?.ref_range_text ||
+              (matchedMasterParam?.ref_range_low != null && matchedMasterParam?.ref_range_high != null
+                ? `${matchedMasterParam.ref_range_low} - ${matchedMasterParam.ref_range_high}`
+                : null) ||
+              item.lab_test_master?.reference_range ||
+              "";
+
+            if (!rawRefRange || rawRefRange === "—" || rawRefRange === "-" || rawRefRange.toLowerCase() === "normal") {
+              rawRefRange = resolveStandardParameterRefRange(r.parameter_name, gender, testName);
+            } else {
+              rawRefRange = formatGenderReferenceRange(rawRefRange, gender, resolvedUnit);
+            }
+
+            const resolvedRefRange = rawRefRange || "Normal";
+
+            // Dynamic evaluation check for Critical / Abnormal values
+            if (qcStatus === "Normal" && r.result_value) {
+              const evalFlag = evaluateAbnormalFlag(r.result_value, {
+                refRangeLow: r.lab_test_parameter?.ref_range_low != null ? Number(r.lab_test_parameter.ref_range_low) : (matchedMasterParam?.ref_range_low != null ? Number(matchedMasterParam.ref_range_low) : null),
+                refRangeHigh: r.lab_test_parameter?.ref_range_high != null ? Number(r.lab_test_parameter.ref_range_high) : (matchedMasterParam?.ref_range_high != null ? Number(matchedMasterParam.ref_range_high) : null),
+                referenceRange: resolvedRefRange !== "—" ? resolvedRefRange : undefined,
+                unit: resolvedUnit,
+              });
+              if (evalFlag === "CRITICAL") qcStatus = "Critical";
+              else if (evalFlag === "HIGH" || evalFlag === "LOW") qcStatus = "Abnormal";
+            }
+
+            // NOT approved by default. Only approved if explicitly approved in review or already certified
+            const isApprovedParam =
+              isApproved ||
+              rawItemStatus === "REPORT GENERATED" ||
+              r.result_status === "Approved" ||
+              reviewedParamsMap.get(r.parameter_name.toLowerCase().trim()) === true ||
+              (r.lab_result_id && reviewedParamsMap.get(r.lab_result_id) === true);
+
+            return {
+              id: r.lab_result_id || `res_${Math.random()}`,
+              parameter: r.parameter_name,
+              result: r.result_value || "—",
+              approved: Boolean(isApprovedParam),
+              observedValue: r.result_value || "—",
+              unit: resolvedUnit,
+              referenceRange: resolvedRefRange,
+              status: qcStatus,
+            };
+          });
+        } else if (storedParamsStr) {
+          try {
+            const parsed = JSON.parse(storedParamsStr);
+            itemParameters = convertTestParamsToQCParams(parsed).map((p) => ({
+              ...p,
+              approved:
+                isApproved ||
+                rawItemStatus === "REPORT GENERATED" ||
+                reviewedParamsMap.get(p.parameter.toLowerCase().trim()) === true ||
+                Boolean(p.approved),
+            }));
+          } catch {}
+        }
+
+        const hasCriticalParam = itemParameters.some((p) => p.status === "Critical");
+
+        const status: "GENERATED" | "REVIEWED" | "UNDER_REVIEW" | "CRITICAL" =
+          isApproved || rawItemStatus === "REPORT GENERATED"
+            ? "GENERATED"
+            : storedReviewStatus === "REVIEWED"
+            ? "REVIEWED"
+            : hasCriticalParam || storedReviewStatus === "CRITICAL"
+            ? "CRITICAL"
+            : "UNDER_REVIEW";
 
         const storedResult = typeof window !== "undefined"
           ? localStorage.getItem(`testing_sample_result_${item.lab_order_item_id}`)
           : null;
 
-        const findingsSummary = storedResult || item.remarks || (
-          isTestingCompleted
+        const dbSummary =
+          item.lab_result && item.lab_result.length > 0
+            ? item.lab_result
+                .filter((r) => r.result_value && r.result_value.trim() !== "")
+                .map((r) => `${r.parameter_name.split(" ")[0]}: ${r.result_value}`)
+                .join(", ")
+            : null;
+
+        const findingsSummary =
+          storedResult ||
+          dbSummary ||
+          item.remarks ||
+          (isTestingCompleted
             ? "Testing completed on analyzer bench. All test parameters entered and awaiting review."
             : isVerified
               ? "Sample verified. Analyzer test parameters entered and awaiting review."
-              : "Sample intake in progress. Awaiting verification and testing."
-        );
+              : "Sample intake in progress. Awaiting verification and testing.");
 
         existingReportIds.add(item.lab_order_item_id);
         existingSampleIds.add(sampleBarcode);
+
+        const rawTargetDate = item.target_date || (parentOrder as any)?.target_date;
+        const targetDateFormatted = rawTargetDate ? formatTargetDate(rawTargetDate) : undefined;
+        const targetDateIso = rawTargetDate ? (normalizeToIsoDate(rawTargetDate) || undefined) : undefined;
 
         mappedList.push({
           id: `item-${item.lab_order_item_id}`,
@@ -551,6 +1107,13 @@ export default function ReportGeneration() {
           approverName: "Dr. Sarah Johnson",
           approverRole: "Senior Pathologist",
           signatureUrl: "certified-default",
+          reportFile:
+            typeof window !== "undefined"
+              ? localStorage.getItem(`report_pdf_${item.lab_order_item_id}`) ||
+                localStorage.getItem(`report_pdf_item-${item.lab_order_item_id}`)
+              : null,
+          targetDate: targetDateFormatted,
+          targetDateIso,
         });
       });
 
@@ -675,6 +1238,9 @@ export default function ReportGeneration() {
 
         const reportId = `RPT-${sampleId}`;
         const patientName = s.patientName || "Patient";
+        const rawTargetDate = s.targetDate || s.target_date;
+        const targetDateFormatted = rawTargetDate ? formatTargetDate(rawTargetDate) : undefined;
+        const targetDateIso = s.targetDateIso || (rawTargetDate ? (normalizeToIsoDate(rawTargetDate) || undefined) : undefined);
 
         mappedList.push({
           id: `rep-${s.id}`,
@@ -686,7 +1252,7 @@ export default function ReportGeneration() {
           patientPid: s.patientPid || s.patientId || "P000124",
           patientName,
           patientAgeGender: s.patientAgeGender || "32 Years / Male",
-          patientAvatar: s.patientAvatar || "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=256&h=256",
+          patientAvatar: s.patientAvatar || undefined,
           patientEmail: s.patientEmail || `${patientName.toLowerCase().replace(/\s+/g, ".")}@email.com`,
           doctorName: s.doctorName || "Dr. Sarah Johnson",
           doctorEmail: s.doctorEmail || "doctor@hospital.com",
@@ -705,6 +1271,14 @@ export default function ReportGeneration() {
           approverName: "Dr. Sarah Johnson",
           approverRole: "Senior Pathologist",
           signatureUrl: "certified-default",
+          reportFile:
+            typeof window !== "undefined"
+              ? localStorage.getItem(`report_pdf_${s.id}`) ||
+                localStorage.getItem(`report_pdf_rep-${s.id}`) ||
+                (sampleId ? localStorage.getItem(`report_pdf_${sampleId}`) : null)
+              : null,
+          targetDate: targetDateFormatted,
+          targetDateIso,
         });
 
         existingSampleIds.add(sampleId);
@@ -757,6 +1331,7 @@ export default function ReportGeneration() {
       });
 
       if (completedOnlyReports.length > 0) {
+        completedOnlyReports.sort(compareReportItems);
         setReports(completedOnlyReports);
         setSelectedReport((prev) => {
           if (!prev) return completedOnlyReports[0];
@@ -779,10 +1354,20 @@ export default function ReportGeneration() {
     fetchRealData();
   }, [fetchRealData]);
 
-  // Workflow View Mode: "table" | "quality-check" | "approve-results" | "delivered-status"
+  // Workflow View Mode: "table" | "quality-check" | "approve-results" | "delivered-status" | "preview"
   const [viewMode, setViewMode] = useState<
-    "table" | "quality-check" | "approve-results" | "delivered-status"
+    "table" | "quality-check" | "approve-results" | "delivered-status" | "preview"
   >("table");
+  const [returnView, setReturnView] = useState<"table" | "delivered-status">("table");
+
+  const handleOpenPreview = (
+    report: ReportItem,
+    from: "table" | "delivered-status" = "delivered-status"
+  ) => {
+    setSelectedReport(report);
+    setReturnView(from);
+    setViewMode("preview");
+  };
 
   // Selected Report & Data
   const [selectedReport, setSelectedReport] = useState<ReportItem | null>(null);
@@ -815,7 +1400,7 @@ export default function ReportGeneration() {
     if (report.parameters && report.parameters.length > 0) {
       setCurrentParameters(report.parameters);
     } else {
-      setCurrentParameters(DEFAULT_QC_PARAMETERS);
+      setCurrentParameters(DEFAULT_QC_PARAMETERS.map(p => ({ ...p, approved: false })));
     }
     setOverallDecision(report.overallDecision || "Approved");
     setReviewComments(report.reviewComments || "");
@@ -838,10 +1423,13 @@ export default function ReportGeneration() {
     });
   };
 
-  const handleSubmitReview = (proceedToApproval = false) => {
+  const handleSubmitReview = async (proceedToApproval = false) => {
     if (!selectedReport) return;
+    const hasCriticalParam = currentParameters.some((p) => p.status === "Critical");
     const updatedStatus: "REVIEWED" | "CRITICAL" | "UNDER_REVIEW" =
       overallDecision === "Rejected"
+        ? "CRITICAL"
+        : hasCriticalParam
         ? "CRITICAL"
         : "REVIEWED";
 
@@ -867,10 +1455,11 @@ export default function ReportGeneration() {
       parameters: currentParameters,
     } : null));
 
+    const rawId = selectedReport.id.replace("rep-", "").replace("item-", "");
+
     if (typeof window !== "undefined") {
       try {
         localStorage.setItem(`report_status_${selectedReport.id}`, updatedStatus);
-        const rawId = selectedReport.id.replace("rep-", "").replace("item-", "");
         localStorage.setItem(`report_status_${rawId}`, updatedStatus);
         if (selectedReport.sampleId) {
           localStorage.setItem(`report_status_${selectedReport.sampleId}`, updatedStatus);
@@ -878,9 +1467,34 @@ export default function ReportGeneration() {
         if (selectedReport.reportId) {
           localStorage.setItem(`report_status_${selectedReport.reportId}`, updatedStatus);
         }
+        // Save the reviewed parameters with their approved states!
+        localStorage.setItem(`report_params_${selectedReport.id}`, JSON.stringify(currentParameters));
+        localStorage.setItem(`report_params_${rawId}`, JSON.stringify(currentParameters));
       } catch (e) {
         console.warn("Could not save review status to localStorage", e);
       }
+    }
+
+    // Persist parameter approval states to PostgreSQL database
+    if (rawId && !rawId.startsWith("s") && !rawId.startsWith("ts-")) {
+      const batchParams = currentParameters.map((p) => ({
+        parameter_name: p.parameter,
+        result_value: p.result || "",
+        result_status: p.approved ? "Approved" : "Completed",
+        abnormal_flag: p.status === "Critical" ? "CRITICAL" : p.status === "Abnormal" ? "HIGH" : "NORMAL",
+        unit: p.unit || undefined,
+        reference_range: p.referenceRange || undefined,
+      }));
+
+      await labResultApi.batchSave({
+        lab_order_item_id: rawId,
+        barcode: selectedReport.barcode,
+        sample_type: selectedReport.sampleType,
+        markCompleted: true,
+        comments: reviewComments || undefined,
+        verified_by: currentUser?.username,
+        parameters: batchParams,
+      }).catch((err) => console.warn("Could not persist QC approval to database:", err));
     }
 
     if (proceedToApproval) {
@@ -894,7 +1508,7 @@ export default function ReportGeneration() {
     } else {
       toast({
         title: "Quality Review Submitted",
-        description: `Report ${selectedReport.reportId} marked as REVIEWED. Ready for Approve & Sign.`,
+        description: `Report ${selectedReport.reportId} marked as ${updatedStatus}. Parameter approvals saved.`,
       });
       setViewMode("table");
     }
@@ -955,7 +1569,7 @@ export default function ReportGeneration() {
     }
   };
 
-  const handleConfirmApproveAndSign = (viewDeliveredDirectly = false) => {
+  const handleConfirmApproveAndSign = async (viewDeliveredDirectly = false) => {
     if (!selectedReport) return;
     if (!digitalSignature) {
       toast({
@@ -977,6 +1591,52 @@ export default function ReportGeneration() {
     const nowSent = nowFormatted;
     const nowDelivered = nowFormatted;
 
+    // 1. Mark all parameters approved for final diagnostic certification
+    const certifiedParameters: QualityCheckParameter[] = (selectedReport.parameters || []).map((p) => ({
+      ...p,
+      approved: true,
+    }));
+
+    // 2. Generate the accredited PDF document
+    let generatedPdfBase64: string | null = null;
+    try {
+      const pdfResult = generateLabReportPdf({
+        reportId: selectedReport.reportId,
+        requestId: selectedReport.requestId,
+        barcode: selectedReport.barcode || getDisplayBarcode(selectedReport),
+        sampleId: selectedReport.sampleId,
+        patientName: selectedReport.patientName,
+        patientId: selectedReport.patientId,
+        patientPid: selectedReport.patientPid,
+        patientAgeGender: selectedReport.patientAgeGender,
+        patientAvatar: selectedReport.patientAvatar,
+        patientEmail: selectedReport.patientEmail,
+        doctorName: selectedReport.doctorName,
+        doctorEmail: selectedReport.doctorEmail,
+        testPanel: selectedReport.testPanel,
+        sampleType: selectedReport.sampleType,
+        collectedOn: selectedReport.generatedDate || nowFormatted,
+        reportedOn: selectedReport.completedDate || approvalDateTime || nowFormatted,
+        targetDate: selectedReport.targetDate || "—",
+        generatedDate: selectedReport.generatedDate || nowFormatted,
+        completedDate: selectedReport.completedDate || nowFormatted,
+        findingsSummary: selectedReport.findingsSummary,
+        clinicalRemarks: approvalRemarks || selectedReport.findingsSummary,
+        clinicalCorrelation,
+        approvalRemarks,
+        approverName: approverName || "Sarah Johnson",
+        approverRole: approverRole || "Senior Pathologist (MD, DNB)",
+        approvalDate: approvalDateTime,
+        signatureUrl: digitalSignature,
+        overallDecision: "Approved",
+        parameters: certifiedParameters,
+      });
+      generatedPdfBase64 = pdfResult.pdfBase64;
+    } catch (pdfErr) {
+      console.error("Failed to generate accredited PDF document:", pdfErr);
+    }
+
+    // 3. Update React local states with PDF file data
     setReports((prev) =>
       prev.map((r) =>
         r.id === selectedReport.id
@@ -989,6 +1649,9 @@ export default function ReportGeneration() {
               approverRole,
               approvalDate: approvalDateTime,
               signatureUrl: digitalSignature,
+              reportFile: generatedPdfBase64 || r.reportFile,
+              parameters: certifiedParameters,
+              overallDecision: "Approved",
               sentOn: nowSent,
               deliveredOn: nowDelivered,
             }
@@ -996,7 +1659,7 @@ export default function ReportGeneration() {
       ),
     );
 
-    const updated = {
+    const updated: ReportItem = {
       ...selectedReport,
       status: "GENERATED" as const,
       clinicalCorrelation,
@@ -1005,6 +1668,9 @@ export default function ReportGeneration() {
       approverRole,
       approvalDate: approvalDateTime,
       signatureUrl: digitalSignature,
+      reportFile: generatedPdfBase64 || selectedReport.reportFile,
+      parameters: certifiedParameters,
+      overallDecision: "Approved",
       sentOn: nowSent,
       deliveredOn: nowDelivered,
     };
@@ -1012,60 +1678,112 @@ export default function ReportGeneration() {
     setSelectedReport(updated);
 
     try {
-      localStorage.setItem(`report_status_${selectedReport.id}`, "GENERATED");
       const rawId = selectedReport.id.replace("rep-", "").replace("item-", "");
-      localStorage.setItem(`report_status_${rawId}`, "GENERATED");
-      if (selectedReport.sampleId) {
-        localStorage.setItem(`report_status_${selectedReport.sampleId}`, "GENERATED");
-      }
-      if (selectedReport.reportId) {
-        localStorage.setItem(`report_status_${selectedReport.reportId}`, "GENERATED");
-      }
-      localStorage.setItem(`report_approved_${selectedReport.id}`, "GENERATED");
-      localStorage.setItem(`report_approved_rep_${selectedReport.reportId}`, "GENERATED");
-      if (selectedReport.sampleId) {
-        localStorage.setItem(`report_approved_smp_${selectedReport.sampleId}`, "GENERATED");
+
+      // 4. Cache state and PDF in localStorage for instant retrieval & offline resilience
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem(`report_status_${selectedReport.id}`, "GENERATED");
+          localStorage.setItem(`report_status_${rawId}`, "GENERATED");
+          if (selectedReport.sampleId) {
+            localStorage.setItem(`report_status_${selectedReport.sampleId}`, "GENERATED");
+          }
+          if (selectedReport.reportId) {
+            localStorage.setItem(`report_status_${selectedReport.reportId}`, "GENERATED");
+          }
+          localStorage.setItem(`report_approved_${selectedReport.id}`, "GENERATED");
+          localStorage.setItem(`report_approved_rep_${selectedReport.reportId}`, "GENERATED");
+          if (selectedReport.sampleId) {
+            localStorage.setItem(`report_approved_smp_${selectedReport.sampleId}`, "GENERATED");
+          }
+          localStorage.setItem(`report_params_${selectedReport.id}`, JSON.stringify(certifiedParameters));
+          localStorage.setItem(`report_params_${rawId}`, JSON.stringify(certifiedParameters));
+
+          if (generatedPdfBase64) {
+            try {
+              localStorage.setItem(`report_pdf_${selectedReport.id}`, generatedPdfBase64);
+              localStorage.setItem(`report_pdf_${selectedReport.reportId}`, generatedPdfBase64);
+              localStorage.setItem(`report_pdf_${rawId}`, generatedPdfBase64);
+              if (selectedReport.sampleId) {
+                localStorage.setItem(`report_pdf_${selectedReport.sampleId}`, generatedPdfBase64);
+              }
+            } catch (storageQuotaErr) {
+              console.warn("Storage quota full for localStorage PDF cache:", storageQuotaErr);
+            }
+          }
+        } catch (storageErr) {
+          console.warn("Could not write to localStorage:", storageErr);
+        }
       }
 
-      // If it corresponds to a real backend lab order, call the backend API
+      // 5. Store generated PDF in PostgreSQL database (lab_report table, report_file column)
       if (
         selectedReport.requestId &&
         !selectedReport.requestId.startsWith("TRF") &&
         !selectedReport.requestId.startsWith("REQ") &&
         !selectedReport.requestId.startsWith("BC")
       ) {
-        labReportApi
+        await labReportApi
           .create({
             lab_order_id: selectedReport.requestId,
             report_number: selectedReport.reportId,
             report_status: "Generated",
+            report_file: generatedPdfBase64 || undefined,
             digital_signature: digitalSignature || undefined,
+            parameters: certifiedParameters,
+            clinical_correlation: clinicalCorrelation,
+            overall_decision: "Approved",
             report_comment: JSON.stringify({
               text: approvalRemarks,
               clinicalCorrelation,
               overallDecision: "Approved",
-              parameters: selectedReport.parameters,
+              parameters: certifiedParameters,
             }),
           })
-          .catch((e) => console.warn("Could not save report to backend:", e));
+          .catch((e) => console.warn("Could not save report PDF to backend database:", e));
       }
 
+      // 6. Update lab_result individual parameter rows to Approved status in database
+      if (rawId && !rawId.startsWith("s") && !rawId.startsWith("ts-")) {
+        const batchParams = certifiedParameters.map((p) => ({
+          parameter_name: p.parameter,
+          result_value: p.result || "",
+          result_status: "Approved",
+          abnormal_flag: p.status === "Critical" ? "CRITICAL" : p.status === "Abnormal" ? "HIGH" : "NORMAL",
+          unit: p.unit || undefined,
+          reference_range: p.referenceRange || undefined,
+        }));
+
+        await labResultApi.batchSave({
+          lab_order_item_id: rawId,
+          barcode: selectedReport.barcode,
+          sample_type: selectedReport.sampleType,
+          markCompleted: true,
+          comments: approvalRemarks || undefined,
+          verified_by: approverName,
+          parameters: batchParams,
+        }).catch((err) => console.warn("Could not persist parameter approval batch to database:", err));
+      }
+
+      // 7. Update lab_order_item status to Report Generated
       const realItemId = selectedReport.id.replace("item-", "").replace("rep-", "");
       if (realItemId && !realItemId.startsWith("s") && !realItemId.startsWith("ts-")) {
-        labOrderItemApi
+        await labOrderItemApi
           .update(realItemId, {
             item_status: "Report Generated",
             remarks: approvalRemarks || "Report Approved & Digitally Signed",
           })
           .catch((e) => console.warn("Could not update lab order item status:", e));
       }
+
+      fetchRealData();
     } catch (err) {
-      console.warn("Could not persist approval state:", err);
+      console.warn("Could not persist approval state and PDF to database:", err);
     }
 
     toast({
-      title: "Report Approved & Digitally Signed",
-      description: `Report ${selectedReport.reportId} is certified and ready for dispatch.`,
+      title: "Report Approved & PDF Generated",
+      description: `Report ${selectedReport.reportId} PDF compiled and saved to database.`,
     });
 
     if (viewDeliveredDirectly) {
@@ -1081,13 +1799,110 @@ export default function ReportGeneration() {
     setViewMode("delivered-status");
   };
 
-  const handleViewPortalReport = (portalName: string) => {
+  const handlePrintReport = (report: ReportItem) => {
+    const certifiedParameters = (report.parameters || []).map((p) => ({
+      ...p,
+      approved: true,
+    }));
+    openLabReportPdfPreview(
+      {
+        reportId: report.reportId,
+        requestId: report.requestId,
+        barcode: report.barcode || getDisplayBarcode(report),
+        sampleId: report.sampleId,
+        patientName: report.patientName,
+        patientId: report.patientId,
+        patientPid: report.patientPid,
+        patientAgeGender: report.patientAgeGender,
+        patientAvatar: report.patientAvatar,
+        patientEmail: report.patientEmail,
+        doctorName: report.doctorName,
+        doctorEmail: report.doctorEmail,
+        testPanel: report.testPanel,
+        sampleType: report.sampleType,
+        collectedOn: report.generatedDate || new Date().toLocaleDateString("en-GB"),
+        reportedOn:
+          report.completedDate ||
+          report.approvalDate ||
+          report.generatedDate ||
+          new Date().toLocaleDateString("en-GB"),
+        targetDate: report.targetDate || "—",
+        generatedDate: report.generatedDate,
+        completedDate: report.completedDate,
+        findingsSummary: report.findingsSummary,
+        clinicalRemarks: report.approvalRemarks || report.findingsSummary,
+        clinicalCorrelation: report.clinicalCorrelation,
+        approvalRemarks: report.approvalRemarks,
+        approverName: report.approverName || "Sarah Johnson",
+        approverRole: report.approverRole || "Senior Pathologist (MD, DNB)",
+        approvalDate: report.approvalDate,
+        signatureUrl: report.signatureUrl,
+        overallDecision: report.overallDecision || "Approved",
+        parameters: certifiedParameters,
+      },
+      report.reportId
+    );
     toast({
-      title: `Viewing in ${portalName}`,
-      description: selectedReport
-        ? `Opening diagnostic report ${selectedReport.reportId} portal preview.`
-        : "Opening portal preview.",
+      title: "Opening Diagnostic Report PDF",
+      description: `Opening PDF preview for ${report.patientName} (${report.reportId}).`,
     });
+  };
+
+  const handleDownloadReportPdf = (report: ReportItem) => {
+    const certifiedParameters = (report.parameters || []).map((p) => ({
+      ...p,
+      approved: true,
+    }));
+    downloadLabReportPdf({
+      reportId: report.reportId,
+      requestId: report.requestId,
+      barcode: report.barcode || getDisplayBarcode(report),
+      sampleId: report.sampleId,
+      patientName: report.patientName,
+      patientId: report.patientId,
+      patientPid: report.patientPid,
+      patientAgeGender: report.patientAgeGender,
+      patientAvatar: report.patientAvatar,
+      patientEmail: report.patientEmail,
+      doctorName: report.doctorName,
+      doctorEmail: report.doctorEmail,
+      testPanel: report.testPanel,
+      sampleType: report.sampleType,
+      collectedOn: report.generatedDate || new Date().toLocaleDateString("en-GB"),
+      reportedOn:
+        report.completedDate ||
+        report.approvalDate ||
+        report.generatedDate ||
+        new Date().toLocaleDateString("en-GB"),
+      targetDate: report.targetDate || "—",
+      generatedDate: report.generatedDate,
+      completedDate: report.completedDate,
+      findingsSummary: report.findingsSummary,
+      clinicalRemarks: report.approvalRemarks || report.findingsSummary,
+      clinicalCorrelation: report.clinicalCorrelation,
+      approvalRemarks: report.approvalRemarks,
+      approverName: report.approverName || "Sarah Johnson",
+      approverRole: report.approverRole || "Senior Pathologist (MD, DNB)",
+      approvalDate: report.approvalDate,
+      signatureUrl: report.signatureUrl,
+      overallDecision: report.overallDecision || "Approved",
+      parameters: certifiedParameters,
+    });
+    toast({
+      title: "PDF Report Downloaded",
+      description: `Diagnostic report for ${report.patientName} saved as PDF.`,
+    });
+  };
+
+  const handleViewPortalReport = (portalName: string) => {
+    if (selectedReport) {
+      handlePrintReport(selectedReport);
+    } else {
+      toast({
+        title: `Viewing in ${portalName}`,
+        description: "Opening portal preview.",
+      });
+    }
   };
 
   const handleGenerateReport = (id: string) => {
@@ -1100,13 +1915,6 @@ export default function ReportGeneration() {
     toast({
       title: "Report Generated",
       description: "Diagnostic report compiled and certified for dispatch.",
-    });
-  };
-
-  const handlePrintReport = (report: ReportItem) => {
-    toast({
-      title: "Printing Diagnostic Report",
-      description: `Sending report ${report.reportId} for ${report.patientName} to printer.`,
     });
   };
 
@@ -1126,7 +1934,7 @@ export default function ReportGeneration() {
         statusFilter === "ALL" || rep.status === statusFilter;
 
       return matchesSearch && matchesStatus;
-    });
+    }).sort(compareReportItems);
   }, [reports, searchQuery, statusFilter]);
 
   const generatedCount = useMemo(
@@ -1154,6 +1962,86 @@ export default function ReportGeneration() {
     [reports],
   );
 
+  /* ---------- Admin Dashboard Horizontal KPI Track Scroll State ---------- */
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollButtons = useCallback(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }, []);
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    updateScrollButtons();
+    el.addEventListener("scroll", updateScrollButtons, { passive: true });
+    window.addEventListener("resize", updateScrollButtons);
+    return () => {
+      el.removeEventListener("scroll", updateScrollButtons);
+      window.removeEventListener("resize", updateScrollButtons);
+    };
+  }, [updateScrollButtons]);
+
+  const handleKpiScroll = (direction: "left" | "right") => {
+    const el = trackRef.current;
+    if (!el) return;
+    const scrollAmount = 450;
+    el.scrollBy({
+      left: direction === "left" ? -scrollAmount : scrollAmount,
+      behavior: "smooth",
+    });
+  };
+
+  /* ---------- KPI Cards configuration (Admin Dashboard style) ---------- */
+  const kpiCards = useMemo(
+    () => [
+      {
+        id: "total-reports",
+        label: "Total Reports",
+        subLabel: "Diagnostic reports in queue",
+        value: reports.length,
+        tag: "Total",
+        bg: "#D6E3FF",
+        valueColor: "#00488D",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <FileText className="w-[17px] h-[17px]" color="#00488D" />,
+        isActive: statusFilter === "ALL",
+        onClick: () => setStatusFilter("ALL"),
+      },
+      {
+        id: "report-generated",
+        label: "Report Generated",
+        subLabel: "Approved & digitally signed",
+        value: generatedCount,
+        tag: `${reports.length > 0 ? Math.round((generatedCount / reports.length) * 100) : 0}%`,
+        bg: "rgba(0, 200, 150, 0.12)",
+        valueColor: "#00A87E",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <CheckCircle2 className="w-[17px] h-[17px]" color="#00A87E" />,
+        isActive: statusFilter === "GENERATED",
+        onClick: () => setStatusFilter((prev) => (prev === "GENERATED" ? "ALL" : "GENERATED")),
+      },
+      {
+        id: "report-pending",
+        label: "Report Pending",
+        subLabel: "Awaiting approval / sign",
+        value: pendingReportCount,
+        tag: "Pending",
+        bg: "rgba(255, 107, 53, 0.12)",
+        valueColor: "#7B3200",
+        iconBg: "#FFDBCB",
+        icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
+        isActive: statusFilter === "UNDER_REVIEW",
+        onClick: () => setStatusFilter((prev) => (prev === "UNDER_REVIEW" ? "ALL" : "UNDER_REVIEW")),
+      },
+    ],
+    [reports.length, generatedCount, pendingReportCount, statusFilter]
+  );
+
   return (
     <div className="min-h-screen flex bg-[#f8fafc] text-slate-800 antialiased selection:bg-blue-100 font-sans">
       {/* Global Lab Navigation Sidebar */}
@@ -1164,7 +2052,346 @@ export default function ReportGeneration() {
 
       {/* Main Content Area */}
       <div className="flex-1 ml-64 min-h-screen flex flex-col min-w-0 bg-[#f8fafc]">
-        {viewMode === "delivered-status" && selectedReport ? (
+        {viewMode === "preview" && selectedReport ? (
+          /* ========================================================================= */
+          /* BEGIN: Clinical Precision Diagnostics - Preview Report View               */
+          /* ========================================================================= */
+          <main
+            className="flex-1 bg-white overflow-y-auto px-6 sm:px-12 py-10 flex flex-col justify-between"
+            data-purpose="report-preview-document"
+          >
+            <div className="max-w-[1020px] w-full mx-auto">
+              {/* Top Navigation Back Button */}
+              <div className="mb-6 print-hide">
+                <button
+                  type="button"
+                  onClick={() => setViewMode(returnView)}
+                  className="inline-flex items-center text-[13.5px] font-semibold text-[#0284c7] hover:text-[#0369a1] transition-colors cursor-pointer"
+                >
+                  <svg
+                    className="w-4 h-4 mr-1 stroke-[2.5]"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      d="M15.75 19.5L8.25 12l7.5-7.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  {returnView === "delivered-status" ? "Back to Delivery Details" : "Back to Reports"}
+                </button>
+              </div>
+
+              {/* Overdue Warning Banner */}
+              {isReportOverdue(selectedReport) && (
+                <div className="mb-6 rounded-xl border border-rose-300 bg-rose-50/80 px-4 py-3 text-sm text-rose-900 flex items-center justify-between print-hide">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-2.5 w-2.5 rounded-full bg-rose-600 animate-pulse" />
+                    <span className="font-bold text-rose-800">REPORT OVERDUE:</span>
+                    <span>Target completion date was {selectedReport.targetDate || "passed"}. Expedite report dispatch immediately.</span>
+                  </div>
+                  <span className="px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide bg-rose-600 text-white rounded">
+                    OVERDUE
+                  </span>
+                </div>
+              )}
+
+              {/* BEGIN: ReportHeader */}
+              <header className="text-center pt-2">
+                <h2 className="text-2xl lg:text-[26px] font-black tracking-wider text-black uppercase">
+                  CLINICAL PRECISION DIAGNOSTICS
+                </h2>
+                <p className="text-[11px] font-semibold tracking-widest text-gray-800 uppercase mt-1">
+                  EXCELLENCE IN MEDICAL TESTING &amp; RESEARCH
+                </p>
+                <p className="text-[11px] text-gray-600 mt-1 font-normal">
+                  123 Medical Plaza, Health District, NY 10001 | Ph: +1 (555) 012-3456 | Web: www.clinicalprecision.com
+                </p>
+                {/* Horizontal Thick Bar Separator */}
+                <div className="w-full h-[2.5px] bg-black mt-3 mb-6" />
+              </header>
+              {/* END: ReportHeader */}
+
+              {/* BEGIN: PatientAndSampleMetadata */}
+              <section
+                aria-label="Patient and Specimen Metadata"
+                className="flex flex-col sm:flex-row items-center justify-between gap-6 py-2 px-1 mb-8"
+              >
+                {/* Patient Info with circular avatar */}
+                <div className="flex items-center gap-5 w-full sm:w-1/2">
+                  <div className="w-16 h-16 rounded-full overflow-hidden shrink-0 border-2 border-slate-100 shadow-sm flex items-center justify-center bg-[#E8F0FE]">
+                    {selectedReport.patientAvatar ? (
+                      <img
+                        alt={`Patient ${selectedReport.patientName}`}
+                        className="w-full h-full object-cover"
+                        src={selectedReport.patientAvatar}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    ) : (
+                      <span className="text-[#00488D] font-bold text-xl select-none">
+                        {selectedReport.patientName ? selectedReport.patientName.slice(0, 2).toUpperCase() : "P"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-[130px_1fr] text-[13px] gap-y-1.5 font-medium">
+                    <span className="font-bold text-black uppercase tracking-tight">
+                      PATIENT NAME:
+                    </span>
+                    <span className="text-gray-900 font-semibold">
+                      {selectedReport.patientName}
+                    </span>
+                    <span className="font-bold text-black uppercase tracking-tight">
+                      PATIENT ID:
+                    </span>
+                    <span className="text-gray-900 font-mono">
+                      {selectedReport.patientPid || selectedReport.patientId}
+                    </span>
+                    <span className="font-bold text-black uppercase tracking-tight">
+                      AGE / GENDER:
+                    </span>
+                    <span className="text-gray-900">
+                      {selectedReport.patientAgeGender || "-"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Sample Details */}
+                <div className="w-full sm:w-1/2 flex justify-start sm:justify-end">
+                  <div className="grid grid-cols-[130px_1fr] text-[13px] gap-y-1.5 font-medium">
+                    <span className="font-bold text-black uppercase tracking-tight">
+                      BARCODE:
+                    </span>
+                    <span className="text-gray-900 font-mono font-semibold">
+                      {getDisplayBarcode(selectedReport)}
+                    </span>
+                    <span className="font-bold text-black uppercase tracking-tight">
+                      TEST NAME:
+                    </span>
+                    <span className="text-gray-900 font-semibold">
+                      {selectedReport.testPanel}
+                    </span>
+                    <span className="font-bold text-black uppercase tracking-tight">
+                      COLLECTED ON:
+                    </span>
+                    <span className="text-gray-900">
+                      {selectedReport.generatedDate || "-"}
+                    </span>
+                    <span className="font-bold text-black uppercase tracking-tight">
+                      REPORTED ON:
+                    </span>
+                    <span className="text-gray-900">
+                      {selectedReport.completedDate || selectedReport.approvalDate || selectedReport.generatedDate || "-"}
+                    </span>
+                    <span className="font-bold text-black uppercase tracking-tight">
+                      TARGET DATE:
+                    </span>
+                    <span className="text-gray-900 font-semibold flex items-center gap-1.5">
+                      <span className={isReportOverdue(selectedReport) ? "text-rose-700 font-bold" : ""}>
+                        {selectedReport.targetDate || "-"}
+                      </span>
+                      {isReportOverdue(selectedReport) && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                          OVERDUE
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              </section>
+              {/* END: PatientAndSampleMetadata */}
+
+              {/* BEGIN: LaboratoryTestResultsTable */}
+              <section
+                aria-label="Diagnostic Results Table"
+                className="overflow-x-auto mb-8"
+              >
+                <table className="w-full text-left border border-black text-[13px] border-collapse">
+                  <thead>
+                    <tr className="bg-gray-100 font-bold text-black uppercase text-[11px] tracking-wider border border-black">
+                      <th
+                        className="py-2.5 px-4 font-bold border border-black"
+                        scope="col"
+                      >
+                        PARAMETER
+                      </th>
+                      <th
+                        className="py-2.5 px-4 text-center font-bold border border-black"
+                        scope="col"
+                      >
+                        RESULT
+                      </th>
+                      <th
+                        className="py-2.5 px-4 text-center font-bold border border-black"
+                        scope="col"
+                      >
+                        UNIT
+                      </th>
+                      <th
+                        className="py-2.5 px-4 text-center font-bold border border-black"
+                        scope="col"
+                      >
+                        REFERENCE RANGE
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-gray-900 font-medium">
+                    {(selectedReport.parameters && selectedReport.parameters.length > 0 ? selectedReport.parameters : DEFAULT_QC_PARAMETERS).map((p, idx) => {
+                      const statusLower = String(p.status || "").toLowerCase();
+                      const isCritical = statusLower.includes("crit");
+                      const isAbnormal = !isCritical && (statusLower.includes("abnormal") || statusLower.includes("high") || statusLower.includes("low") || statusLower.includes("warn"));
+
+                      return (
+                        <tr
+                          key={idx}
+                          className="hover:bg-slate-50/50 border border-black"
+                        >
+                          <td className="py-2 px-4 font-semibold text-gray-900 border border-black">
+                            {p.parameter}
+                          </td>
+                          <td
+                            className={`py-2 px-4 text-center font-mono border border-black ${
+                              isCritical
+                                ? "text-red-600 font-bold"
+                                : isAbnormal
+                                ? "text-[#ca8a04] font-bold"
+                                : "text-black font-medium"
+                            }`}
+                          >
+                            {p.result}
+                          </td>
+                          <td className="py-2 px-4 text-center border border-black">
+                            {p.unit || resolveStandardParameterUnit(p.parameter, selectedReport.testPanel) || "—"}
+                          </td>
+                          <td className="py-2 px-4 text-center border border-black">
+                            {p.referenceRange || resolveStandardParameterRefRange(p.parameter, selectedReport.patientAgeGender, selectedReport.testPanel) || "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </section>
+              {/* END: LaboratoryTestResultsTable */}
+
+              {/* BEGIN: ClinicalNotesAndSignatureSection */}
+              <section
+                aria-label="Clinical Remarks and Validation"
+                className="flex flex-col lg:flex-row justify-between items-start gap-8 mb-8"
+              >
+                {/* Remarks & Correlation text */}
+                <div className="space-y-4 max-w-xl text-[12.5px] leading-relaxed">
+                  <div>
+                    <h3 className="font-bold text-black uppercase tracking-tight">
+                      CLINICAL REMARKS
+                    </h3>
+                    <p className="text-gray-700 mt-0.5">
+                      {selectedReport.approvalRemarks ||
+                        selectedReport.findingsSummary ||
+                        "All parameters are within normal limits. The blood counts show no signs of anemia, infection, or clotting disorders at this time."}
+                    </p>
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-black uppercase tracking-tight">
+                      CLINICAL CORRELATION
+                    </h3>
+                    <p className="text-gray-700 mt-0.5">
+                      {selectedReport.clinicalCorrelation ||
+                        "Correlate clinically with patient's physical symptoms and history."}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Digital Signature Card */}
+                <div className="border border-black w-64 text-center bg-white shadow-none shrink-0 self-end lg:self-auto">
+                  {/* Card Header */}
+                  <div className="border-b border-black py-1.5 bg-gray-50/50">
+                    <span className="text-[10px] font-bold tracking-wider text-black uppercase">
+                      DIGITAL SIGNATURE
+                    </span>
+                  </div>
+                  {/* Signature Body */}
+                  <div className="py-4 px-3 flex flex-col items-center justify-center">
+                    <div className="text-2xl font-normal text-gray-900 tracking-wide mb-1 font-serif italic">
+                      {selectedReport.approverName || "Sarah Johnson"}
+                    </div>
+                    <div className="w-3/4 h-[0.75px] bg-gray-300 mb-2" />
+                    <p className="font-bold text-black text-[10px] tracking-tight uppercase">
+                      DR. {(selectedReport.approverName || "SARAH JOHNSON").toUpperCase()}
+                    </p>
+                    <p className="text-[9px] font-bold text-gray-800 uppercase mt-0.5">
+                      {(selectedReport.approverRole || "SENIOR PATHOLOGIST (MD, DNB)").toUpperCase()}
+                    </p>
+                    <p className="text-[9px] font-medium text-gray-700 tracking-tight uppercase mt-0.5">
+                      REG NO: MC-209455
+                    </p>
+                  </div>
+                </div>
+              </section>
+              {/* END: ClinicalNotesAndSignatureSection */}
+
+              {/* BEGIN: Disclaimer */}
+              <footer className="pt-2 border-t border-black mb-10">
+                <p className="text-[10.5px] leading-tight text-gray-800">
+                  <span className="font-bold text-black uppercase">
+                    DISCLAIMER
+                  </span>
+                  <br />
+                  This report is for diagnostic purposes and should be interpreted by a registered medical practitioner. Laboratory results are subject to clinical variation.
+                </p>
+              </footer>
+              {/* END: Disclaimer */}
+
+              {/* BEGIN: ActionButtons */}
+              <div className="flex items-center justify-between pt-2 pb-6 border-t border-transparent print-hide">
+                {/* Back Button */}
+                <button
+                  onClick={() => setViewMode(returnView)}
+                  className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#9ca3af] hover:bg-[#8e95a1] text-gray-900 font-semibold text-sm rounded shadow-sm transition cursor-pointer"
+                  type="button"
+                >
+                  <svg
+                    className="w-4 h-4 text-gray-900"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  <span>Back</span>
+                </button>
+                {/* Action Buttons: Open/Print PDF + Download PDF */}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => handlePrintReport(selectedReport)}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#4f46e5] hover:bg-[#4338ca] text-white font-semibold text-sm rounded shadow-sm transition cursor-pointer"
+                    type="button"
+                  >
+                    <FileText className="w-4 h-4 text-white" />
+                    <span>Open / Print PDF</span>
+                  </button>
+                  <button
+                    onClick={() => handleDownloadReportPdf(selectedReport)}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#0b457f] hover:bg-[#093a6b] text-white font-semibold text-sm rounded shadow-sm transition cursor-pointer"
+                    type="button"
+                  >
+                    <Download className="w-4 h-4 text-white" />
+                    <span>Download PDF</span>
+                  </button>
+                </div>
+              </div>
+              {/* END: ActionButtons */}
+            </div>
+          </main>
+        ) : viewMode === "delivered-status" && selectedReport ? (
           /* ========================================================================= */
           /* BEGIN: Report Delivered Successfully View                                */
           /* ========================================================================= */
@@ -1326,6 +2553,59 @@ export default function ReportGeneration() {
               </section>
               {/* END: Delivered To Card */}
 
+              {/* BEGIN: Accredited PDF Diagnostic Document Card */}
+              <section
+                className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                data-purpose="pdf-document-card"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-red-50 border border-red-200 flex items-center justify-center text-red-600 shrink-0 shadow-xs">
+                    <FileText className="w-6 h-6 stroke-[2]" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-base font-bold text-slate-900">
+                        Accredited Clinical PDF Report
+                      </h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                        Stored in DB
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Digitally authenticated NABL/ISO laboratory report stored in database ({selectedReport.reportId})
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenPreview(selectedReport, "delivered-status")}
+                    className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg border border-slate-300 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Eye className="w-4 h-4" />
+                    <span>Preview Report</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handlePrintReport(selectedReport)}
+                    className="px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg border border-slate-300 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                    title="Open PDF Document"
+                  >
+                    <FileText className="w-4 h-4" />
+                    <span>Open PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadReportPdf(selectedReport)}
+                    className="px-4 py-2 text-xs font-semibold text-white bg-[#0b457f] hover:bg-[#093a6b] rounded-lg shadow-sm transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download PDF</span>
+                  </button>
+                </div>
+              </section>
+              {/* END: Accredited PDF Diagnostic Document Card */}
+
               {/* BEGIN: Delivery Details Card */}
               <section
                 className="bg-white rounded-xl border border-slate-200 shadow-sm p-8"
@@ -1420,6 +2700,24 @@ export default function ReportGeneration() {
 
               {/* Page Title & Subtitle Header */}
               <header className="mb-8" data-purpose="page-header">
+                {isReportOverdue(selectedReport) && (
+                  <div className="mb-6 p-3.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-between text-rose-900 gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <Clock className="w-4 h-4 text-rose-600 shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold text-rose-900">
+                          This Diagnostic Report Exceeded Target Date ({selectedReport.targetDate})
+                        </p>
+                        <p className="text-[11px] text-rose-700">
+                          Expedite review, certification and delivery to attending physician and patient.
+                        </p>
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wider uppercase shrink-0">
+                      OVERDUE
+                    </span>
+                  </div>
+                )}
                 <h2 className="text-2xl lg:text-3xl font-extrabold text-slate-900 tracking-tight">
                   Approve Results
                 </h2>
@@ -1446,18 +2744,20 @@ export default function ReportGeneration() {
 
                     {/* Patient Profile Details */}
                     <div className="flex items-center gap-4 mt-5 mb-8">
-                      <img
-                        alt={selectedReport.patientName}
-                        className="w-14 h-14 rounded-full object-cover border border-slate-100 ring-2 ring-slate-100"
-                        src={
-                          selectedReport.patientAvatar ||
-                          "https://lh3.googleusercontent.com/aida-public/AB6AXuBk5rMXMyViKhrEWS3OPs4EJKp41wiYn1yNbXA5l8RDhUEQ3edVPM-3o-jLtLS6HSXMEut3cfRaSBn5s33BhP0F6OAOZX42hZbHmmdVj65-ctAIdJRbm3Zz-9zEIo0TphDh1b4CrwJP4rmrJrZbPQyyErPeQlhLum-s5Zk9lFWs5P__X5-cb4t8OtGeYjeqonWaXkVvfzOF63hf9zgtRsnWsqeDqoPZEhiBztkX6UoF4fCIy7FpeUmamA"
-                        }
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src =
-                            "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=256&h=256";
-                        }}
-                      />
+                      {selectedReport.patientAvatar ? (
+                        <img
+                          alt={selectedReport.patientName}
+                          className="w-14 h-14 rounded-full object-cover border border-slate-100 ring-2 ring-slate-100"
+                          src={selectedReport.patientAvatar}
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        <div className="w-14 h-14 rounded-full bg-[#E8F0FE] text-[#00488D] border border-blue-200/60 ring-2 ring-slate-100 flex items-center justify-center font-bold text-lg select-none">
+                          {selectedReport.patientName ? selectedReport.patientName.slice(0, 2).toUpperCase() : "P"}
+                        </div>
+                      )}
                       <div>
                         <h3 className="text-lg font-bold text-slate-900 leading-snug">
                           {selectedReport.patientName}
@@ -1501,6 +2801,23 @@ export default function ReportGeneration() {
                             selectedReport.generatedDate}
                         </p>
                       </div>
+                      {selectedReport.targetDate && (
+                        <div>
+                          <p className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
+                            TARGET DATE
+                          </p>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className={`text-sm font-bold ${isReportOverdue(selectedReport) ? "text-rose-700" : "text-slate-800"}`}>
+                              {selectedReport.targetDate}
+                            </span>
+                            {isReportOverdue(selectedReport) && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                OVERDUE
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </article>
@@ -1778,6 +3095,25 @@ export default function ReportGeneration() {
                   Back to Reports
                 </button>
               </div>
+              {/* Overdue alert banner if report is overdue */}
+              {isReportOverdue(selectedReport) && (
+                <div className="mb-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-between text-rose-900 gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <Clock className="w-4 h-4 text-rose-600 shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold text-rose-900">
+                        This Quality Check Exceeded Target Date ({selectedReport.targetDate})
+                      </p>
+                      <p className="text-[11px] text-rose-700">
+                        Please review QC parameters promptly to expedite final authorization.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wider uppercase shrink-0">
+                    OVERDUE
+                  </span>
+                </div>
+              )}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h1 className="text-2xl font-bold text-slate-900 tracking-tight md:max-lg:text-xl">
@@ -1867,21 +3203,41 @@ export default function ReportGeneration() {
                         Completed
                       </span>
                     </div>
+                    {/* Row 4: Target Date */}
+                    {selectedReport.targetDate && (
+                      <div className="flex items-baseline">
+                        <span className="w-36 text-slate-500 font-normal shrink-0">
+                          Target Date
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`font-semibold ${isReportOverdue(selectedReport) ? "text-rose-700 font-bold" : "text-slate-900"}`}>
+                            {selectedReport.targetDate}
+                          </span>
+                          {isReportOverdue(selectedReport) && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                              OVERDUE
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {/* Patient Thumbnail Image */}
                   <div className="shrink-0 pl-4 hidden sm:block">
-                    <img
-                      alt="Patient Avatar"
-                      className="w-16 h-16 rounded-full object-cover shadow-sm ring-2 ring-slate-100"
-                      src={
-                        selectedReport.patientAvatar ||
-                        "https://lh3.googleusercontent.com/aida-public/AB6AXuAk4z0h7-yWEOs1o7LaN7X-ROakKmoi3GI35bLJZUr__bhwepPRHuMyvxGVITnjKflVerHEXQTzcB77sT_Q_o9MiVhOu4EZ7RAqagKC5Sl-zto_-zU9cMsLfJQmLpurp07c7XmxZbh2NDLfRHJv8_ATG8DOXOYdp7Mp5FXyKNJnhnY-Xy6-_rpNIRRjtG4PYCdTLRx_SkPV1X-xahW1zTcQIMlbssjBGEaE96mFFpp40AFMGskXzzn_gA"
-                      }
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src =
-                          "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=256&h=256";
-                      }}
-                    />
+                    {selectedReport.patientAvatar ? (
+                      <img
+                        alt="Patient Avatar"
+                        className="w-16 h-16 rounded-full object-cover shadow-sm ring-2 ring-slate-100"
+                        src={selectedReport.patientAvatar}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    ) : (
+                      <div className="w-16 h-16 rounded-full bg-[#E8F0FE] text-[#00488D] border border-blue-200/60 ring-2 ring-slate-100 flex items-center justify-center font-bold text-lg select-none">
+                        {selectedReport.patientName ? selectedReport.patientName.slice(0, 2).toUpperCase() : "P"}
+                      </div>
+                    )}
                   </div>
                 </div>
               </section>
@@ -2155,175 +3511,146 @@ export default function ReportGeneration() {
           <>
             {/* TopNavbar */}
             <header
-              className="h-20 bg-white border-b border-slate-100 px-10 flex items-center justify-end sticky top-0 z-10"
+              className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-8 py-4 flex items-center justify-between"
               data-purpose="dashboard-header"
             >
-              <div className="flex items-center gap-6">
-                {/* Lab Notification Bell with Live Alerts */}
-                <LabNotificationBell size="md" />
-
-                {/* Role Label & Profile Avatar & Logout */}
-                <div className="flex items-center gap-3 pl-1">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-[#0b57d0] text-white font-bold text-xs flex items-center justify-center shadow-xs">
-                      {displayName.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex flex-col text-left">
-                      <span className="text-xs font-semibold text-slate-800 leading-tight">
-                        {displayName}
-                      </span>
-                      <span className="text-[10px] text-slate-500 leading-tight">
-                        {displayRole}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-red-600 hover:bg-red-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                      />
-                    </svg>
-                    Logout
-                  </button>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-[#0b4a8b]">
+                  <svg className="w-5 h-5 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                  </svg>
                 </div>
+                <div>
+                  <h1 className="text-xl font-bold text-slate-900 tracking-tight">Report Generation</h1>
+                  <p className="text-xs text-slate-500">Review test findings, approve diagnoses and print reports</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <LabNotificationBell size="md" />
+                <UserProfileDropdown
+                  userName={displayName}
+                  userSubtext={displayRole}
+                  onLogout={handleLogout}
+                  profilePath="/lab/profile"
+                  hideNotifications
+                />
               </div>
             </header>
 
             {/* DashboardBody */}
             <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
-              {/* StatCardsRow */}
-              <section
-                className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5"
-                data-purpose="kpi-metric-cards"
-              >
-                {/* Card 1: Report Generated */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#def7ec] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#059669] stroke-[2.5]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        d="M5 13l4 4L19 7"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
+              {/* Key Performance Indicators - Admin Dashboard Style Scrollable Track */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between flex-wrap gap-2 px-1">
                   <div>
-                    <span className="text-[13px] font-semibold text-[#059669]">
-                      Report Generated
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      {generatedCount}
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Reports generated successfully
-                    </p>
+                    <h2 className="text-base font-bold text-[#1c1e21] tracking-tight">Key Performance Indicators</h2>
+                    <p className="text-xs text-[#70747c]">Real-time diagnostic report status and certification metrics</p>
                   </div>
                 </div>
 
-                {/* Card 2: Report Pending */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#e0edff] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#2563eb] stroke-[2.2]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+                <div className="relative">
+                  {canScrollLeft && (
+                    <button
+                      type="button"
+                      onClick={() => handleKpiScroll("left")}
+                      aria-label="Scroll left"
+                      className="absolute -left-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
                     >
-                      <path
-                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#2563eb]">
-                      Report Pending
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      {pendingReportCount}
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Awaiting report generation
-                    </p>
-                  </div>
-                </div>
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  )}
 
-                {/* Card 3: Test Overdue */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#fef3c7] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#d97706] stroke-[2.2]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#d97706]">
-                      Test Overdue
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      18
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Tests past the expected time
-                    </p>
-                  </div>
-                </div>
+                  <div
+                    className={`absolute left-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-r from-[#f8fafc] to-transparent ${
+                      canScrollLeft ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
 
-                {/* Card 4: Repeat Test Required */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#fee2e2] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#dc2626] stroke-[2.2]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+                  <div
+                    ref={trackRef}
+                    className="flex gap-[14px] overflow-x-auto scroll-smooth py-[6px] px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  >
+                    {kpiCards.map((card) => (
+                      <div
+                        key={card.id}
+                        onClick={card.onClick}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            card.onClick?.();
+                          }
+                        }}
+                        style={{
+                          background: card.bg,
+                          border: card.isActive ? `2.5px solid ${card.valueColor}` : "2.5px solid transparent",
+                          boxShadow: card.isActive
+                            ? `0 0 0 1px ${card.valueColor}20, 0 6px 18px ${card.valueColor}28`
+                            : "0 2px 10px rgba(0,0,0,0.06)",
+                        }}
+                        className="flex-[0_0_206px] min-w-[206px] rounded-[12px] p-[14px_16px] flex flex-col gap-[10px] cursor-pointer transition-all duration-200 select-none hover:-translate-y-[2px] hover:shadow-[0_6px_20px_rgba(0,0,0,0.10)]"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div
+                            style={{ background: card.iconBg }}
+                            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm"
+                          >
+                            {card.icon}
+                          </div>
+                          {card.tag && (
+                            <span
+                              style={{ color: card.valueColor }}
+                              className="text-[11px] font-bold px-[7px] py-[2px] rounded-full tracking-[-0.2px] bg-white/60 shadow-sm inline-flex items-center gap-1"
+                            >
+                              <span>{card.tag}</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <div
+                          style={{ color: card.valueColor }}
+                          className="text-[26px] font-extrabold leading-[1.05] tracking-[-0.6px]"
+                        >
+                          {card.value}
+                        </div>
+
+                        <div className="flex flex-col gap-[2px] min-w-0">
+                          <span
+                            style={{ color: card.valueColor }}
+                            className="text-[12.5px] font-bold tracking-tight truncate"
+                          >
+                            {card.label}
+                          </span>
+                          <span
+                            style={{ color: card.valueColor, opacity: 0.75 }}
+                            className="text-[11px] font-medium truncate"
+                          >
+                            {card.subLabel}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div
+                    className={`absolute right-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-l from-[#f8fafc] to-transparent ${
+                      canScrollRight ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+
+                  {canScrollRight && (
+                    <button
+                      type="button"
+                      onClick={() => handleKpiScroll("right")}
+                      aria-label="Scroll right"
+                      className="absolute -right-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
                     >
-                      <path
-                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#dc2626]">
-                      Repeat Test Required
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      11
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Tests need to be repeated
-                    </p>
-                  </div>
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
-              </section>
+              </div>
 
               {/* TableContainerCard */}
               {/* BEGIN: MainContainer */}
@@ -2581,44 +3908,65 @@ export default function ReportGeneration() {
                           </td>
                         </tr>
                       ) : (
-                        filteredReports.map((r) => (
-                          <tr
-                            key={r.id}
-                            onClick={() => {
-                              if (r.status === "REVIEWED") {
-                                handleOpenApproveResults(r);
-                              } else if (r.status === "GENERATED") {
-                                handleOpenDeliveredStatus(r);
-                              } else {
-                                handleOpenQualityCheck(r);
-                              }
-                            }}
-                            className="hover:bg-slate-50/60 transition-colors cursor-pointer"
-                          >
-                            <td className="py-5 px-8 whitespace-nowrap">
-                              <span className="font-mono text-slate-900 text-sm font-semibold">
-                                {getDisplayBarcode(r)}
-                              </span>
-                            </td>
-                            <td className="py-5 px-6 whitespace-nowrap">
-                              <span className="font-semibold text-slate-900 block">
-                                {r.patientName}
-                              </span>
-                              <span className="text-[11px] text-slate-400 font-mono">
-                                {r.patientPid || r.patientId}
-                              </span>
-                            </td>
-                            <td className="py-5 px-6 text-slate-700 font-normal text-xs whitespace-nowrap">
-                              {r.doctorName}
-                            </td>
-                            <td className="py-5 px-6 whitespace-nowrap">
-                              <span className="font-medium text-slate-800 block">
-                                {r.testPanel}
-                              </span>
-                              <span className="text-[11px] text-slate-500 block truncate max-w-xs">
-                                {r.findingsSummary}
-                              </span>
-                            </td>
+                        filteredReports.map((r) => {
+                          const isOverdue = isReportOverdue(r);
+                          return (
+                            <tr
+                              key={r.id}
+                              onClick={() => {
+                                if (r.status === "REVIEWED") {
+                                  handleOpenApproveResults(r);
+                                } else if (r.status === "GENERATED") {
+                                  handleOpenDeliveredStatus(r);
+                                } else {
+                                  handleOpenQualityCheck(r);
+                                }
+                              }}
+                              className={`transition-colors cursor-pointer ${
+                                isOverdue
+                                  ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                                  : "hover:bg-slate-50/60"
+                              }`}
+                            >
+                              <td className="py-5 px-8 whitespace-nowrap">
+                                <span className="font-mono text-slate-900 text-sm font-semibold">
+                                  {getDisplayBarcode(r)}
+                                </span>
+                              </td>
+                              <td className="py-5 px-6 whitespace-nowrap">
+                                <span className="font-semibold text-slate-900 block">
+                                  {r.patientName}
+                                </span>
+                                <span className="text-[11px] text-slate-400 font-mono">
+                                  {r.patientPid || r.patientId}
+                                </span>
+                              </td>
+                              <td className="py-5 px-6 text-slate-700 font-normal text-xs whitespace-nowrap">
+                                {r.doctorName}
+                              </td>
+                              <td className="py-5 px-6 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-slate-800 block">
+                                    {r.testPanel}
+                                  </span>
+                                  {isOverdue && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                      OVERDUE
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
+                                  {r.sampleType && <span>{r.sampleType}</span>}
+                                  {r.targetDate && (
+                                    <span className={`font-semibold ${isOverdue ? "text-rose-700" : "text-slate-500"}`}>
+                                      · Target: {r.targetDate}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[11px] text-slate-500 block truncate max-w-xs mt-0.5">
+                                  {r.findingsSummary}
+                                </span>
+                              </td>
                             <td className="py-5 px-6 text-center text-slate-600 font-normal whitespace-nowrap">
                               {r.generatedDate}
                             </td>
@@ -2670,33 +4018,42 @@ export default function ReportGeneration() {
                                   Approve &amp; Sign
                                 </button>
                               ) : r.status === "GENERATED" ? (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenDeliveredStatus(r);
-                                  }}
-                                  className="px-4 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#16a34a] border border-emerald-200 text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5"
-                                >
-                                  <svg
-                                    className="w-3.5 h-3.5 stroke-[2.2]"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenDeliveredStatus(r);
+                                    }}
+                                    className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#16a34a] border border-emerald-200 text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer inline-flex items-center justify-center gap-1"
+                                    title="View Delivered Status"
                                   >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"
-                                    />
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                                    />
-                                  </svg>
-                                  View Report
-                                </button>
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>View Report</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenPreview(r, "table");
+                                    }}
+                                    className="p-1.5 bg-blue-50 hover:bg-blue-100 text-[#0b4a8b] border border-blue-200 text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                                    title="Preview Report Document"
+                                  >
+                                    <FileText className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDownloadReportPdf(r);
+                                    }}
+                                    className="p-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                                    title="Download PDF"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                               ) : (
                                 <button
                                   type="button"
@@ -2723,8 +4080,9 @@ export default function ReportGeneration() {
                               )}
                             </td>
                           </tr>
-                        ))
-                      )}
+                        );
+                      })
+                    )}
                     </tbody>
                   </table>
                 </div>

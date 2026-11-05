@@ -1,16 +1,37 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ChevronLeft,
+  ChevronRight,
+  FlaskConical,
+  CheckCircle2,
+  Clock,
+  Timer,
+  AlertTriangle,
+  AlertCircle,
+  Zap,
+} from "lucide-react";
 import { getUser, remove } from "@/utils/token";
 import { toast } from "@/hooks/use-toast";
 import LabNav from "./labnav";
 import { LabNotificationBell } from "@/components/hms/LabNotificationBell";
+import { labTestMasterApi, LabTestMasterRecord, LabTestParameterRecord } from "@/api/labTestMaster.api";
+import { UserProfileDropdown } from "@/components/ui/User_profile_dropdown";
 import {
   labOrderApi,
   labOrderItemApi,
+  labResultApi,
   LabOrderRecord,
   LabOrderItemRecord,
 } from "@/api/labOrder.api";
 import { patientApi, PatientRecord } from "@/api/patient.api";
+import {
+  calculateSampleStability,
+  resolveStabilityHours,
+  useCurrentTimeTicker,
+  compareBySampleStability,
+  SampleStabilityInfo,
+} from "@/utils/sampleStability";
 
 export interface TestingSampleItem {
   id: string;
@@ -30,17 +51,841 @@ export interface TestingSampleItem {
   receivedBy?: string;
   comments?: string;
   parameters?: TestParameter[];
+  targetDate?: string;
+  targetDateIso?: string;
+  rawOrderItem?: LabOrderItemRecord;
+  patientGender?: string;
+  collectionTime?: string;
+  collectionTimeIso?: string;
+  stabilityHours?: number;
+  priority?: string;
+  unit?: string;
+  expectedRange?: string;
+  parametersCount?: number;
+  parametersPreview?: string;
 }
+
+const normalizeToIsoDate = (value?: string | null): string | null => {
+  if (!value || value === "—") return null;
+  const str = String(value).trim();
+  const ymdMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymdMatch) return `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
+  const dmy4Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy4Match) {
+    return `${dmy4Match[3]}-${dmy4Match[2].padStart(2, "0")}-${dmy4Match[1].padStart(2, "0")}`;
+  }
+  const dmy2Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2})$/);
+  if (dmy2Match) {
+    return `20${dmy2Match[3]}-${dmy2Match[2].padStart(2, "0")}-${dmy2Match[1].padStart(2, "0")}`;
+  }
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) {
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const day = String(parsed.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return null;
+};
+
+const formatTargetDate = (value?: string | null): string => {
+  if (!value) return "—";
+  const iso = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}-${iso[2]}-${iso[1]}`;
+  const d = new Date(value);
+  if (!Number.isNaN(d.getTime())) {
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    return `${day}-${month}-${d.getFullYear()}`;
+  }
+  return String(value);
+};
+
+
+export function formatGenderReferenceRange(range?: string | null, gender?: string | null, unit?: string | null): string {
+  if (!range) return "";
+  const normGender = (gender || "").toLowerCase().startsWith("f")
+    ? "Female"
+    : (gender || "").toLowerCase().startsWith("m")
+    ? "Male"
+    : "All";
+
+  if (normGender !== "Male" && normGender !== "Female") return range;
+
+  const trailingUnit = (unit || "").trim();
+
+  if (normGender === "Female") {
+    // Look for female pattern e.g. "F: ...", "Female: ...", "F (follicular) ..."
+    const fMatch = range.match(/(?:^|[;\/|])\s*\bF(?:emale)?\b\s*(\([^)]*\))?\s*:?\s*([^;]+)/i);
+    if (fMatch) {
+      const condition = fMatch[1] ? fMatch[1].trim() + " " : "";
+      let fVal = (condition + fMatch[2].trim()).trim();
+      if (trailingUnit && !fVal.includes(trailingUnit) && !fVal.match(/[a-zA-Z]/)) {
+        fVal += ` ${trailingUnit}`;
+      }
+      return fVal;
+    }
+  }
+
+  if (normGender === "Male") {
+    // Look for male pattern e.g. "M: ...", "Male: ..."
+    const mMatch = range.match(/(?:^|[;\/|])\s*\bM(?:ale)?\b\s*:?\s*([^;]+)/i);
+    if (mMatch) {
+      let mVal = mMatch[1].trim();
+      if (trailingUnit && !mVal.includes(trailingUnit) && !mVal.match(/[a-zA-Z]/)) {
+        mVal += ` ${trailingUnit}`;
+      }
+      return mVal;
+    }
+  }
+
+  return range;
+}
+
+const isTestingSampleOverdue = (s?: TestingSampleItem | null): boolean => {
+  if (!s || s.status === "COMPLETED") return false;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const iso = s.targetDateIso || (s.targetDate ? normalizeToIsoDate(s.targetDate) : null);
+  if (!iso) return false;
+  return iso < todayIso;
+};
 
 export interface TestParameter {
   id: string;
+  lab_test_parameter_id?: string;
   parameter: string;
   result: string;
   unit: string;
   referenceRange: string;
   status: "Completed" | "In Progress" | "Not Started";
+  abnormalFlag?: "NORMAL" | "LOW" | "HIGH" | "CRITICAL" | "BORDERLINE";
+  resultComment?: string;
+  inputType?: "numeric" | "options" | "text";
+  options?: string[];
+  refRangeLow?: number | null;
+  refRangeHigh?: number | null;
+  gender?: string | null;
 }
 
+export function parseParameterInputType(
+  unit?: string | null,
+  refRangeText?: string | null,
+  refRangeLow?: number | string | null,
+  refRangeHigh?: number | string | null,
+): { inputType: "numeric" | "options" | "text"; options?: string[] } {
+  const u = (unit || "").trim().toLowerCase();
+  const t = (refRangeText || "").trim().toLowerCase();
+
+  if (
+    u.includes("reactive / non-reactive") ||
+    u.includes("reactive / non reactive") ||
+    u.includes("reactive/non-reactive") ||
+    u.includes("reactive") ||
+    t.includes("non-reactive") ||
+    t.includes("non reactive") ||
+    t.includes("reactive")
+  ) {
+    return { inputType: "options", options: ["Non-reactive", "Reactive"] };
+  }
+
+  if (
+    u.includes("neg / pos") ||
+    u.includes("negative / positive") ||
+    u.includes("neg/pos") ||
+    u.includes("negative") ||
+    t.includes("negative") ||
+    t.includes("non-pregnant")
+  ) {
+    if (u.includes("1+") || u.includes("trace")) {
+      return {
+        inputType: "options",
+        options: ["Negative", "Trace", "1+", "2+", "3+", "4+"],
+      };
+    }
+    return { inputType: "options", options: ["Negative", "Positive"] };
+  }
+
+  if (u.includes("present / absent") || u.includes("present/absent") || t.includes("absent")) {
+    return { inputType: "options", options: ["Absent", "Present"] };
+  }
+
+  if (u.includes("normal / increased") || u.includes("normal/increased") || t.includes("normal")) {
+    return { inputType: "options", options: ["Normal", "Increased"] };
+  }
+
+  if (
+    (refRangeLow !== null && refRangeLow !== undefined && refRangeLow !== "") ||
+    (refRangeHigh !== null && refRangeHigh !== undefined && refRangeHigh !== "")
+  ) {
+    return { inputType: "numeric" };
+  }
+
+  if (/^\s*\d+(\.\d+)?\s*(-|–|to)\s*\d+(\.\d+)?\s*$/.test(refRangeText || "")) {
+    return { inputType: "numeric" };
+  }
+
+  return { inputType: "text" };
+}
+
+export function evaluateAbnormalFlag(
+  val: string,
+  param: {
+    inputType?: string;
+    refRangeLow?: number | null;
+    refRangeHigh?: number | null;
+    referenceRange?: string;
+    unit?: string;
+  }
+): "NORMAL" | "LOW" | "HIGH" | "CRITICAL" | "BORDERLINE" {
+  if (!val || val.trim() === "") return "NORMAL";
+  const trimmed = val.trim();
+  const lower = trimmed.toLowerCase();
+
+  if (["negative", "non-reactive", "non reactive", "absent", "normal", "nil", "clear", "straw", "pale yellow"].includes(lower)) {
+    return "NORMAL";
+  }
+  if (lower === "trace" || lower === "borderline" || lower === "equivocal" || lower === "slightly hazy") {
+    return "BORDERLINE";
+  }
+  if (["positive", "reactive", "present", "1+", "2+", "3+", "4+", "increased", "turbid", "cloudy"].includes(lower)) {
+    if (lower === "reactive" || lower === "positive" || lower === "3+" || lower === "4+" || lower === "turbid") {
+      return "CRITICAL";
+    }
+    return "HIGH";
+  }
+
+  if (lower.includes("critical") || lower.includes("panic")) {
+    return "CRITICAL";
+  }
+
+  const num = parseFloat(trimmed.replace(/,/g, ""));
+  if (!Number.isNaN(num)) {
+    let low = param.refRangeLow != null ? Number(param.refRangeLow) : undefined;
+    let high = param.refRangeHigh != null ? Number(param.refRangeHigh) : undefined;
+
+    if (low == null && high == null && param.referenceRange) {
+      const cleanedRange = param.referenceRange.replace(/,/g, "");
+      const match = cleanedRange.match(/(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)/i);
+      if (match) {
+        low = parseFloat(match[1]);
+        high = parseFloat(match[2]);
+      } else {
+        const lessMatch = cleanedRange.match(/(?:<|less than|up to)\s*(\d+(?:\.\d+)?)/i);
+        if (lessMatch) {
+          high = parseFloat(lessMatch[1]);
+        }
+        const greaterMatch = cleanedRange.match(/(?:>|greater than)\s*(\d+(?:\.\d+)?)/i);
+        if (greaterMatch) {
+          low = parseFloat(greaterMatch[1]);
+        }
+      }
+    }
+
+    if (low != null && high != null) {
+      if (num < low) {
+        return num < low * 0.6 ? "CRITICAL" : "LOW";
+      }
+      if (num > high) {
+        return num > high * 1.5 ? "CRITICAL" : "HIGH";
+      }
+      return "NORMAL";
+    }
+    if (low != null && num < low) {
+      return num < low * 0.6 ? "CRITICAL" : "LOW";
+    }
+    if (high != null && num > high) {
+      return num > high * 1.5 ? "CRITICAL" : "HIGH";
+    }
+  }
+
+  return "NORMAL";
+}
+
+export const CBC_CANONICAL_ORDER = [
+  "hemoglobin",
+  "total wbc count (tc)",
+  "rbc count",
+  "pcv / hct",
+  "mcv",
+  "mch",
+  "mchc",
+  "rdw-cv",
+  "platelet count",
+  "mpv",
+  "neutrophils",
+  "lymphocytes",
+  "eosinophils",
+  "monocytes",
+  "basophils",
+  "absolute neutrophil count (anc)",
+  "absolute lymphocyte count",
+  "absolute eosinophil count",
+  "esr",
+];
+
+export function sortParametersClinically(params: TestParameter[]): TestParameter[] {
+  const isCbcLike = params.some((p) => {
+    const l = (p.parameter || "").toLowerCase();
+    return l.includes("hemoglobin") || l.includes("rbc count") || l.includes("pcv");
+  });
+
+  if (isCbcLike) {
+    return [...params].sort((a, b) => {
+      const getIdx = (name?: string) => {
+        const l = (name || "").toLowerCase().trim();
+        const found = CBC_CANONICAL_ORDER.findIndex((k) => l === k || l.includes(k));
+        return found !== -1 ? found : 99;
+      };
+      return getIdx(a.parameter) - getIdx(b.parameter);
+    });
+  }
+
+  return params;
+}
+
+export interface ClinicalPanelPreset {
+  keywords: string[];
+  primaryMasterId?: string;
+  primaryTestCode?: string;
+  canonicalName: string;
+  match?: (cleanName: string, rawName: string) => boolean;
+}
+
+export const CLINICAL_PANEL_PRESETS: ClinicalPanelPreset[] = [
+  {
+    keywords: ["cbc", "complete blood count", "hemogram", "complete hemogram", "full blood count", "fbc"],
+    primaryMasterId: "LT00787",
+    primaryTestCode: "INH-013",
+    canonicalName: "Complete Blood Count",
+    match: (n) => /^(cbc|complete blood count|hemogram|complete hemogram|full blood count|fbc)$/i.test(n),
+  },
+  {
+    keywords: ["differential wbc count", "differential count", "wbc differential", "differential wbc", "dc count", "diff count"],
+    primaryMasterId: "LT00294",
+    primaryTestCode: "DDC-1068",
+    canonicalName: "Differential WBC Count (DC)",
+    match: (n) => /^(differential wbc count|differential count|wbc differential|differential wbc|dc count|diff count)$/i.test(n),
+  },
+  {
+    keywords: ["wbc", "total wbc count", "total wbc count (tc)", "wbc count", "white blood cell count", "white blood cells", "total count", "tc"],
+    primaryMasterId: "LT00683",
+    primaryTestCode: "DDC-1457",
+    canonicalName: "Total WBC Count (TC)",
+    match: (n) => /^(wbc|total wbc count|total wbc count \(tc\)|wbc count|white blood cell count|white blood cells|total count|tc)$/i.test(n),
+  },
+  {
+    keywords: ["hb,tc,dc", "hb tc dc", "hb, tc, dc"],
+    primaryMasterId: "LT00378",
+    primaryTestCode: "DDC-1152",
+    canonicalName: "HB,TC,DC",
+    match: (n) => /^(hb,tc,dc|hb tc dc|hb, tc, dc)$/i.test(n),
+  },
+  {
+    keywords: ["lft", "liver function test", "liver panel", "hepatic panel", "liver function tests"],
+    primaryMasterId: "LT00783",
+    primaryTestCode: "INH-009",
+    canonicalName: "Liver Function test",
+    match: (n) => /^(lft|liver function test|liver panel|hepatic panel|liver function tests)$/i.test(n),
+  },
+  {
+    keywords: ["rft", "kft", "renal function test", "kidney function test", "renal panel", "kidney panel"],
+    primaryMasterId: "LT00794",
+    primaryTestCode: "NEW-001",
+    canonicalName: "Renal Function Test (RFT)",
+    match: (n) => /^(rft|kft|renal function test|kidney function test|renal panel|kidney panel)$/i.test(n),
+  },
+  {
+    keywords: ["lipid profile", "lipid panel", "lipids", "cholesterol panel"],
+    primaryMasterId: "LT00782",
+    primaryTestCode: "INH-008",
+    canonicalName: "Lipid profile",
+    match: (n) => !n.includes("phospholipid") && /^(lipid profile|lipid panel|lipids|cholesterol panel)$/i.test(n),
+  },
+  {
+    keywords: ["thyroid", "tft", "thyroid function test", "thyroid profile", "thyroid panel"],
+    primaryMasterId: "LT00669",
+    primaryTestCode: "DDC-1443",
+    canonicalName: "Thyroid Function Test - TFT (tT3,tT4,TSH)",
+    match: (n) => /^(thyroid|tft|thyroid function test|thyroid profile|thyroid panel)$/i.test(n),
+  },
+  {
+    keywords: ["urine routine", "urine routine analysis", "routine urine", "urinalysis", "urine analysis", "urine complete", "urine complete analysis", "urine r/m"],
+    primaryMasterId: "LT00745",
+    primaryTestCode: "DDC-1519",
+    canonicalName: "Urine Routine Analysis",
+    match: (n) => /^(urine routine|urine routine analysis|routine urine|urinalysis|urine analysis|urine complete|urine complete analysis|urine r\/m)$/i.test(n),
+  },
+  {
+    keywords: ["electrolytes complete", "complete electrolytes", "electrolyte complete"],
+    primaryMasterId: "LT00307",
+    primaryTestCode: "DDC-1081",
+    canonicalName: "Electrolytes Complete",
+    match: (n) => /^(electrolytes complete|complete electrolytes|electrolyte complete)$/i.test(n),
+  },
+  {
+    keywords: ["electrolytes", "serum electrolytes", "electrolyte panel", "lytes"],
+    primaryMasterId: "LT00778",
+    primaryTestCode: "INH-004",
+    canonicalName: "Electrolytes",
+    match: (n) => !n.includes("urine") && !n.includes("complete") && !n.includes("(n&k)") && !n.includes("(na&k)") && /^(electrolytes|serum electrolytes|electrolyte panel|lytes)$/i.test(n),
+  },
+  {
+    keywords: ["coagulation profile", "coagulation", "coag profile", "pt inr", "pt aptt", "pt / aptt / inr", "coagulation profile (pt / aptt / inr)"],
+    primaryMasterId: "LT00795",
+    primaryTestCode: "NEW-002",
+    canonicalName: "Coagulation Profile (PT / APTT / INR)",
+    match: (n) => /^(coagulation profile|coagulation|coag profile|pt inr|pt aptt|pt \/ aptt \/ inr|coagulation profile \(pt \/ aptt \/ inr\))$/i.test(n),
+  },
+  {
+    keywords: ["hbv screen", "hepatitis b screen", "hepatitis b marker study", "hepatitis b profile", "hepatitis b panel", "hbv screen (hbsag, anti-hbc, anti-hbs)"],
+    primaryMasterId: "LT00796",
+    primaryTestCode: "NEW-003",
+    canonicalName: "HBV Screen (HBsAg, Anti-HBc, Anti-HBs)",
+    match: (n) => !n.includes("pcr") && !n.includes("spot") && !n.includes("rapid") && !n.includes("clia") && !n.includes("elisa") && /^(hbv screen|hepatitis b screen|hepatitis b marker study|hepatitis b profile|hepatitis b panel|hbv screen \(hbsag, anti-hbc, anti-hbs\))$/i.test(n),
+  },
+  {
+    keywords: ["hcv & hiv", "hiv & hcv", "hiv and hcv", "hcv and hiv", "hcv & hiv screen"],
+    primaryMasterId: "LT00797",
+    primaryTestCode: "NEW-004",
+    canonicalName: "HCV & HIV Screen",
+    match: (n) => !n.includes("pcr") && /^(hcv & hiv|hiv & hcv|hiv and hcv|hcv and hiv|hcv & hiv screen)$/i.test(n),
+  },
+  {
+    keywords: ["uric acid", "serum uric acid"],
+    primaryMasterId: "LT00702",
+    primaryTestCode: "DDC-1476",
+    canonicalName: "Uric Acid",
+    match: (n) => !n.includes("urine") && /^(uric acid|serum uric acid)$/i.test(n),
+  },
+  {
+    keywords: ["creatinine", "serum creatinine"],
+    primaryMasterId: "LT00268",
+    primaryTestCode: "DDC-1042",
+    canonicalName: "Creatinine",
+    match: (n) => !n.includes("urine") && /^(creatinine|serum creatinine)$/i.test(n),
+  },
+  {
+    keywords: ["calcium", "serum calcium", "total calcium"],
+    primaryMasterId: "LT00777",
+    primaryTestCode: "INH-003",
+    canonicalName: "Calcium",
+    match: (n) => !n.includes("urine") && /^(calcium|serum calcium|total calcium)$/i.test(n),
+  },
+  {
+    keywords: ["esr", "erythrocyte sedimentation rate"],
+    primaryMasterId: "LT00314",
+    primaryTestCode: "DDC-1088",
+    canonicalName: "ESR",
+    match: (n) => /^(esr|erythrocyte sedimentation rate)$/i.test(n),
+  },
+  {
+    keywords: ["ferritin", "serum ferritin"],
+    primaryMasterId: "LT00329",
+    primaryTestCode: "DDC-1103",
+    canonicalName: "Ferritin",
+    match: (n) => /^(ferritin|serum ferritin)$/i.test(n),
+  },
+  {
+    keywords: ["gamma gt", "ggt", "gamma gt (ggt)"],
+    primaryMasterId: "LT00364",
+    primaryTestCode: "DDC-1138",
+    canonicalName: "Gamma GT (GGT)",
+    match: (n) => /^(gamma gt|ggt|gamma gt \(ggt\))$/i.test(n),
+  },
+  {
+    keywords: ["glucose random", "random blood sugar", "rbs", "random glucose"],
+    primaryMasterId: "LT00790",
+    primaryTestCode: "INH-016",
+    canonicalName: "Glucose Random",
+    match: (n) => /^(glucose random|random blood sugar|rbs|random glucose)$/i.test(n),
+  },
+  {
+    keywords: ["glucose fasting", "fasting blood sugar", "fbs", "fasting glucose"],
+    primaryMasterId: "LT00788",
+    primaryTestCode: "INH-014",
+    canonicalName: "Glucose Fasting",
+    match: (n) => /^(glucose fasting|fasting blood sugar|fbs|fasting glucose)$/i.test(n),
+  },
+  {
+    keywords: ["glucose post prandial", "post prandial blood sugar", "ppbs", "pp glucose"],
+    primaryMasterId: "LT00789",
+    primaryTestCode: "INH-015",
+    canonicalName: "Glucose Post Prandial",
+    match: (n) => /^(glucose post prandial|post prandial blood sugar|ppbs|pp glucose)$/i.test(n),
+  },
+  {
+    keywords: ["hba1c", "hba1c (hplc)", "glycated hemoglobin"],
+    primaryMasterId: "LT00380",
+    primaryTestCode: "DDC-1154",
+    canonicalName: "HBA1c (HPLC)",
+    match: (n) => /^(hba1c|hba1c \(hplc\)|glycated hemoglobin)$/i.test(n),
+  },
+  {
+    keywords: ["platelet count", "platelets", "platelet"],
+    primaryMasterId: "LT00570",
+    primaryTestCode: "DDC-1344",
+    canonicalName: "PLATELET COUNT",
+    match: (n) => /^(platelet count|platelets|platelet)$/i.test(n),
+  },
+  {
+    keywords: ["nt probnp", "probnp", "bnp", "nt-probnp"],
+    primaryMasterId: "LT00551",
+    primaryTestCode: "DDC-1325",
+    canonicalName: "NT proBNP",
+    match: (n) => /^(nt probnp|probnp|bnp|nt-probnp)$/i.test(n),
+  },
+  {
+    keywords: ["bilirubin", "total bilirubin", "serum bilirubin"],
+    primaryMasterId: "LT00179",
+    primaryTestCode: "DDC-0953",
+    canonicalName: "Bilirubin",
+    match: (n) => !n.includes("cord") && !n.includes("direct") && !n.includes("indirect") && /^(bilirubin|total bilirubin|serum bilirubin)$/i.test(n),
+  },
+  {
+    keywords: ["17 - oh progesterone", "17-oh progesterone", "17 oh progesterone"],
+    primaryMasterId: "LT00001",
+    primaryTestCode: "DDC-0775",
+    canonicalName: "17 - Oh Progesterone",
+    match: (n) => /^(17 - oh progesterone|17-oh progesterone|17 oh progesterone)$/i.test(n),
+  },
+  {
+    keywords: ["24 hrs urine 17 ketosteroids", "17 ketosteroids", "24 hrs urine ketosteroids"],
+    primaryMasterId: "LT00002",
+    primaryTestCode: "DDC-0776",
+    canonicalName: "24 Hrs Urine 17 Ketosteroids",
+    match: (n) => /^(24 hrs urine 17 ketosteroids|17 ketosteroids|24 hrs urine ketosteroids)$/i.test(n),
+  },
+  {
+    keywords: ["urine pregnancy test", "pregnancy test", "upt"],
+    primaryMasterId: "LT00724",
+    primaryTestCode: "DDC-1498",
+    canonicalName: "Urine Pregnancy Test",
+    match: (n) => /^(urine pregnancy test|pregnancy test|upt)$/i.test(n),
+  },
+];
+
+export function resolveAllTestParameters(options: {
+  item?: LabOrderItemRecord | null;
+  patientGender?: string | null;
+  testName?: string;
+  allMasters?: LabTestMasterRecord[];
+  allDbParameters?: LabTestParameterRecord[];
+  matchedTestMaster?: LabTestMasterRecord | null;
+}): TestParameter[] {
+  const { item, patientGender, testName = "", allMasters = [], allDbParameters = [], matchedTestMaster } = options;
+
+  // 1. Determine if this test is a combo test that should be split into individual sub-panels
+  const lowerTest = testName.toLowerCase().trim();
+  const directMaster = matchedTestMaster || item?.lab_test_master || allMasters.find((m) => m.test_name?.toLowerCase() === lowerTest);
+  let shouldSplit = true;
+
+  if (directMaster) {
+    if ((directMaster.lab_test_parameter?.length || 0) > 0 || allDbParameters.some((p) => p.lab_test_id === directMaster.lab_test_id)) {
+      shouldSplit = false;
+    } else if ((directMaster.unit || directMaster.reference_range) && !/see panel parameters sheet/i.test(directMaster.reference_range || "")) {
+      shouldSplit = false;
+    }
+  }
+
+  if (shouldSplit) {
+    // Check if testName is a combo test like "CBC with ESR" or "HB,TC,DC & ESR"
+    let tokens: string[] = [];
+    if (/\b(?:with|and)\b|&/i.test(testName)) {
+      tokens = testName.split(/\b(?:with|and)\b|&/i).map((s) => s.trim()).filter(Boolean);
+    } else {
+      // Split by commas, plus, semicolon, or dot only outside parentheses!
+      let current = "";
+      let parenDepth = 0;
+      for (let i = 0; i < testName.length; i++) {
+        const ch = testName[i];
+        if (ch === "(") parenDepth++;
+        else if (ch === ")") parenDepth--;
+
+        if (parenDepth === 0 && (ch === "," || ch === "+" || ch === ";" || (ch === "." && /[A-Za-z]/.test(testName[i + 1] || "")))) {
+          if (current.trim()) tokens.push(current.trim());
+          current = "";
+        } else {
+          current += ch;
+        }
+      }
+      if (current.trim()) tokens.push(current.trim());
+    }
+
+    if (tokens.length > 1) {
+      const combined: TestParameter[] = [];
+      tokens.forEach((subName) => {
+        const subParams = resolveSingleTestParameters({
+          item,
+          patientGender,
+          testName: subName,
+          allMasters,
+          allDbParameters,
+        });
+        combined.push(...subParams);
+      });
+      if (combined.length > 0) {
+        const seen = new Set<string>();
+        const deduped: TestParameter[] = [];
+        for (const p of combined) {
+          const key = p.parameter.toLowerCase().trim();
+          if (!seen.has(key)) {
+            seen.add(key);
+            deduped.push(p);
+          }
+        }
+        return sortParametersClinically(deduped);
+      }
+    }
+  }
+
+  const single = resolveSingleTestParameters({
+    item,
+    patientGender,
+    testName,
+    allMasters,
+    allDbParameters,
+    matchedTestMaster,
+  });
+  return sortParametersClinically(single);
+}
+
+function resolveSingleTestParameters(options: {
+  item?: LabOrderItemRecord | null;
+  patientGender?: string | null;
+  testName: string;
+  allMasters?: LabTestMasterRecord[];
+  allDbParameters?: LabTestParameterRecord[];
+  matchedTestMaster?: LabTestMasterRecord | null;
+}): TestParameter[] {
+  const { item, patientGender, testName, allMasters = [], allDbParameters = [], matchedTestMaster } = options;
+  const n = (testName || "").toLowerCase().trim();
+  const cleanN = n.replace(/\s*\([^)]*\)/g, "").trim();
+
+  // 1. Check presets for canonical panel definitions
+  const preset = CLINICAL_PANEL_PRESETS.find((p) => {
+    if (p.match) {
+      return p.match(cleanN, n);
+    }
+    return p.keywords.some((kw) => n === kw || cleanN === kw);
+  });
+
+  let bestMaster: any = null;
+  if (preset) {
+    bestMaster =
+      (preset.primaryMasterId ? allMasters.find((m) => m.lab_test_id === preset.primaryMasterId) : null) ||
+      (preset.primaryTestCode ? allMasters.find((m) => m.test_code?.toLowerCase() === preset.primaryTestCode?.toLowerCase()) : null) ||
+      allMasters.find(
+        (m) =>
+          m.test_name?.toLowerCase() === preset.canonicalName.toLowerCase() &&
+          Array.isArray(m.lab_test_parameter) &&
+          m.lab_test_parameter.length > 0
+      ) ||
+      null;
+  }
+
+  // 2. If no preset or master not found via preset, search allMasters for rich DB master
+  if (!bestMaster) {
+    bestMaster =
+      (item?.lab_test_master && (item.lab_test_master.lab_test_parameter?.length || 0) > 0 ? item.lab_test_master : null) ||
+      (matchedTestMaster && (matchedTestMaster.lab_test_parameter?.length || 0) > 0 ? matchedTestMaster : null) ||
+      (item?.lab_test_id ? allMasters.find((m) => m.lab_test_id === item.lab_test_id && (m.lab_test_parameter?.length || 0) > 0) : null) ||
+      allMasters.find((m) => m.test_name?.toLowerCase() === n && (m.lab_test_parameter?.length || 0) > 0) ||
+      allMasters.find((m) => m.test_name?.toLowerCase() === cleanN && (m.lab_test_parameter?.length || 0) > 0) ||
+      // Next preference: records with non-null unit or reference_range from database
+      allMasters.find((m) => m.test_name?.toLowerCase() === cleanN && (m.unit || m.reference_range)) ||
+      allMasters.find((m) => m.test_name?.toLowerCase() === n && (m.unit || m.reference_range)) ||
+      (item?.lab_test_id ? allMasters.find((m) => m.lab_test_id === item.lab_test_id) : null) ||
+      item?.lab_test_master ||
+      matchedTestMaster ||
+      allMasters.find((m) => m.test_name?.toLowerCase() === n) ||
+      allMasters.find((m) => m.test_name?.toLowerCase() === cleanN) ||
+      null;
+  }
+
+  // Canonical redirection for masters whose reference_range says "See Panel Parameters sheet (...)"
+  if (bestMaster && (bestMaster.lab_test_parameter?.length || 0) === 0 && /see panel parameters sheet/i.test(bestMaster.reference_range || "")) {
+    const refR = bestMaster.reference_range || "";
+    let panelTarget = "";
+    if (/cbc/i.test(refR)) panelTarget = "Complete Blood Count";
+    else if (/tft/i.test(refR)) panelTarget = "Thyroid Function Test - TFT (tT3,tT4,TSH)";
+    else if (/lft/i.test(refR)) panelTarget = "Liver Function test";
+    else if (/lipid/i.test(refR)) panelTarget = "Lipid profile";
+    else if (/electrolytes/i.test(refR)) panelTarget = "Electrolytes";
+    else if (/rft/i.test(refR)) panelTarget = "Renal Function Test (RFT)";
+    else if (/urine routine/i.test(refR)) panelTarget = "Urine Routine Analysis";
+
+    if (panelTarget) {
+      const canonicalMaster = allMasters.find(
+        (m) => m.test_name?.toLowerCase() === panelTarget.toLowerCase() && (m.lab_test_parameter?.length || 0) > 0
+      );
+      if (canonicalMaster) {
+        bestMaster = canonicalMaster;
+      }
+    }
+  }
+
+  // 3. Try to get parameters from bestMaster.lab_test_parameter or allDbParameters
+  let dbParams: any[] = bestMaster?.lab_test_parameter || [];
+  if ((!dbParams || dbParams.length === 0) && allDbParameters.length > 0) {
+    const testIdToMatch = bestMaster?.lab_test_id || item?.lab_test_id;
+    if (testIdToMatch) {
+      dbParams = allDbParameters.filter((p) => p.lab_test_id === testIdToMatch);
+    }
+  }
+
+  // 4. If child parameters exist in DB, map them with their DB units and reference ranges
+  if (Array.isArray(dbParams) && dbParams.length > 0) {
+    const normGender = (patientGender || "").toLowerCase().startsWith("f")
+      ? "Female"
+      : (patientGender || "").toLowerCase().startsWith("m")
+      ? "Male"
+      : "All";
+
+    let relevantParams = dbParams;
+
+    if (normGender === "Female") {
+      // STRICT GENDER RULE: Do NOT show male-exclusive parameters for female patients
+      relevantParams = dbParams.filter((p) => {
+        const g = (p.gender || "").toLowerCase().trim();
+        if (g === "male" || g === "m") return false;
+        const pName = (p.parameter_name || "").toLowerCase();
+        if (/\b(male|men)\b/i.test(pName) && !/\b(female|women)\b/i.test(pName)) return false;
+        return true;
+      });
+    } else if (normGender === "Male") {
+      // STRICT GENDER RULE: Do NOT show female-exclusive parameters for male patients
+      relevantParams = dbParams.filter((p) => {
+        const g = (p.gender || "").toLowerCase().trim();
+        if (g === "female" || g === "f") return false;
+        const pName = (p.parameter_name || "").toLowerCase();
+        if (/\b(female|women)\b/i.test(pName) && !/\b(male|men)\b/i.test(pName)) return false;
+        return true;
+      });
+    } else {
+      // Deduplicate parameters with same name if genders differ
+      const seen = new Map<string, any>();
+      const deduped: any[] = [];
+      for (const p of dbParams) {
+        const key = p.parameter_name.toLowerCase().trim();
+        if (!seen.has(key)) {
+          seen.set(key, p);
+          deduped.push(p);
+        }
+      }
+      relevantParams = deduped;
+    }
+
+    const mapped = relevantParams.map((p, idx) => {
+      const typeInfo = parseParameterInputType(p.unit, p.ref_range_text, p.ref_range_low, p.ref_range_high);
+      const existingResult = item?.lab_result?.find(
+        (r) =>
+          (r.lab_test_parameter_id && r.lab_test_parameter_id === p.lab_test_parameter_id) ||
+          r.parameter_name.toLowerCase() === p.parameter_name.toLowerCase()
+      );
+
+      const rawRefRangeStr =
+        p.ref_range_text ||
+        (p.ref_range_low != null && p.ref_range_high != null
+          ? `${p.ref_range_low} - ${p.ref_range_high}`
+          : p.ref_range_low != null
+          ? `>= ${p.ref_range_low}`
+          : p.ref_range_high != null
+          ? `< ${p.ref_range_high}`
+          : "");
+      const refRangeStr = formatGenderReferenceRange(rawRefRangeStr, patientGender, p.unit);
+
+      const resultVal = existingResult?.result_value || "";
+      const status: "Completed" | "In Progress" | "Not Started" =
+        resultVal ? "Completed" : "Not Started";
+
+      const flag =
+        (existingResult?.abnormal_flag as any) ||
+        evaluateAbnormalFlag(resultVal, {
+          inputType: typeInfo.inputType,
+          refRangeLow: p.ref_range_low != null ? Number(p.ref_range_low) : null,
+          refRangeHigh: p.ref_range_high != null ? Number(p.ref_range_high) : null,
+          referenceRange: refRangeStr,
+          unit: p.unit || "",
+        });
+
+      return {
+        id: p.lab_test_parameter_id || `${bestMaster?.lab_test_id || "p"}-${idx + 1}`,
+        lab_test_parameter_id: p.lab_test_parameter_id,
+        parameter: p.parameter_name,
+        result: resultVal,
+        unit: p.unit || "",
+        referenceRange: refRangeStr,
+        status,
+        abnormalFlag: flag,
+        inputType: typeInfo.inputType,
+        options: typeInfo.options,
+        refRangeLow: p.ref_range_low != null ? Number(p.ref_range_low) : null,
+        refRangeHigh: p.ref_range_high != null ? Number(p.ref_range_high) : null,
+        gender: p.gender,
+        resultComment: existingResult?.result_comment || "",
+      };
+    });
+
+    const seenNames = new Set<string>();
+    const dedupedParams: TestParameter[] = [];
+    for (const p of mapped) {
+      const k = p.parameter.toLowerCase().trim();
+      if (!seenNames.has(k)) {
+        seenNames.add(k);
+        dedupedParams.push(p);
+      }
+    }
+    return dedupedParams;
+  }
+
+  // 5. Single test parameter using bestMaster's unit/reference_range fetched directly from database
+  const master = bestMaster || item?.lab_test_master || matchedTestMaster;
+  if (master && (master.unit || master.reference_range || master.test_name)) {
+    const ltm = master;
+    const formattedRefRange = formatGenderReferenceRange(ltm.reference_range, patientGender, ltm.unit);
+    const typeInfo = parseParameterInputType(ltm.unit, formattedRefRange);
+    const existingResult = item?.lab_result?.[0];
+    const resultVal = existingResult?.result_value || "";
+
+    return [
+      {
+        id: ltm.lab_test_id || "single-p1",
+        lab_test_parameter_id: undefined,
+        parameter: ltm.test_name || testName || "Result",
+        result: resultVal,
+        unit: ltm.unit || "",
+        referenceRange: formattedRefRange,
+        status: resultVal ? "Completed" : "Not Started",
+        abnormalFlag:
+          (existingResult?.abnormal_flag as any) ||
+          evaluateAbnormalFlag(resultVal, {
+            inputType: typeInfo.inputType,
+            referenceRange: formattedRefRange,
+            unit: ltm.unit || "",
+          }),
+        inputType: typeInfo.inputType,
+        options: typeInfo.options,
+        resultComment: existingResult?.result_comment || "",
+      },
+    ];
+  }
+
+  return getDefaultParametersForTest(testName || "Diagnostic Test");
+}
+
+export function resolveTestParameters(
+  item?: LabOrderItemRecord | null,
+  patientGender?: string | null,
+  testName?: string,
+  matchedTestMaster?: LabTestMasterRecord | null,
+): TestParameter[] {
+  return resolveAllTestParameters({
+    item,
+    patientGender,
+    testName,
+    matchedTestMaster,
+  });
+}
 export function determineAnalyzerBench(testName: string, sampleType?: string): string {
   const t = (testName || "").toLowerCase();
   const s = (sampleType || "").toLowerCase();
@@ -95,455 +940,28 @@ export function getDefaultParametersForTest(
     reference_range?: string | null;
   }
 ): TestParameter[] {
-  const lower = (testName || "").toLowerCase();
-
-  if (lower.includes("cbc") || lower.includes("blood count")) {
-    return [
-      {
-        id: "p1",
-        parameter: "WBC (White Blood Cells)",
-        result: "6.80",
-        unit: "10^3/µL",
-        referenceRange: "4.0 - 10.0",
-        status: "Completed",
-      },
-      {
-        id: "p2",
-        parameter: "RBC (Red Blood Cells)",
-        result: "4.82",
-        unit: "10^6/µL",
-        referenceRange: "4.2 - 5.8",
-        status: "Completed",
-      },
-      {
-        id: "p3",
-        parameter: "HGB (Hemoglobin)",
-        result: "14.2",
-        unit: "g/dL",
-        referenceRange: "13.0 - 17.0",
-        status: "Completed",
-      },
-      {
-        id: "p4",
-        parameter: "HCT (Hematocrit)",
-        result: "42.5",
-        unit: "%",
-        referenceRange: "40 - 50",
-        status: "In Progress",
-      },
-      {
-        id: "p5",
-        parameter: "MCV (Mean Corpuscular Vol)",
-        result: "88.0",
-        unit: "fL",
-        referenceRange: "80 - 100",
-        status: "In Progress",
-      },
-      {
-        id: "p6",
-        parameter: "MCH (Mean Corpuscular Hb)",
-        result: "29.5",
-        unit: "pg",
-        referenceRange: "27 - 34",
-        status: "In Progress",
-      },
-      {
-        id: "p7",
-        parameter: "MCHC (MCH Concentration)",
-        result: "33.4",
-        unit: "g/dL",
-        referenceRange: "32 - 36",
-        status: "Not Started",
-      },
-      {
-        id: "p8",
-        parameter: "PLT (Platelet Count)",
-        result: "240",
-        unit: "10^3/µL",
-        referenceRange: "150 - 450",
-        status: "Not Started",
-      },
-    ];
-  }
-
-  if (lower.includes("wbc")) {
-    return [
-      {
-        id: "p1",
-        parameter: "WBC (White Blood Cells)",
-        result: "7.20",
-        unit: labTestMaster?.unit || "10^3/µL",
-        referenceRange: labTestMaster?.reference_range || "4.0 - 10.0",
-        status: "Completed",
-      },
-      {
-        id: "p2",
-        parameter: "Neutrophils",
-        result: "62",
-        unit: "%",
-        referenceRange: "40 - 75",
-        status: "Completed",
-      },
-      {
-        id: "p3",
-        parameter: "Lymphocytes",
-        result: "28",
-        unit: "%",
-        referenceRange: "20 - 45",
-        status: "Completed",
-      },
-      {
-        id: "p4",
-        parameter: "Monocytes",
-        result: "6",
-        unit: "%",
-        referenceRange: "2 - 10",
-        status: "In Progress",
-      },
-      {
-        id: "p5",
-        parameter: "Eosinophils",
-        result: "3",
-        unit: "%",
-        referenceRange: "1 - 6",
-        status: "In Progress",
-      },
-      {
-        id: "p6",
-        parameter: "Basophils",
-        result: "1",
-        unit: "%",
-        referenceRange: "0 - 2",
-        status: "Not Started",
-      },
-    ];
-  }
-
-  if (
-    lower.includes("kft") ||
-    lower.includes("kidney") ||
-    lower.includes("renal")
-  ) {
-    return [
-      {
-        id: "p1",
-        parameter: "Serum Creatinine",
-        result: "0.95",
-        unit: "mg/dL",
-        referenceRange: "0.7 - 1.3",
-        status: "Completed",
-      },
-      {
-        id: "p2",
-        parameter: "Blood Urea",
-        result: "24",
-        unit: "mg/dL",
-        referenceRange: "15 - 40",
-        status: "Completed",
-      },
-      {
-        id: "p3",
-        parameter: "BUN (Blood Urea Nitrogen)",
-        result: "11.2",
-        unit: "mg/dL",
-        referenceRange: "7 - 20",
-        status: "In Progress",
-      },
-      {
-        id: "p4",
-        parameter: "Uric Acid",
-        result: "5.4",
-        unit: "mg/dL",
-        referenceRange: "3.5 - 7.2",
-        status: "In Progress",
-      },
-      {
-        id: "p5",
-        parameter: "eGFR",
-        result: "95",
-        unit: "mL/min/1.73m²",
-        referenceRange: "> 90",
-        status: "Completed",
-      },
-    ];
-  }
-
-  if (lower.includes("lft") || lower.includes("liver")) {
-    return [
-      {
-        id: "p1",
-        parameter: "Bilirubin (Total)",
-        result: "0.8",
-        unit: "mg/dL",
-        referenceRange: "0.2 - 1.2",
-        status: "Completed",
-      },
-      {
-        id: "p2",
-        parameter: "Bilirubin (Direct)",
-        result: "0.2",
-        unit: "mg/dL",
-        referenceRange: "0.0 - 0.3",
-        status: "Completed",
-      },
-      {
-        id: "p3",
-        parameter: "SGOT / AST",
-        result: "28",
-        unit: "U/L",
-        referenceRange: "10 - 40",
-        status: "Completed",
-      },
-      {
-        id: "p4",
-        parameter: "SGPT / ALT",
-        result: "32",
-        unit: "U/L",
-        referenceRange: "7 - 56",
-        status: "In Progress",
-      },
-      {
-        id: "p5",
-        parameter: "Alkaline Phosphatase (ALP)",
-        result: "78",
-        unit: "U/L",
-        referenceRange: "44 - 147",
-        status: "In Progress",
-      },
-      {
-        id: "p6",
-        parameter: "Total Protein",
-        result: "7.1",
-        unit: "g/dL",
-        referenceRange: "6.0 - 8.3",
-        status: "Not Started",
-      },
-      {
-        id: "p7",
-        parameter: "Albumin",
-        result: "4.2",
-        unit: "g/dL",
-        referenceRange: "3.5 - 5.0",
-        status: "Not Started",
-      },
-    ];
-  }
-
-  if (lower.includes("lipid")) {
-    return [
-      {
-        id: "p1",
-        parameter: "Total Cholesterol",
-        result: "185",
-        unit: "mg/dL",
-        referenceRange: "< 200",
-        status: "Completed",
-      },
-      {
-        id: "p2",
-        parameter: "Triglycerides",
-        result: "140",
-        unit: "mg/dL",
-        referenceRange: "< 150",
-        status: "Completed",
-      },
-      {
-        id: "p3",
-        parameter: "HDL Cholesterol",
-        result: "48",
-        unit: "mg/dL",
-        referenceRange: "> 40",
-        status: "Completed",
-      },
-      {
-        id: "p4",
-        parameter: "LDL Cholesterol",
-        result: "109",
-        unit: "mg/dL",
-        referenceRange: "< 100",
-        status: "In Progress",
-      },
-      {
-        id: "p5",
-        parameter: "VLDL",
-        result: "28",
-        unit: "mg/dL",
-        referenceRange: "< 30",
-        status: "Not Started",
-      },
-    ];
-  }
-
-  if (lower.includes("hba1c") || lower.includes("glycated")) {
-    return [
-      {
-        id: "p1",
-        parameter: "HbA1c Glycated Hemoglobin",
-        result: "5.7",
-        unit: "%",
-        referenceRange: "< 5.7",
-        status: "Completed",
-      },
-      {
-        id: "p2",
-        parameter: "Estimated Average Glucose (eAG)",
-        result: "117",
-        unit: "mg/dL",
-        referenceRange: "70 - 126",
-        status: "Completed",
-      },
-    ];
-  }
-
   return [
     {
       id: "p1",
-      parameter: labTestMaster?.test_name || testName || "Primary Parameter",
+      parameter: labTestMaster?.test_name || testName || "Result",
       result: "",
-      unit: labTestMaster?.unit || "mg/dL",
-      referenceRange: labTestMaster?.reference_range || "Normal",
-      status: "In Progress",
+      unit: labTestMaster?.unit || "",
+      referenceRange: labTestMaster?.reference_range || "—",
+      status: "Not Started",
     },
   ];
 }
 
-export const INITIAL_CBC_PARAMETERS: TestParameter[] = [
-  {
-    id: "p1",
-    parameter: "WBC (White Blood Cells)",
-    result: "6.80",
-    unit: "10^3/µL",
-    referenceRange: "4.0 - 10.0",
-    status: "Completed",
-  },
-  {
-    id: "p2",
-    parameter: "RBC (Red Blood Cells)",
-    result: "4.82",
-    unit: "10^6/µL",
-    referenceRange: "4.2 - 5.8",
-    status: "Completed",
-  },
-  {
-    id: "p3",
-    parameter: "HGB (Hemoglobin)",
-    result: "14.2",
-    unit: "g/dL",
-    referenceRange: "13.0 - 17.0",
-    status: "Completed",
-  },
-  {
-    id: "p4",
-    parameter: "HCT (Hematocrit)",
-    result: "",
-    unit: "%",
-    referenceRange: "40 - 50",
-    status: "In Progress",
-  },
-  {
-    id: "p5",
-    parameter: "MCV (Mean Corpuscular Vol)",
-    result: "",
-    unit: "fL",
-    referenceRange: "80 - 100",
-    status: "In Progress",
-  },
-  {
-    id: "p6",
-    parameter: "MCH (Mean Corpuscular Hb)",
-    result: "",
-    unit: "pg",
-    referenceRange: "27 - 34",
-    status: "In Progress",
-  },
-  {
-    id: "p7",
-    parameter: "MCHC (MCH Concentration)",
-    result: "",
-    unit: "g/dL",
-    referenceRange: "32 - 36",
-    status: "Not Started",
-  },
-  {
-    id: "p8",
-    parameter: "PLT (Platelet Count)",
-    result: "",
-    unit: "10^3/µL",
-    referenceRange: "150 - 450",
-    status: "Not Started",
-  },
-];
-
-export const INITIAL_TESTING_SAMPLES: TestingSampleItem[] = [
-  {
-    id: "s2",
-    sampleId: "SMP-002",
-    barcode: "BC2405200002",
-    patientId: "PID123456",
-    patientName: "Rahul Sharma",
-    testName: "Liver Function Test (LFT)",
-    analyzerBench: "Cobas 6000 (Biochemistry)",
-    startTime: "10:32 AM",
-    estimatedCompletion: "11:05 AM",
-    status: "RUNNING",
-    sampleType: "Serum (SST)",
-    receivedDate: "20 May 2024",
-    receivedBy: "John Doe",
-  },
-  {
-    id: "s3",
-    sampleId: "SMP-003",
-    barcode: "BC2405200003",
-    patientId: "P000124",
-    patientName: "Priya",
-    testName: "Kidney Function Test (KFT)",
-    analyzerBench: "Cobas 6000 (Biochemistry)",
-    startTime: "11:35 AM",
-    estimatedCompletion: "12:00 PM",
-    status: "COMPLETED",
-    sampleType: "Serum",
-    receivedDate: "20 May 2024",
-    receivedBy: "John Doe",
-    testResult: "Creatinine: 0.8 mg/dL, Urea: 22 mg/dL",
-  },
-  {
-    id: "s1",
-    sampleId: "SMP-001",
-    barcode: "BC2405200001",
-    patientId: "PID123456",
-    patientName: "Rahul Sharma",
-    testName: "Complete Blood Count (CBC)",
-    analyzerBench: "Sysmex XN-1000 (Hematology)",
-    startTime: "10:30 AM",
-    estimatedCompletion: "11:00 AM",
-    status: "RUNNING",
-    sampleType: "Whole Blood",
-    receivedDate: "20 May 2024",
-    receivedBy: "John Doe",
-    parameters: INITIAL_CBC_PARAMETERS,
-  },
-  {
-    id: "s4",
-    sampleId: "SMP-004",
-    barcode: "BC2405200004",
-    patientId: "P000125",
-    patientName: "Praveen Singh",
-    testName: "Lipid Profile",
-    analyzerBench: "Beckman Coulter AU480",
-    startTime: "10:45 AM",
-    estimatedCompletion: "11:30 AM",
-    status: "FLAGGED",
-    sampleType: "Serum (SST)",
-    receivedDate: "03 Apr 2026",
-    receivedBy: "John Doe",
-    criticalAlert: "High Triglycerides (> 450 mg/dL)",
-    testResult: "Cholesterol: 245 mg/dL, Triglycerides: 480 mg/dL",
-  },
-];
+export const INITIAL_CBC_PARAMETERS: TestParameter[] = [];
+export const INITIAL_LFT_PARAMETERS: TestParameter[] = [];
+export const INITIAL_KFT_PARAMETERS: TestParameter[] = [];
+export const INITIAL_LIPID_PARAMETERS: TestParameter[] = [];
+export const INITIAL_TESTING_SAMPLES: TestingSampleItem[] = [];
 
 export default function TestingSamples() {
   const navigate = useNavigate();
   const currentUser = useMemo(() => getUser(), []);
+  const currentUsername = currentUser?.username || "Lab Technician";
   const displayName = currentUser?.username || "Labtech";
   const displayRole =
     currentUser?.role_type === "LAB_TECHNICIAN"
@@ -556,22 +974,12 @@ export default function TestingSamples() {
   };
 
   const [activeNav, setActiveNav] = useState("Testing Samples");
-  const [samples, setSamples] = useState<TestingSampleItem[]>(() => {
-    return INITIAL_TESTING_SAMPLES.filter((ms) => {
-      const isRejected =
-        typeof window !== "undefined" &&
-        localStorage.getItem(`rejected_sample_${ms.id}`) === "true";
-      if (isRejected) return false;
-
-      const isVerified =
-        ms.id === "s2" ||
-        ms.id === "s3" ||
-        (typeof window !== "undefined" &&
-          (localStorage.getItem(`verified_sample_${ms.id}`) === "true" ||
-            localStorage.getItem(`verified_sample_barcode_${ms.barcode}`) === "true"));
-      return isVerified;
-    });
-  });
+  const [expandedSampleId, setExpandedSampleId] = useState<string | null>(null);
+  const [isDbMasterDrawerOpen, setIsDbMasterDrawerOpen] = useState(false);
+  const [dbMasterSearch, setDbMasterSearch] = useState("");
+  const [testMastersList, setTestMastersList] = useState<LabTestMasterRecord[]>([]);
+  const [testParametersList, setTestParametersList] = useState<LabTestParameterRecord[]>([]);
+  const [samples, setSamples] = useState<TestingSampleItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -579,27 +987,17 @@ export default function TestingSamples() {
     "ALL" | "RUNNING" | "COMPLETED" | "FLAGGED" | "CALIBRATING"
   >("ALL");
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
-  const [quickInputBarcode, setQuickInputBarcode] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState<"ALL" | "DUE_SOON" | "EXPIRED">("ALL");
+  const currentTime = useCurrentTimeTicker(30000);
 
-  // Verification and Results Workflow State
+  // Results Workflow State
   const [viewMode, setViewMode] = useState<
-    "table" | "verify" | "enter-results" | "mark-completed"
+    "table" | "enter-results" | "mark-completed"
   >("table");
-  const [selectedSample, setSelectedSample] = useState<TestingSampleItem>(
-    INITIAL_TESTING_SAMPLES[0],
-  );
-  const [checklist, setChecklist] = useState({
-    sampleIntact: "Yes",
-    labelInfoCorrect: "Yes",
-    sufficientQuantity: "Yes",
-    properPackaging: "Yes",
-  });
-  const [verificationComments, setVerificationComments] = useState("");
+  const [selectedSample, setSelectedSample] = useState<TestingSampleItem | null>(null);
 
   // Enter Test Results State
-  const [testParameters, setTestParameters] = useState<TestParameter[]>(
-    INITIAL_CBC_PARAMETERS,
-  );
+  const [testParameters, setTestParameters] = useState<TestParameter[]>([]);
   const [resultComments, setResultComments] = useState("");
 
   // Mark as Completed State
@@ -611,10 +1009,12 @@ export default function TestingSamples() {
       setIsLoading(true);
       setFetchError(null);
 
-      const [ordersRes, itemsRes, patientsRes] = await Promise.all([
+      const [ordersRes, itemsRes, patientsRes, testMastersRes, testParamsRes] = await Promise.all([
         labOrderApi.getAll().catch(() => ({ data: { data: [] } })),
         labOrderItemApi.getAll().catch(() => ({ data: { data: [] } })),
         patientApi.getAll({ limit: 100 }).catch(() => ({ data: { data: { patients: [] } } })),
+        labTestMasterApi.getAll().catch(() => ({ data: { data: [] } })),
+        labTestMasterApi.getParameters().catch(() => ({ data: { data: [] } })),
       ]);
 
       const currentUsername = currentUser?.username || "Lab Technician";
@@ -629,6 +1029,35 @@ export default function TestingSamples() {
       const patients: PatientRecord[] = Array.isArray(patientsRaw)
         ? patientsRaw
         : (patientsRaw as any)?.patients || [];
+
+      const testMasters: LabTestMasterRecord[] = Array.isArray(testMastersRes?.data?.data)
+        ? testMastersRes.data.data
+        : [];
+      const dbParameters: LabTestParameterRecord[] = Array.isArray(testParamsRes?.data?.data)
+        ? testParamsRes.data.data
+        : [];
+      setTestMastersList(testMasters);
+      setTestParametersList(dbParameters);
+      const testMasterById = new Map<string, LabTestMasterRecord>();
+      const testMasterByCode = new Map<string, LabTestMasterRecord>();
+      const testMasterByName = new Map<string, LabTestMasterRecord>();
+      testMasters.forEach((tm) => {
+        if (tm.lab_test_id) testMasterById.set(tm.lab_test_id, tm);
+        if (tm.test_code) {
+          const codeKey = tm.test_code.toLowerCase();
+          const existing = testMasterByCode.get(codeKey);
+          if (!existing || (tm.lab_test_parameter?.length || 0) > (existing.lab_test_parameter?.length || 0)) {
+            testMasterByCode.set(codeKey, tm);
+          }
+        }
+        if (tm.test_name) {
+          const nameKey = tm.test_name.toLowerCase();
+          const existing = testMasterByName.get(nameKey);
+          if (!existing || (tm.lab_test_parameter?.length || 0) > (existing.lab_test_parameter?.length || 0)) {
+            testMasterByName.set(nameKey, tm);
+          }
+        }
+      });
 
       if (items.length > 0) {
         const patientMap = new Map<string, PatientRecord>();
@@ -685,13 +1114,22 @@ export default function TestingSamples() {
 
         const mappedBackendSamples: TestingSampleItem[] = verifiedBackendItems.map((item, idx) => {
           const parentOrder = orderMap.get(item.lab_order_id) || item.lab_order;
+          const orderBioData =
+            (parentOrder?.patient_history as any)?.patient_bio_data ||
+            (item.lab_order?.patient_history as any)?.patient_bio_data ||
+            (parentOrder as any)?.patient_bio_data;
+
           const pId =
+            orderBioData?.patient_id ||
             parentOrder?.patient_history?.patient_id ||
             parentOrder?.patient_history_id ||
             `PAT00${idx + 1}`;
-          const patient = patientMap.get(pId);
 
-          const pName = patient
+          const patient = orderBioData || patientMap.get(pId) || patientMap.get(parentOrder?.patient_history?.patient_id || "");
+
+          const pName = orderBioData
+            ? [orderBioData.patient_first_name, orderBioData.patient_middle_name, orderBioData.patient_last_name].filter(Boolean).join(" ")
+            : patient
             ? [
                 patient.patient_first_name,
                 patient.patient_middle_name,
@@ -700,6 +1138,13 @@ export default function TestingSamples() {
                 .filter(Boolean)
                 .join(" ")
             : `Patient ${pId}`;
+
+          const resolvedGender =
+            orderBioData?.patient_gender ||
+            patient?.patient_gender ||
+            (parentOrder?.patient_history as any)?.patient_gender ||
+            (parentOrder as any)?.patient_gender ||
+            "All";
 
           const testName =
             item.lab_test_master?.test_name ||
@@ -738,7 +1183,24 @@ export default function TestingSamples() {
             ? createdDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })
             : "10:30 AM";
 
-          const tatHours = Number(item.lab_test_master?.tat_hours) || 1;
+          const regTimeStored =
+            typeof window !== "undefined"
+              ? localStorage.getItem(`registered_sample_item_time_${item.lab_order_item_id}`) ||
+                localStorage.getItem(`registered_sample_time_${item.lab_order_id}`)
+              : null;
+          const colDateTime =
+            regTimeStored ||
+            item.sample_collection?.[0]?.collection_datetime ||
+            item.sample_collection?.[0]?.created_at ||
+            item.created_at;
+          const colDate = colDateTime ? new Date(colDateTime) : createdDate;
+          const stabilityHours = resolveStabilityHours(
+            testName,
+            sampleType,
+            item.lab_test_master?.tat_hours,
+            item.priority
+          );
+          const tatHours = stabilityHours;
           const estDate = new Date(createdDate.getTime() + tatHours * 3600 * 1000);
           const estimatedCompletion = !isNaN(estDate.getTime())
             ? estDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true })
@@ -770,18 +1232,95 @@ export default function TestingSamples() {
             status = idx % 2 === 0 ? "RUNNING" : "CALIBRATING";
           }
 
+          // Match backend lab_test_master record
+          const matchedTestMaster =
+            testMasterById.get(item.lab_test_id) ||
+            (item.lab_test_master?.test_code ? testMasterByCode.get(item.lab_test_master.test_code.toLowerCase()) : null) ||
+            testMasterByName.get(testName.toLowerCase()) ||
+            (testName.includes("(") ? testMasterByName.get(testName.replace(/\s*\([^)]*\)/g, "").trim().toLowerCase()) : null);
+
+          if (matchedTestMaster && (!item.lab_test_master?.lab_test_parameter || item.lab_test_master.lab_test_parameter.length === 0)) {
+            item.lab_test_master = {
+              ...matchedTestMaster,
+              ...item.lab_test_master,
+              unit: item.lab_test_master?.unit || matchedTestMaster.unit,
+              reference_range: item.lab_test_master?.reference_range || matchedTestMaster.reference_range,
+              lab_test_parameter: matchedTestMaster.lab_test_parameter,
+            };
+          }
+
+          const dbResolvedParams = resolveAllTestParameters({
+            item,
+            patientGender: resolvedGender,
+            testName,
+            allMasters: testMasters,
+            allDbParameters: dbParameters,
+            matchedTestMaster,
+          });
+
+          let params: TestParameter[] = dbResolvedParams;
+
+          // Hydrate parameters with real database lab_result records
+          if (item.lab_result && Array.isArray(item.lab_result) && item.lab_result.length > 0) {
+            params = params.map((dbp) => {
+              const matched = item.lab_result?.find((lr) =>
+                (lr.lab_test_parameter_id && lr.lab_test_parameter_id === dbp.lab_test_parameter_id) ||
+                (lr.parameter_name && lr.parameter_name.toLowerCase().trim() === dbp.parameter.toLowerCase().trim())
+              );
+              if (matched && matched.result_value != null && matched.result_value !== "") {
+                const evalFlag = evaluateAbnormalFlag(matched.result_value, {
+                  inputType: dbp.inputType,
+                  refRangeLow: dbp.refRangeLow,
+                  refRangeHigh: dbp.refRangeHigh,
+                  referenceRange: dbp.referenceRange,
+                  unit: dbp.unit,
+                });
+                return {
+                  ...dbp,
+                  result: matched.result_value,
+                  status: (matched.result_status === "Completed" ? "Completed" : "In Progress") as any,
+                  abnormalFlag: (matched.abnormal_flag || evalFlag) as any,
+                };
+              }
+              return dbp;
+            });
+          }
+
           const storedParams = typeof window !== "undefined"
             ? localStorage.getItem(`testing_sample_params_${item.lab_order_item_id}`)
             : null;
-          let params: TestParameter[] = [];
           if (storedParams) {
             try {
-              params = JSON.parse(storedParams);
+              const parsed = JSON.parse(storedParams);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                params = dbResolvedParams.map((dbp) => {
+                  const matched = parsed.find((p: any) =>
+                    (p.lab_test_parameter_id && p.lab_test_parameter_id === dbp.lab_test_parameter_id) ||
+                    p.parameter.toLowerCase() === dbp.parameter.toLowerCase() ||
+                    p.id === dbp.id
+                  );
+                  if (matched && matched.result) {
+                    return {
+                      ...dbp,
+                      result: matched.result,
+                      status: "Completed",
+                      abnormalFlag: matched.abnormalFlag || dbp.abnormalFlag,
+                    };
+                  }
+                  return dbp;
+                });
+              }
             } catch {}
           }
-          if (!params || params.length === 0) {
-            params = getDefaultParametersForTest(testName, item.lab_test_master);
-          }
+
+          const singleUnit = item.lab_test_master?.unit || matchedTestMaster?.unit || params[0]?.unit || "";
+          const rawSingleRange = item.lab_test_master?.reference_range || matchedTestMaster?.reference_range || params[0]?.referenceRange || "";
+          const singleRange = formatGenderReferenceRange(rawSingleRange, resolvedGender, singleUnit);
+          const isMulti = params.length > 1;
+          const parametersCount = params.length;
+          const parametersPreview = isMulti
+            ? params.map(p => `${p.parameter}: ${p.referenceRange || "—"} ${p.unit}`).slice(0, 5).join(" | ") + (params.length > 5 ? "..." : "")
+            : `${singleRange} ${singleUnit}`.trim();
 
           const storedResult = typeof window !== "undefined"
             ? localStorage.getItem(`testing_sample_result_${item.lab_order_item_id}`)
@@ -796,25 +1335,47 @@ export default function TestingSamples() {
             ? localStorage.getItem(`testing_sample_comments_${item.lab_order_item_id}`)
             : null;
 
-          return {
-            id: item.lab_order_item_id,
-            sampleId,
-            barcode: resolvedBarcode,
-            patientId: pId,
-            patientName: pName,
-            testName,
-            analyzerBench: determineAnalyzerBench(testName, sampleType),
-            startTime,
-            estimatedCompletion,
-            status,
-            sampleType,
-            receivedDate,
-            receivedBy: item.sample_collection?.[0]?.collected_by || currentUsername,
-            comments: storedComments || item.remarks || "",
-            testResult,
-            parameters: params,
-          };
-        });
+          const hasCriticalParam = params.some((p) => p.abnormalFlag === "CRITICAL");
+          const criticalAlert = hasCriticalParam
+            ? `Critical: ${params.filter((p) => p.abnormalFlag === "CRITICAL").map((p) => `${p.parameter} (${p.result} ${p.unit || ""})`.trim()).join(", ")}`
+            : undefined;
+
+            const rawTargetDate = item.target_date || (parentOrder as any)?.target_date;
+            const targetDateFormatted = rawTargetDate ? formatTargetDate(rawTargetDate) : undefined;
+            const targetDateIso = rawTargetDate ? (normalizeToIsoDate(rawTargetDate) || undefined) : undefined;
+
+            return {
+              id: item.lab_order_item_id,
+              sampleId,
+              barcode: resolvedBarcode,
+              patientId: pId,
+              patientName: pName,
+              testName,
+              analyzerBench: determineAnalyzerBench(testName, sampleType),
+              startTime,
+              collectionTime: startTime,
+              collectionTimeIso: !isNaN(colDate.getTime()) ? colDate.toISOString() : undefined,
+              stabilityHours,
+              priority: item.priority || "Normal",
+              estimatedCompletion,
+              status,
+              sampleType,
+              receivedDate,
+              receivedBy: item.sample_collection?.[0]?.collected_by || currentUsername,
+              comments: storedComments || item.remarks || "",
+              testResult,
+              parameters: params,
+              criticalAlert,
+              targetDate: targetDateFormatted,
+              targetDateIso,
+              rawOrderItem: item,
+              patientGender: resolvedGender,
+              unit: singleUnit,
+              expectedRange: isMulti ? undefined : singleRange,
+              parametersCount,
+              parametersPreview,
+            };
+          });
 
         // Also merge any verified samples from local cache (from Sample Verification)
         const verifiedCache: any[] = typeof window !== "undefined"
@@ -829,6 +1390,28 @@ export default function TestingSamples() {
           if (!existingIds.has(cached.id) && (!cached.barcode || !existingBarcodes.has(cached.barcode))) {
             const testName = cached.testName || "Diagnostic Test";
             const sampleType = cached.sampleType || "Whole Blood";
+            const matchedTm =
+              testMasterByName.get(testName.toLowerCase()) ||
+              testMasterByCode.get(testName.toLowerCase()) ||
+              (testName.includes("(") ? testMasterByName.get(testName.replace(/\s*\([^)]*\)/g, "").trim().toLowerCase()) : null);
+
+            const resolvedParams = resolveAllTestParameters({
+              item: null,
+              patientGender: cached.patientGender || "All",
+              testName,
+              allMasters: testMasters,
+              allDbParameters: dbParameters,
+              matchedTestMaster: matchedTm,
+            });
+            const singleUnit = matchedTm?.unit || resolvedParams[0]?.unit || "";
+            const rawSingleRange = matchedTm?.reference_range || resolvedParams[0]?.referenceRange || "";
+            const singleRange = formatGenderReferenceRange(rawSingleRange, cached.patientGender, singleUnit);
+            const isMulti = resolvedParams.length > 1;
+            const parametersCount = resolvedParams.length;
+            const parametersPreview = isMulti
+              ? resolvedParams.map(p => `${p.parameter}: ${p.referenceRange || "—"} ${p.unit}`).slice(0, 5).join(" | ") + (resolvedParams.length > 5 ? "..." : "")
+              : `${singleRange} ${singleUnit}`.trim();
+
             cachedSamples.push({
               id: cached.id,
               sampleId: cached.sampleId || cached.id,
@@ -838,39 +1421,38 @@ export default function TestingSamples() {
               testName,
               analyzerBench: determineAnalyzerBench(testName, sampleType),
               startTime: cached.collectionTime || "10:30 AM",
+              collectionTime: cached.collectionTime || "10:30 AM",
+              collectionTimeIso: cached.collectionTimeIso || new Date().toISOString(),
+              stabilityHours: cached.stabilityHours || resolveStabilityHours(testName, sampleType),
+              priority: cached.priority || "Normal",
               estimatedCompletion: "11:30 AM",
               status: "RUNNING",
               sampleType,
               receivedDate: "22 Sep 2026",
               receivedBy: cached.technician || currentUsername,
               comments: "",
-              parameters: getDefaultParametersForTest(testName),
+              parameters: resolvedParams,
+              targetDate: cached.targetDate,
+              targetDateIso: cached.targetDateIso,
+              unit: singleUnit,
+              expectedRange: isMulti ? undefined : singleRange,
+              parametersCount,
+              parametersPreview,
             });
             existingIds.add(cached.id);
             if (cached.barcode) existingBarcodes.add(cached.barcode);
           }
         }
 
-        let combinedSamples = [...mappedBackendSamples, ...cachedSamples];
-
-        // If no backend verified samples, populate with verified baseline samples from Sample Verification (s2, s3, or any newly verified mock item)
-        if (combinedSamples.length === 0) {
-          combinedSamples = INITIAL_TESTING_SAMPLES.filter((ms) => {
-            const isRejected =
-              typeof window !== "undefined" &&
-              localStorage.getItem(`rejected_sample_${ms.id}`) === "true";
-            if (isRejected) return false;
-
-            const isVerified =
-              ms.id === "s2" ||
-              ms.id === "s3" ||
-              (typeof window !== "undefined" &&
-                (localStorage.getItem(`verified_sample_${ms.id}`) === "true" ||
-                  localStorage.getItem(`verified_sample_barcode_${ms.barcode}`) === "true"));
-            return isVerified;
-          });
-        }
-
+        const combinedSamples = [...mappedBackendSamples, ...cachedSamples].sort((a, b) => {
+          const isRunningA = a.status === "RUNNING" ? 1 : 0;
+          const isRunningB = b.status === "RUNNING" ? 1 : 0;
+          if (isRunningA !== isRunningB) return isRunningB - isRunningA;
+          const overdueA = isTestingSampleOverdue(a) ? 1 : 0;
+          const overdueB = isTestingSampleOverdue(b) ? 1 : 0;
+          if (overdueA !== overdueB) return overdueB - overdueA;
+          return (b.sampleId || b.id || "").localeCompare(a.sampleId || a.id || "");
+        });
         setSamples(combinedSamples);
         if (combinedSamples.length > 0) {
           setSelectedSample((prev) => {
@@ -892,25 +1474,103 @@ export default function TestingSamples() {
     fetchRealData();
   }, [fetchRealData]);
 
-  const handleOpenVerification = (sample: TestingSampleItem) => {
-    setSelectedSample(sample);
-    setChecklist({
-      sampleIntact: "Yes",
-      labelInfoCorrect: "Yes",
-      sufficientQuantity: "Yes",
-      properPackaging: "Yes",
-    });
-    setVerificationComments(sample.comments || "");
-    setViewMode("verify");
+  
+  const handleInlineParameterResultChange = (sampleId: string, paramId: string, value: string) => {
+    setSamples((prev) =>
+      prev.map((s) => {
+        if (s.id !== sampleId || !s.parameters) return s;
+        const updatedParams = s.parameters.map((p) => {
+          if (p.id !== paramId) return p;
+          const flag = evaluateAbnormalFlag(value, {
+            inputType: p.inputType,
+            refRangeLow: p.refRangeLow,
+            refRangeHigh: p.refRangeHigh,
+            referenceRange: p.referenceRange,
+            unit: p.unit,
+          });
+          return {
+            ...p,
+            result: value,
+            status: value.trim() ? ("Completed" as const) : ("Not Started" as const),
+            abnormalFlag: flag,
+          };
+        });
+        if (typeof window !== "undefined") {
+          localStorage.setItem(`testing_sample_params_${s.id}`, JSON.stringify(updatedParams));
+        }
+        return { ...s, parameters: updatedParams };
+      })
+    );
   };
 
   const handleOpenEnterResults = (sample: TestingSampleItem) => {
     setSelectedSample(sample);
-    if (sample.parameters && sample.parameters.length > 0) {
-      setTestParameters(sample.parameters);
-    } else {
-      setTestParameters(getDefaultParametersForTest(sample.testName));
+
+    // Resolve all clinical parameters related to this test from database masters
+    const resolved = resolveAllTestParameters({
+      item: sample.rawOrderItem,
+      patientGender: sample.patientGender,
+      testName: sample.testName,
+      allMasters: testMastersList,
+      allDbParameters: testParametersList,
+    });
+
+    // Check for any stored results in localStorage or in sample.parameters
+    const storedParamsRaw =
+      typeof window !== "undefined"
+        ? localStorage.getItem(`testing_sample_params_${sample.id}`)
+        : null;
+    let existingObs: any[] = [];
+    if (storedParamsRaw) {
+      try {
+        const parsed = JSON.parse(storedParamsRaw);
+        if (Array.isArray(parsed)) existingObs = parsed;
+      } catch {}
     }
+    if (existingObs.length === 0 && Array.isArray(sample.parameters)) {
+      existingObs = sample.parameters;
+    }
+    if (existingObs.length === 0 && Array.isArray(sample.rawOrderItem?.lab_result)) {
+      existingObs = sample.rawOrderItem.lab_result.map((lr) => ({
+        lab_test_parameter_id: lr.lab_test_parameter_id,
+        parameter: lr.parameter_name,
+        result: lr.result_value,
+        abnormalFlag: lr.abnormal_flag,
+        resultComment: lr.result_comment,
+      }));
+    }
+
+    // Merge existing observations into resolved parameter definitions
+    const merged: TestParameter[] = resolved.map((rp): TestParameter => {
+      const match = existingObs.find(
+        (ep: any) =>
+          (ep.lab_test_parameter_id && ep.lab_test_parameter_id === rp.lab_test_parameter_id) ||
+          (ep.id && ep.id === rp.id) ||
+          (ep.parameter && ep.parameter.toLowerCase() === rp.parameter.toLowerCase())
+      );
+      if (match && match.result && String(match.result).trim() !== "") {
+        const resVal = String(match.result).trim();
+        const flag =
+          match.abnormalFlag ||
+          evaluateAbnormalFlag(resVal, {
+            inputType: rp.inputType,
+            refRangeLow: rp.refRangeLow,
+            refRangeHigh: rp.refRangeHigh,
+            referenceRange: rp.referenceRange,
+            unit: rp.unit,
+          });
+        return {
+          ...rp,
+          result: resVal,
+          status: "Completed",
+          abnormalFlag: flag,
+          resultComment: match.resultComment || rp.resultComment,
+        };
+      }
+      return rp;
+    });
+
+    setTestParameters(merged);
     setResultComments(sample.comments || "");
     setViewMode("enter-results");
   };
@@ -922,6 +1582,7 @@ export default function TestingSamples() {
   };
 
   const handleConfirmMarkCompleted = async () => {
+    if (!selectedSample) return;
     const updatedResult =
       selectedSample.testResult ||
       "All test parameters verified & completed successfully.";
@@ -938,12 +1599,16 @@ export default function TestingSamples() {
           : s,
       ),
     );
-    setSelectedSample((prev) => ({
-      ...prev,
-      status: "COMPLETED",
-      comments: completionComments.trim() || prev.comments,
-      testResult: updatedResult,
-    }));
+    setSelectedSample((prev) =>
+      prev
+        ? {
+            ...prev,
+            status: "COMPLETED",
+            comments: completionComments.trim() || prev.comments,
+            testResult: updatedResult,
+          }
+        : null,
+    );
 
     try {
       localStorage.setItem(`testing_sample_status_${selectedSample.id}`, "COMPLETED");
@@ -954,7 +1619,7 @@ export default function TestingSamples() {
       const paramsToSave =
         selectedSample.parameters && selectedSample.parameters.length > 0
           ? selectedSample.parameters
-          : getDefaultParametersForTest(selectedSample.testName);
+          : resolveTestParameters(selectedSample.rawOrderItem, selectedSample.patientGender, selectedSample.testName);
       localStorage.setItem(`testing_sample_params_${selectedSample.id}`, JSON.stringify(paramsToSave));
 
       try {
@@ -984,11 +1649,38 @@ export default function TestingSamples() {
         console.warn("Could not save to completed_testing_samples registry:", e);
       }
 
-      if (!selectedSample.id.startsWith("ts-") && !selectedSample.id.startsWith("s")) {
-        await labOrderItemApi.update(selectedSample.id, {
-          item_status: "Completed",
-          remarks: completionComments.trim() || updatedResult,
+      const realItemId = selectedSample.id.replace("item-", "").replace("smp-", "");
+      if (!selectedSample.id.startsWith("ts-") && !selectedSample.id.startsWith("s") && !realItemId.startsWith("sample-")) {
+        const batchParams = (paramsToSave || []).map((p) => ({
+          lab_test_parameter_id:
+            p.lab_test_parameter_id && !p.lab_test_parameter_id.startsWith("single-") && !p.lab_test_parameter_id.startsWith("ts-")
+              ? p.lab_test_parameter_id
+              : undefined,
+          parameter_name: p.parameter,
+          result_value: p.result || "",
+          abnormal_flag: p.abnormalFlag || "NORMAL",
+          result_comment: completionComments.trim() || undefined,
+          unit: p.unit || undefined,
+          reference_range: p.referenceRange || undefined,
+        }));
+
+        await labResultApi.batchSave({
+          lab_order_item_id: realItemId,
+          barcode: selectedSample.barcode,
+          sample_type: selectedSample.sampleType,
+          markCompleted: true,
+          comments: completionComments.trim() || updatedResult,
+          verified_by: currentUsername,
+          parameters: batchParams,
+        }).catch(async (e) => {
+          console.warn("Could not save results via labResultApi.batchSave, fallback to labOrderItemApi:", e);
+          await labOrderItemApi.update(realItemId, {
+            item_status: "Completed",
+            remarks: completionComments.trim() || updatedResult,
+          }).catch(() => {});
         });
+
+        fetchRealData();
       }
     } catch (err) {
       console.warn("Could not persist completion to backend:", err);
@@ -1007,10 +1699,18 @@ export default function TestingSamples() {
         if (p.id !== paramId) return p;
         const newStatus: "Completed" | "In Progress" | "Not Started" =
           val.trim() !== "" ? "Completed" : "Not Started";
+        const newFlag = evaluateAbnormalFlag(val, {
+          inputType: p.inputType,
+          refRangeLow: p.refRangeLow,
+          refRangeHigh: p.refRangeHigh,
+          referenceRange: p.referenceRange,
+          unit: p.unit,
+        });
         return {
           ...p,
           result: val,
           status: newStatus,
+          abnormalFlag: newFlag,
         };
       }),
     );
@@ -1032,6 +1732,7 @@ export default function TestingSamples() {
   };
 
   const handleSaveResults = async () => {
+    if (!selectedSample) return;
     const summary =
       testParameters
         .filter((p) => p.result.trim() !== "")
@@ -1051,13 +1752,17 @@ export default function TestingSamples() {
           : s,
       ),
     );
-    setSelectedSample((prev) => ({
-      ...prev,
-      status: "COMPLETED",
-      testResult: summary,
-      parameters: testParameters,
-      comments: resultComments.trim() || prev.comments,
-    }));
+    setSelectedSample((prev) =>
+      prev
+        ? {
+            ...prev,
+            status: "COMPLETED",
+            testResult: summary,
+            parameters: testParameters,
+            comments: resultComments.trim() || prev.comments,
+          }
+        : null,
+    );
 
     try {
       localStorage.setItem(`testing_sample_status_${selectedSample.id}`, "COMPLETED");
@@ -1094,11 +1799,38 @@ export default function TestingSamples() {
         console.warn("Could not save to completed_testing_samples registry:", e);
       }
 
-      if (!selectedSample.id.startsWith("ts-")) {
-        await labOrderItemApi.update(selectedSample.id, {
-          item_status: "Completed",
-          remarks: summary,
+      const realItemId = selectedSample.id.replace("item-", "").replace("smp-", "");
+      if (!selectedSample.id.startsWith("ts-") && !selectedSample.id.startsWith("s") && !realItemId.startsWith("sample-")) {
+        const batchParams = testParameters.map((p) => ({
+          lab_test_parameter_id:
+            p.lab_test_parameter_id && !p.lab_test_parameter_id.startsWith("single-") && !p.lab_test_parameter_id.startsWith("ts-")
+              ? p.lab_test_parameter_id
+              : undefined,
+          parameter_name: p.parameter,
+          result_value: p.result || "",
+          abnormal_flag: p.abnormalFlag || "NORMAL",
+          result_comment: resultComments.trim() || undefined,
+          unit: p.unit || undefined,
+          reference_range: p.referenceRange || undefined,
+        }));
+
+        await labResultApi.batchSave({
+          lab_order_item_id: realItemId,
+          barcode: selectedSample.barcode,
+          sample_type: selectedSample.sampleType,
+          markCompleted: true,
+          comments: resultComments.trim() || summary,
+          verified_by: currentUsername,
+          parameters: batchParams,
+        }).catch(async (e) => {
+          console.warn("Could not save results via labResultApi.batchSave, fallback to labOrderItemApi:", e);
+          await labOrderItemApi.update(realItemId, {
+            item_status: "Completed",
+            remarks: summary,
+          }).catch(() => {});
         });
+
+        fetchRealData();
       }
     } catch (err) {
       console.warn("Could not persist results to backend:", err);
@@ -1111,7 +1843,8 @@ export default function TestingSamples() {
     setViewMode("table");
   };
 
-  const handleSaveDraftResults = () => {
+  const handleSaveDraftResults = async () => {
+    if (!selectedSample) return;
     setSamples((prev) =>
       prev.map((s) =>
         s.id === selectedSample.id
@@ -1123,16 +1856,48 @@ export default function TestingSamples() {
           : s,
       ),
     );
-    setSelectedSample((prev) => ({
-      ...prev,
-      parameters: testParameters,
-      comments: resultComments.trim() || prev.comments,
-    }));
+    setSelectedSample((prev) =>
+      prev
+        ? {
+            ...prev,
+            parameters: testParameters,
+            comments: resultComments.trim() || prev.comments,
+          }
+        : null,
+    );
 
     try {
       localStorage.setItem(`testing_sample_params_${selectedSample.id}`, JSON.stringify(testParameters));
       if (resultComments.trim()) {
         localStorage.setItem(`testing_sample_comments_${selectedSample.id}`, resultComments.trim());
+      }
+
+      const realItemId = selectedSample.id.replace("item-", "").replace("smp-", "");
+      if (!selectedSample.id.startsWith("ts-") && !selectedSample.id.startsWith("s") && !realItemId.startsWith("sample-")) {
+        const batchParams = testParameters.map((p) => ({
+          lab_test_parameter_id:
+            p.lab_test_parameter_id && !p.lab_test_parameter_id.startsWith("single-") && !p.lab_test_parameter_id.startsWith("ts-")
+              ? p.lab_test_parameter_id
+              : undefined,
+          parameter_name: p.parameter,
+          result_value: p.result || "",
+          abnormal_flag: p.abnormalFlag || "NORMAL",
+          result_comment: resultComments.trim() || undefined,
+          unit: p.unit || undefined,
+          reference_range: p.referenceRange || undefined,
+        }));
+
+        await labResultApi.batchSave({
+          lab_order_item_id: realItemId,
+          barcode: selectedSample.barcode,
+          sample_type: selectedSample.sampleType,
+          markCompleted: false,
+          comments: resultComments.trim() || undefined,
+          verified_by: currentUsername,
+          parameters: batchParams,
+        }).catch((e) => {
+          console.warn("Could not save draft results to backend:", e);
+        });
       }
     } catch {}
 
@@ -1140,55 +1905,6 @@ export default function TestingSamples() {
       title: "Draft Saved",
       description: `Test results draft saved for barcode ${selectedSample.barcode || selectedSample.sampleId}.`,
     });
-  };
-
-  const handleTestSample = async () => {
-    const startTimeStr = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    setSamples((prev) =>
-      prev.map((s) =>
-        s.id === selectedSample.id
-          ? {
-              ...s,
-              status: "RUNNING",
-              comments: verificationComments.trim() || s.comments,
-              startTime: startTimeStr,
-            }
-          : s,
-      ),
-    );
-    setSelectedSample((prev) => ({
-      ...prev,
-      status: "RUNNING",
-      comments: verificationComments.trim() || prev.comments,
-      startTime: startTimeStr,
-    }));
-
-    try {
-      localStorage.setItem(`testing_sample_status_${selectedSample.id}`, "RUNNING");
-      if (verificationComments.trim()) {
-        localStorage.setItem(`testing_sample_comments_${selectedSample.id}`, verificationComments.trim());
-      }
-      if (!selectedSample.id.startsWith("ts-")) {
-        await labOrderItemApi.update(selectedSample.id, {
-          item_status: "Running",
-          remarks: verificationComments.trim() || undefined,
-        });
-      }
-    } catch (err) {
-      console.warn("Could not persist testing status to backend:", err);
-    }
-
-    toast({
-      title: "Testing Initiated",
-      description: `Barcode ${selectedSample.barcode || selectedSample.sampleId} verified. Analyzer test run started on ${selectedSample.analyzerBench}.`,
-    });
-    setTimeout(() => {
-      setViewMode("table");
-    }, 1000);
   };
 
   const handleMarkCompleted = (id: string) => {
@@ -1231,28 +1947,41 @@ export default function TestingSamples() {
     });
   };
 
-  const handleQuickRun = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quickInputBarcode.trim()) return;
-    const match = samples.find(
-      (s) =>
-        s.barcode.toLowerCase() === quickInputBarcode.trim().toLowerCase() ||
-        s.sampleId.toLowerCase() === quickInputBarcode.trim().toLowerCase(),
-    );
-    if (match) {
-      handleOpenEnterResults(match);
-      setQuickInputBarcode("");
-    } else {
-      toast({
-        title: "Sample Not Found",
-        description: `No testing sample with ID/barcode "${quickInputBarcode}" found in analytical run.`,
-        variant: "destructive",
-      });
-    }
-  };
+  const sampleStabilityMap = useMemo(() => {
+    const map = new Map<string, SampleStabilityInfo>();
+    samples.forEach((s) => {
+      const isCol = Boolean(s.barcode || s.collectionTimeIso);
+      const colTime = s.collectionTimeIso || s.receivedDate || s.startTime;
+      const info = calculateSampleStability(
+        colTime,
+        s.stabilityHours || 2,
+        s.status,
+        currentTime,
+        isCol
+      );
+      map.set(s.id, info);
+    });
+    return map;
+  }, [samples, currentTime]);
+
+  const expiringSoonCount = useMemo(() => {
+    return samples.filter((s) => {
+      if (s.status === "COMPLETED") return false;
+      const info = sampleStabilityMap.get(s.id);
+      return info?.isExpiringSoon;
+    }).length;
+  }, [samples, sampleStabilityMap]);
+
+  const expiredStabilityCount = useMemo(() => {
+    return samples.filter((s) => {
+      if (s.status === "COMPLETED") return false;
+      const info = sampleStabilityMap.get(s.id);
+      return info?.isExpired;
+    }).length;
+  }, [samples, sampleStabilityMap]);
 
   const filteredSamples = useMemo(() => {
-    return samples.filter((sample) => {
+    const list = samples.filter((sample) => {
       const matchesSearch =
         searchQuery.trim() === "" ||
         sample.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1264,9 +1993,33 @@ export default function TestingSamples() {
       const matchesStatus =
         statusFilter === "ALL" || sample.status === statusFilter;
 
-      return matchesSearch && matchesStatus;
+      const info = sampleStabilityMap.get(sample.id);
+      const matchesPriority =
+        priorityFilter === "ALL"
+          ? true
+          : priorityFilter === "DUE_SOON"
+          ? (info?.isExpiringSoon || false)
+          : priorityFilter === "EXPIRED"
+          ? (info?.isExpired || false)
+          : true;
+
+      return matchesSearch && matchesStatus && matchesPriority;
     });
-  }, [samples, searchQuery, statusFilter]);
+
+    return [...list].sort((a, b) => {
+      // 1. Show samples with RUNNING status at the top
+      const isRunningA = a.status === "RUNNING" ? 1 : 0;
+      const isRunningB = b.status === "RUNNING" ? 1 : 0;
+      if (isRunningA !== isRunningB) return isRunningB - isRunningA;
+
+      // 2. Overdue priority
+      const overdueA = isTestingSampleOverdue(a) ? 1 : 0;
+      const overdueB = isTestingSampleOverdue(b) ? 1 : 0;
+      if (overdueA !== overdueB) return overdueB - overdueA;
+
+      return (b.sampleId || b.id || "").localeCompare(a.sampleId || a.id || "");
+    });
+  }, [samples, searchQuery, statusFilter, priorityFilter]);
 
   const runningCount = useMemo(
     () => samples.filter((s) => s.status === "RUNNING").length,
@@ -1293,6 +2046,99 @@ export default function TestingSamples() {
     }).length;
   }, [samples]);
 
+  /* ---------- Admin Dashboard Horizontal KPI Track Scroll State ---------- */
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollButtons = useCallback(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }, []);
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    updateScrollButtons();
+    el.addEventListener("scroll", updateScrollButtons, { passive: true });
+    window.addEventListener("resize", updateScrollButtons);
+    return () => {
+      el.removeEventListener("scroll", updateScrollButtons);
+      window.removeEventListener("resize", updateScrollButtons);
+    };
+  }, [updateScrollButtons]);
+
+  const handleKpiScroll = (direction: "left" | "right") => {
+    const el = trackRef.current;
+    if (!el) return;
+    const scrollAmount = 450;
+    el.scrollBy({
+      left: direction === "left" ? -scrollAmount : scrollAmount,
+      behavior: "smooth",
+    });
+  };
+
+  /* ---------- KPI Cards configuration (Admin Dashboard style) ---------- */
+  const kpiCards = useMemo(
+    () => [
+      {
+        id: "total-worklist",
+        label: "Total Worklist",
+        subLabel: "Specimens in testing queue",
+        value: samples.length,
+        tag: "Total",
+        bg: "#D6E3FF",
+        valueColor: "#00488D",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <FlaskConical className="w-[17px] h-[17px]" color="#00488D" />,
+        isActive: statusFilter === "ALL",
+        onClick: () => setStatusFilter("ALL"),
+      },
+      {
+        id: "in-testing",
+        label: "In Testing",
+        subLabel: "Running on analyzers",
+        value: runningCount,
+        tag: `${samples.length > 0 ? Math.round((runningCount / samples.length) * 100) : 0}%`,
+        bg: "rgba(255, 107, 53, 0.12)",
+        valueColor: "#7B3200",
+        iconBg: "#FFDBCB",
+        icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
+        isActive: statusFilter === "RUNNING",
+        onClick: () => setStatusFilter((prev) => (prev === "RUNNING" ? "ALL" : "RUNNING")),
+      },
+      {
+        id: "test-completed",
+        label: "Test Completed",
+        subLabel: "Results verified & ready",
+        value: completedCount,
+        tag: `${samples.length > 0 ? Math.round((completedCount / samples.length) * 100) : 0}%`,
+        bg: "rgba(0, 200, 150, 0.12)",
+        valueColor: "#00A87E",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <CheckCircle2 className="w-[17px] h-[17px]" color="#00A87E" />,
+        isActive: statusFilter === "COMPLETED",
+        onClick: () => setStatusFilter((prev) => (prev === "COMPLETED" ? "ALL" : "COMPLETED")),
+      },
+      {
+        id: "flagged",
+        label: "Flagged / Critical",
+        subLabel: "Requires review",
+        value: flaggedCount,
+        tag: flaggedCount > 0 ? "ATTENTION" : "Normal",
+        bg: flaggedCount > 0 ? "rgba(239, 68, 68, 0.12)" : "rgba(100, 116, 139, 0.08)",
+        valueColor: flaggedCount > 0 ? "#b91c1c" : "#475569",
+        iconBg: flaggedCount > 0 ? "#fee2e2" : "#f1f5f9",
+        icon: <AlertTriangle className="w-[17px] h-[17px]" color={flaggedCount > 0 ? "#b91c1c" : "#475569"} />,
+        isActive: statusFilter === "FLAGGED",
+        onClick: () => setStatusFilter((prev) => (prev === "FLAGGED" ? "ALL" : "FLAGGED")),
+      },
+    ],
+    [samples.length, runningCount, completedCount, flaggedCount, statusFilter]
+  );
+
   return (
     <div className="min-h-screen flex bg-[#f8fafd] text-[#1e293b] antialiased selection:bg-blue-100 font-sans">
       {/* Global Lab Navigation Sidebar */}
@@ -1309,621 +2155,405 @@ export default function TestingSamples() {
       <div className="flex-1 ml-64 min-h-screen flex flex-col min-w-0 bg-[#f8fafd]">
         {/* TopNavbar */}
         <header
-          className="h-20 bg-white border-b border-slate-100 px-10 flex items-center justify-end sticky top-0 z-10"
+          className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-8 py-4 flex items-center justify-between"
           data-purpose="dashboard-header"
         >
-          <div className="flex items-center gap-6">
-            {/* Lab Notification Bell with Live Alerts */}
-            <LabNotificationBell size="md" />
-
-            {/* Role Label & Profile Avatar & Logout */}
-            <div className="flex items-center gap-3 pl-1">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-[#0b57d0] text-white font-bold text-xs flex items-center justify-center shadow-xs">
-                  {displayName.charAt(0).toUpperCase()}
-                </div>
-                <div className="flex flex-col text-left">
-                  <span className="text-xs font-semibold text-slate-800 leading-tight">
-                    {displayName}
-                  </span>
-                  <span className="text-[10px] text-slate-500 leading-tight">
-                    {displayRole}
-                  </span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:text-red-600 hover:bg-red-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-              >
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                  />
-                </svg>
-                Logout
-              </button>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-[#0b4a8b]">
+              <svg className="w-5 h-5 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082" />
+              </svg>
             </div>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900 tracking-tight">Testing Samples</h1>
+              <p className="text-xs text-slate-500">Record laboratory findings, values and diagnostic results</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <LabNotificationBell size="md" />
+            <UserProfileDropdown
+              userName={displayName}
+              userSubtext={displayRole}
+              onLogout={handleLogout}
+              profilePath="/lab/profile"
+              hideNotifications
+            />
           </div>
         </header>
 
-        {/* DashboardBody / Verification Workflow */}
-        {viewMode === "verify" ? (
+        {/* Results Workflow */}
+        {viewMode === "enter-results" && selectedSample ? (
           <main
-            className="flex-1 flex flex-col min-w-0 bg-[#fbfcfd]"
-            data-purpose="sample-verification-dashboard"
-          >
-            {/* Top Page Header */}
-            <header
-              className="pt-8 pb-7 px-9 border-b border-slate-200 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-              data-purpose="page-header"
-            >
-              <div>
-                <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-                  Sample Verification
-                </h2>
-                <p className="text-xs font-normal text-slate-500 mt-1">
-                  Verify sample details to start testing process
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setViewMode("table")}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg shadow-2xs transition-colors cursor-pointer"
-              >
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M10 19l-7-7m0 0l7-7m-7 7h18"
-                  />
-                </svg>
-                Back to Table
-              </button>
-            </header>
-
-            {/* Content Workspace */}
-            <div className="p-9 max-w-[1240px] space-y-6">
-              {/* BEGIN: SampleInformationCard */}
-              <section
-                className="bg-white rounded-lg border border-slate-200 shadow-sm"
-                data-purpose="sample-information"
-              >
-                {/* Card Header */}
-                <div className="px-6 py-4 border-b border-slate-100">
-                  <h3 className="text-[13.5px] font-semibold text-slate-900">
-                    Sample Information
-                  </h3>
-                </div>
-
-                {/* Card Body / Meta Grid */}
-                <div className="p-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-y-5 gap-x-12">
-                    {/* Left Column Items */}
-                    <div className="space-y-4">
-                      {/* Sample ID */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-36 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          BARCODE
-                        </span>
-                        <span className="font-medium text-slate-900 text-[13px] font-mono">
-                          {selectedSample.barcode || selectedSample.sampleId}
-                        </span>
-                      </div>
-                      {/* Patient Name */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-36 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          PATIENT NAME
-                        </span>
-                        <span className="font-medium text-slate-900 text-[13px]">
-                          {selectedSample.patientName}
-                        </span>
-                      </div>
-                      {/* Sample Type */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-36 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          SAMPLE TYPE
-                        </span>
-                        <span className="font-medium text-slate-900 text-[13px]">
-                          {selectedSample.sampleType || "Whole Blood"}
-                        </span>
-                      </div>
-                      {/* Received Date */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-36 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          RECEIVED DATE
-                        </span>
-                        <span className="font-medium text-slate-900 text-[13px]">
-                          {selectedSample.receivedDate || "20 May 2024"}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Right Column Items */}
-                    <div className="space-y-4">
-                      {/* Received By */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-32 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          RECEIVED BY
-                        </span>
-                        <span className="font-medium text-slate-900 text-[13px]">
-                          {selectedSample.receivedBy || "John Doe"}
-                        </span>
-                      </div>
-                      {/* Status with badge */}
-                      <div className="flex items-center text-xs">
-                        <span className="w-32 font-semibold tracking-wider text-slate-400 uppercase text-[11px]">
-                          STATUS
-                        </span>
-                        <div>
-                          {selectedSample.status === "COMPLETED" ? (
-                            <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              Completed
-                            </span>
-                          ) : selectedSample.status === "RUNNING" ? (
-                            <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
-                              Running
-                            </span>
-                          ) : selectedSample.status === "FLAGGED" ? (
-                            <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">
-                              Flagged
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
-                              Calibrating
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-              {/* END: SampleInformationCard */}
-
-              {/* BEGIN: TwoColumnChecklistAndComments */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Card: Verification Checklist */}
-                <section
-                  className="bg-white rounded-lg border border-slate-200 shadow-sm flex flex-col"
-                  data-purpose="verification-checklist"
-                >
-                  <div className="px-6 py-4 border-b border-slate-100">
-                    <h3 className="text-[13.5px] font-semibold text-slate-900">
-                      Verification Checklist
-                    </h3>
-                  </div>
-                  <div className="p-6 space-y-4 flex-1">
-                    {/* Checklist Item 1 */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center justify-center w-4 h-4 rounded-full bg-emerald-100 text-emerald-600">
-                          <svg
-                            className="w-2.5 h-2.5 stroke-2"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        </span>
-                        <span className="text-[13px] text-slate-800 font-medium">
-                          Sample Intact
-                        </span>
-                      </div>
-                      <select
-                        value={checklist.sampleIntact}
-                        onChange={(e) =>
-                          setChecklist((prev) => ({
-                            ...prev,
-                            sampleIntact: e.target.value,
-                          }))
-                        }
-                        className="w-20 text-[13px] py-1.5 pl-3 pr-7 bg-white border border-slate-200 rounded-md text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-600 focus:border-blue-600"
-                        style={{
-                          backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                          backgroundPosition: "right 0.65rem center",
-                          backgroundRepeat: "no-repeat",
-                          backgroundSize: "1.25em 1.25em",
-                          appearance: "none",
-                        }}
-                      >
-                        <option value="Yes">Yes</option>
-                        <option value="No">No</option>
-                      </select>
-                    </div>
-
-                    {/* Checklist Item 2 */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center justify-center w-4 h-4 rounded-full bg-emerald-100 text-emerald-600">
-                          <svg
-                            className="w-2.5 h-2.5 stroke-2"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        </span>
-                        <span className="text-[13px] text-slate-800 font-medium">
-                          Label Information Correct
-                        </span>
-                      </div>
-                      <select
-                        value={checklist.labelInfoCorrect}
-                        onChange={(e) =>
-                          setChecklist((prev) => ({
-                            ...prev,
-                            labelInfoCorrect: e.target.value,
-                          }))
-                        }
-                        className="w-20 text-[13px] py-1.5 pl-3 pr-7 bg-white border border-slate-200 rounded-md text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-600 focus:border-blue-600"
-                        style={{
-                          backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                          backgroundPosition: "right 0.65rem center",
-                          backgroundRepeat: "no-repeat",
-                          backgroundSize: "1.25em 1.25em",
-                          appearance: "none",
-                        }}
-                      >
-                        <option value="Yes">Yes</option>
-                        <option value="No">No</option>
-                      </select>
-                    </div>
-
-                    {/* Checklist Item 3 */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center justify-center w-4 h-4 rounded-full bg-emerald-100 text-emerald-600">
-                          <svg
-                            className="w-2.5 h-2.5 stroke-2"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        </span>
-                        <span className="text-[13px] text-slate-800 font-medium">
-                          Sufficient Quantity
-                        </span>
-                      </div>
-                      <select
-                        value={checklist.sufficientQuantity}
-                        onChange={(e) =>
-                          setChecklist((prev) => ({
-                            ...prev,
-                            sufficientQuantity: e.target.value,
-                          }))
-                        }
-                        className="w-20 text-[13px] py-1.5 pl-3 pr-7 bg-white border border-slate-200 rounded-md text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-600 focus:border-blue-600"
-                        style={{
-                          backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                          backgroundPosition: "right 0.65rem center",
-                          backgroundRepeat: "no-repeat",
-                          backgroundSize: "1.25em 1.25em",
-                          appearance: "none",
-                        }}
-                      >
-                        <option value="Yes">Yes</option>
-                        <option value="No">No</option>
-                      </select>
-                    </div>
-
-                    {/* Checklist Item 4 */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center justify-center w-4 h-4 rounded-full bg-emerald-100 text-emerald-600">
-                          <svg
-                            className="w-2.5 h-2.5 stroke-2"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        </span>
-                        <span className="text-[13px] text-slate-800 font-medium">
-                          Proper Packaging
-                        </span>
-                      </div>
-                      <select
-                        value={checklist.properPackaging}
-                        onChange={(e) =>
-                          setChecklist((prev) => ({
-                            ...prev,
-                            properPackaging: e.target.value,
-                          }))
-                        }
-                        className="w-20 text-[13px] py-1.5 pl-3 pr-7 bg-white border border-slate-200 rounded-md text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-600 focus:border-blue-600"
-                        style={{
-                          backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                          backgroundPosition: "right 0.65rem center",
-                          backgroundRepeat: "no-repeat",
-                          backgroundSize: "1.25em 1.25em",
-                          appearance: "none",
-                        }}
-                      >
-                        <option value="Yes">Yes</option>
-                        <option value="No">No</option>
-                      </select>
-                    </div>
-                  </div>
-                </section>
-
-                {/* Card: Comments (Optional) */}
-                <section
-                  className="bg-white rounded-lg border border-slate-200 shadow-sm flex flex-col"
-                  data-purpose="comments-section"
-                >
-                  <div className="px-6 py-4 border-b border-slate-100">
-                    <h3 className="text-[13.5px] font-semibold text-slate-900">
-                      Comments (Optional)
-                    </h3>
-                  </div>
-                  <div className="p-6 flex-1 flex flex-col">
-                    <textarea
-                      value={verificationComments}
-                      onChange={(e) => setVerificationComments(e.target.value)}
-                      className="w-full flex-1 rounded-md border border-slate-200 text-[13px] p-3 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-600 focus:border-blue-600 resize-none shadow-none"
-                      placeholder="Enter comments here..."
-                      rows={6}
-                    />
-                  </div>
-                </section>
-              </div>
-              {/* END: TwoColumnChecklistAndComments */}
-
-              {/* BEGIN: ActionButtons */}
-              <div
-                className="flex items-center justify-end gap-3 pt-6"
-                data-purpose="action-buttons"
-              >
-                <button
-                  type="button"
-                  onClick={() => setViewMode("table")}
-                  className="px-5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-md shadow-xs hover:bg-slate-50 transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleOpenEnterResults(selectedSample)}
-                  className="px-5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-md shadow-xs hover:bg-slate-50 transition-colors cursor-pointer"
-                >
-                  Enter Results
-                </button>
-                <button
-                  type="button"
-                  onClick={handleTestSample}
-                  className="px-5 py-2 text-xs font-semibold text-white bg-[#1e60d5] hover:bg-[#1952be] rounded-md shadow-xs transition-colors cursor-pointer"
-                >
-                  Test Sample
-                </button>
-              </div>
-              {/* END: ActionButtons */}
-            </div>
-          </main>
-        ) : viewMode === "enter-results" ? (
-          <main
-            className="flex-1 flex flex-col justify-between overflow-y-auto px-10 py-7 min-w-0 bg-[#fcfdfe]"
+            className="flex-1 flex flex-col justify-between overflow-y-auto px-8 py-6 min-w-0 bg-[#f8fafc]"
             data-purpose="main-layout"
           >
-            <div className="max-w-6xl w-full">
-              {/* Breadcrumb link */}
-              <nav
-                aria-label="Breadcrumb"
-                className="mb-3"
-                data-purpose="breadcrumb"
-              >
+            <div className="max-w-6xl w-full mx-auto">
+              {/* Top Navigation */}
+              <div className="mb-4 flex items-center justify-between">
                 <button
                   type="button"
                   onClick={() => setViewMode("table")}
-                  className="inline-flex items-center text-xs font-normal text-slate-500 hover:text-slate-700 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white px-3 py-1.5 rounded-lg border border-slate-200 hover:border-slate-300 transition-all cursor-pointer shadow-2xs"
                 >
-                  <svg
-                    className="w-3.5 h-3.5 mr-1 stroke-current"
-                    fill="none"
-                    strokeWidth="2.2"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      d="M15 19l-7-7 7-7"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  Back to Samples
+                  <ChevronLeft className="w-4 h-4 text-slate-500" />
+                  Back to Testing Samples
                 </button>
-              </nav>
 
-              {/* Page Header */}
-              <header className="mb-7" data-purpose="page-header">
-                <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-                  Enter Test Results
-                </h1>
-                <div className="mt-1 flex items-center text-sm text-slate-600">
-                  <span>Barcode: {selectedSample.barcode || selectedSample.sampleId}</span>
-                  <span
-                    aria-hidden="true"
-                    className="inline-block w-px h-[1.15rem] bg-[#94a3b8] align-middle ml-1.5 animate-pulse"
-                  />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">Analyzer:</span>
+                  <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-white text-slate-700 border border-slate-200 shadow-2xs">
+                    {selectedSample.analyzerBench}
+                  </span>
                 </div>
-              </header>
+              </div>
+
+              {/* Overdue Alert Banner */}
+              {isTestingSampleOverdue(selectedSample) && (
+                <div className="mb-4 p-4 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-between text-rose-900 gap-3 shadow-2xs">
+                  <div className="flex items-center gap-3">
+                    <Clock className="w-5 h-5 text-rose-600 shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold text-rose-900">
+                        Target Turnaround Exceeded (Target: {selectedSample.targetDate || "Overdue"})
+                      </p>
+                      <p className="text-[11px] text-rose-700 mt-0.5">
+                        Please enter the test findings promptly to proceed with pathologist verification and report delivery.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wider uppercase shrink-0">
+                    OVERDUE
+                  </span>
+                </div>
+              )}
+
+
+
+
+
+              {/* Requisition & Sample Details Card */}
+              <div className="bg-white border border-slate-200/90 rounded-xl p-5 mb-6 shadow-2xs">
+                <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-11 h-11 rounded-xl bg-teal-50 border border-teal-200/60 flex items-center justify-center text-teal-700 shrink-0">
+                      <FlaskConical className="w-5 h-5 text-teal-600" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <h2 className="text-lg font-bold text-slate-900 tracking-tight">
+                          {selectedSample.testName}
+                        </h2>
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                          {selectedSample.sampleType || "Specimen"}
+                        </span>
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-teal-50 text-teal-700 border border-teal-200">
+                          {selectedSample.status}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Patient: <strong className="text-slate-800 font-semibold">{selectedSample.patientName}</strong>{" "}
+                        <span className="text-slate-400 font-mono">({selectedSample.patientId})</span>
+                        {selectedSample.patientGender && selectedSample.patientGender !== "All" && (
+                          <span className={`ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            selectedSample.patientGender.toLowerCase().startsWith("f")
+                              ? "bg-pink-50 text-pink-700 border-pink-200"
+                              : "bg-blue-50 text-blue-700 border-blue-200"
+                          }`}>
+                            {selectedSample.patientGender}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                        Barcode / Sample ID
+                      </span>
+                      <span className="font-mono font-bold text-sm text-slate-800 bg-slate-50 px-2.5 py-1 rounded-md border border-slate-200 inline-block mt-0.5">
+                        {selectedSample.barcode || selectedSample.sampleId}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-3.5 text-xs text-slate-600">
+                  <div>
+                    <span className="text-slate-400 block text-[11px] font-medium mb-0.5">Accession Date</span>
+                    <span className="font-semibold text-slate-700">{selectedSample.receivedDate || "—"}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[11px] font-medium mb-0.5">Assigned Technician</span>
+                    <span className="font-semibold text-slate-700">{selectedSample.receivedBy || "Lab Technician"}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[11px] font-medium mb-0.5">Target Turnaround</span>
+                    <span className={`font-semibold ${isTestingSampleOverdue(selectedSample) ? "text-rose-700" : "text-slate-700"}`}>
+                      {selectedSample.targetDate || "Today"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[11px] font-medium mb-0.5">Est. Completion</span>
+                    <span className="font-semibold text-slate-700">{selectedSample.estimatedCompletion || "—"}</span>
+                  </div>
+                </div>
+              </div>
 
               {/* BEGIN: ResultsTableSection */}
               <section
-                className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.02)] mb-7"
+                className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs mb-6"
                 data-purpose="test-parameters-table"
               >
-                <table className="w-full text-left border-collapse">
-                  {/* Table Header */}
-                  <thead>
-                    <tr className="border-b border-gray-200 text-[11px] font-semibold tracking-wider text-slate-500 uppercase">
-                      <th
-                        className="py-3.5 px-6 font-semibold w-1/4"
-                        scope="col"
-                      >
-                        PARAMETER
-                      </th>
-                      <th
-                        className="py-3.5 px-6 font-semibold border-l border-gray-200/80 w-1/6"
-                        scope="col"
-                      >
-                        RESULT
-                      </th>
-                      <th
-                        className="py-3.5 px-6 font-semibold border-l border-gray-200/80 w-1/6"
-                        scope="col"
-                      >
-                        UNIT
-                      </th>
-                      <th
-                        className="py-3.5 px-6 font-semibold border-l border-gray-200/80 w-1/4"
-                        scope="col"
-                      >
-                        REFERENCE RANGE
-                      </th>
-                      <th
-                        className="py-3.5 px-6 font-semibold border-l border-gray-200/80 text-center w-1/6"
-                        scope="col"
-                      >
-                        STATUS
-                      </th>
-                    </tr>
-                  </thead>
-                  {/* Table Body */}
-                  <tbody className="divide-y divide-gray-100 text-[13px] text-slate-800">
-                    {testParameters.map((param) => (
-                      <tr
-                        key={param.id}
-                        className="hover:bg-slate-50/50 transition-colors"
-                      >
-                        <td className="py-3.5 px-6 text-slate-900 font-normal">
-                          {param.parameter}
-                        </td>
-                        <td className="py-3.5 px-6 border-l border-gray-100 text-slate-700">
-                          <input
-                            type="text"
-                            value={param.result}
-                            onChange={(e) =>
-                              handleParameterResultChange(
-                                param.id,
-                                e.target.value,
-                              )
-                            }
-                            placeholder="Enter result..."
-                            className="w-full bg-transparent border-0 border-b border-transparent hover:border-slate-300 focus:border-blue-500 text-[13px] text-slate-800 font-medium placeholder-slate-300 focus:outline-none focus:ring-0 py-0.5 transition-colors"
-                          />
-                        </td>
-                        <td className="py-3.5 px-6 border-l border-gray-100 text-slate-700">
-                          {param.unit}
-                        </td>
-                        <td className="py-3.5 px-6 border-l border-gray-100 text-slate-700">
-                          {param.referenceRange}
-                        </td>
-                        <td className="py-3.5 px-6 border-l border-gray-100 text-center">
-                          {param.status === "Completed" ? (
-                            <span
-                              onClick={() => handleToggleParamStatus(param.id)}
-                              className="inline-flex items-center px-4 py-0.5 rounded-full text-xs font-normal bg-[#eaf8f0] text-[#1b8a53] cursor-pointer select-none"
-                              title="Click to toggle status"
-                            >
-                              Completed
-                            </span>
-                          ) : param.status === "In Progress" ? (
-                            <span
-                              onClick={() => handleToggleParamStatus(param.id)}
-                              className="inline-flex items-center px-3.5 py-0.5 rounded-full text-xs font-normal border border-[#b4d6fb] bg-[#f0f6fe] text-[#2563eb] cursor-pointer select-none"
-                              title="Click to toggle status"
-                            >
-                              In Progress
-                            </span>
-                          ) : (
-                            <span
-                              onClick={() => handleToggleParamStatus(param.id)}
-                              className="inline-flex items-center px-3.5 py-0.5 rounded-full text-xs font-normal bg-[#f3f4f6] text-[#6b7280] cursor-pointer select-none"
-                              title="Click to toggle status"
-                            >
-                              Not Started
-                            </span>
-                          )}
-                        </td>
+                {/* Section Top Header */}
+                <div className="px-6 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-white">
+                  <div className="flex items-center gap-2.5">
+                    <h3 className="text-sm font-bold text-slate-900 tracking-tight">
+                      Test Parameters & Observations
+                    </h3>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-teal-50 text-teal-700 border border-teal-200">
+                      {testParameters.length} Parameter{testParameters.length !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Enter observation or select quick options. Abnormal flags are evaluated in real time.
+                  </p>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-sm">
+                    {/* Table Header */}
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-bold tracking-wider text-slate-600 uppercase">
+                        <th className="py-3 px-5 font-bold w-[26%] min-w-[180px]" scope="col">
+                          PARAMETER
+                        </th>
+                        <th className="py-3 px-5 font-bold w-[34%] min-w-[260px]" scope="col">
+                          OBSERVED RESULT
+                        </th>
+                        <th className="py-3 px-4 font-bold text-center w-[12%] min-w-[90px]" scope="col">
+                          UNIT
+                        </th>
+                        <th className="py-3 px-4 font-bold text-center w-[16%] min-w-[130px]" scope="col">
+                          REFERENCE RANGE
+                        </th>
+                        <th className="py-3 px-4 font-bold text-center w-[12%] min-w-[110px]" scope="col">
+                          ALERT / FLAG
+                        </th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    {/* Table Body */}
+                    <tbody className="divide-y divide-slate-100 text-[13px] text-slate-800">
+                      {testParameters.map((param, pIdx) => (
+                        <tr
+                          key={param.id || pIdx}
+                          className="hover:bg-slate-50/60 transition-colors"
+                        >
+                          {/* Parameter Name */}
+                          <td className="py-3.5 px-5 text-slate-900 font-semibold align-top">
+                            <div className="flex items-start gap-2 pt-1">
+                              <span className="text-[11px] font-mono text-slate-400 font-bold shrink-0 mt-0.5">
+                                {pIdx + 1}.
+                              </span>
+                              <div>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="block leading-snug">{param.parameter}</span>
+                                  {param.gender && param.gender !== "All" && (
+                                    <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                      {param.gender}
+                                    </span>
+                                  )}
+                                </div>
+                                {param.resultComment && (
+                                  <span className="text-[11px] text-slate-400 block mt-0.5 italic">
+                                    {param.resultComment}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Observed Result Input & Quick Option Pills */}
+                          <td className="py-3 px-5 align-top">
+                            <div className="space-y-1.5">
+                              <input
+                                type={param.inputType === "numeric" ? "text" : "text"}
+                                inputMode={param.inputType === "numeric" ? "decimal" : undefined}
+                                value={param.result}
+                                onChange={(e) =>
+                                  handleParameterResultChange(
+                                    param.id,
+                                    e.target.value,
+                                  )
+                                }
+                                placeholder={
+                                  param.inputType === "numeric"
+                                    ? "Enter numeric value..."
+                                    : param.options && param.options.length > 0
+                                    ? "Select option below or type result..."
+                                    : "Enter observation..."
+                                }
+                                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-[13px] font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 transition-all shadow-2xs font-mono"
+                              />
+
+                              {/* Quick-Pill Buttons (for qualitative tests) */}
+                              {param.options && param.options.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                                  {param.options.map((opt) => {
+                                    const isSelected = (param.result || "").trim().toLowerCase() === opt.toLowerCase();
+                                    const isAbnormalOpt = [
+                                      "positive",
+                                      "reactive",
+                                      "present",
+                                      "trace",
+                                      "1+",
+                                      "2+",
+                                      "3+",
+                                      "4+",
+                                      "turbid",
+                                      "cloudy"
+                                    ].some((m) => opt.toLowerCase().includes(m));
+
+                                    return (
+                                      <button
+                                        key={opt}
+                                        type="button"
+                                        onClick={() => handleParameterResultChange(param.id, opt)}
+                                        className={`px-2.5 py-0.5 rounded text-[11px] font-semibold transition-all cursor-pointer border ${
+                                          isSelected
+                                            ? isAbnormalOpt
+                                              ? "bg-rose-50 text-rose-700 border-rose-300 shadow-2xs font-bold ring-1 ring-rose-400"
+                                              : "bg-teal-50 text-teal-700 border-teal-300 shadow-2xs font-bold ring-1 ring-teal-400"
+                                            : "bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200"
+                                        }`}
+                                      >
+                                        {opt}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Unit */}
+                          <td className="py-3.5 px-4 text-center text-xs font-semibold text-slate-600 align-top pt-4">
+                            {param.unit ? (
+                              <span className="px-2 py-0.5 rounded bg-slate-50 border border-slate-200/80 inline-block">
+                                {param.unit}
+                              </span>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
+                          </td>
+
+                          {/* Reference Range */}
+                          <td className="py-3.5 px-4 text-center text-xs font-mono text-slate-700 align-top pt-4">
+                            {param.referenceRange ? (
+                              <span className="px-2 py-0.5 rounded bg-slate-50 border border-slate-200/80 inline-block font-semibold">
+                                {param.referenceRange}
+                              </span>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
+                          </td>
+
+                          {/* Alert / Flag Badge */}
+                          <td className="py-3.5 px-4 text-center align-top pt-3.5">
+                            {!param.result || param.result.trim() === "" ? (
+                              <span className="text-slate-300 text-xs font-medium">—</span>
+                            ) : param.abnormalFlag === "CRITICAL" ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300 animate-pulse">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-600" />
+                                Critical
+                              </span>
+                            ) : param.abnormalFlag === "HIGH" ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-300">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                High ↑
+                              </span>
+                            ) : param.abnormalFlag === "LOW" ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-300">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                Low ↓
+                              </span>
+                            ) : param.abnormalFlag === "BORDERLINE" ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-yellow-50 text-yellow-800 border border-yellow-300">
+                                <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                                Borderline
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                Normal
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </section>
               {/* END: ResultsTableSection */}
 
               {/* BEGIN: CommentsSection */}
-              <section className="mt-6" data-purpose="comments-form">
+              <section className="bg-white rounded-xl border border-slate-200 p-5 mb-8 shadow-2xs" data-purpose="comments-form">
                 <label
-                  className="block text-[13px] font-semibold text-slate-900 mb-2"
+                  className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-2"
                   htmlFor="results-comments"
                 >
-                  Comments (Optional)
+                  Technician Notes / Clinical Observations (Optional)
                 </label>
                 <textarea
                   id="results-comments"
                   value={resultComments}
                   onChange={(e) => setResultComments(e.target.value)}
-                  className="w-full bg-white rounded-xl border border-gray-200 px-4 py-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 shadow-[0_1px_2px_rgba(0,0,0,0.02)] resize-none"
-                  placeholder="Enter any comments..."
-                  rows={4}
+                  className="w-full bg-slate-50/60 rounded-lg border border-slate-200 px-3.5 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 focus:bg-white transition-all resize-none shadow-2xs"
+                  placeholder="Enter any pertinent technician comments, recheck notes, or specimen observations..."
+                  rows={3}
                 />
               </section>
               {/* END: CommentsSection */}
-            </div>
 
-            {/* BEGIN: FooterActions */}
-            <footer
-              className="mt-10 flex justify-end items-center gap-3 pt-4 max-w-6xl w-full"
-              data-purpose="action-buttons"
-            >
-              {/* Save Draft Button */}
-              <button
-                type="button"
-                onClick={handleSaveDraftResults}
-                className="px-5 py-2 text-[13px] font-medium text-slate-800 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none transition-colors shadow-xs cursor-pointer"
+              {/* BEGIN: FooterActions */}
+              <footer
+                className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-200"
+                data-purpose="action-buttons"
               >
-                Save Draft
-              </button>
-              {/* Save Results Button */}
-              <button
-                type="button"
-                onClick={handleSaveResults}
-                className="px-5 py-2 text-[13px] font-medium text-white bg-[#038e5b] hover:bg-[#02754b] rounded-lg focus:outline-none transition-colors shadow-xs cursor-pointer"
-              >
-                Save Results
-              </button>
-              {/* Proceed to Mark as Completed */}
-              <button
-                type="button"
-                onClick={() => handleOpenMarkCompleted(selectedSample)}
-                className="px-4 py-2 text-[13px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 rounded-lg focus:outline-none transition-colors shadow-xs cursor-pointer"
-              >
-                Mark as Completed →
-              </button>
-            </footer>
-            {/* END: FooterActions */}
+                <button
+                  type="button"
+                  onClick={() => setViewMode("table")}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer shadow-2xs"
+                >
+                  Cancel / Return
+                </button>
+
+                <div className="flex items-center gap-3">
+                  {/* Save Draft Button */}
+                  <button
+                    type="button"
+                    onClick={handleSaveDraftResults}
+                    className="px-5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors shadow-2xs cursor-pointer"
+                  >
+                    Save Draft
+                  </button>
+
+                  {/* Save & Complete Results Button */}
+                  <button
+                    type="button"
+                    onClick={handleSaveResults}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 active:bg-teal-800 rounded-lg transition-all shadow-sm hover:shadow cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-white" />
+                    Save & Complete Results
+                  </button>
+                </div>
+              </footer>
+              {/* END: FooterActions */}
+            </div>
           </main>
-        ) : viewMode === "mark-completed" ? (
+        ) : viewMode === "mark-completed" && selectedSample ? (
           <main
             className="flex-1 bg-white px-10 py-7 min-w-0"
             data-purpose="main-content"
@@ -2045,127 +2675,118 @@ export default function TestingSamples() {
           </main>
         ) : (
           <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
-          {/* StatCardsRow */}
-          <section
-            className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5"
-            data-purpose="kpi-metric-cards"
-          >
-            {/* Card 1: Test Completed */}
-            <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-              <div className="w-14 h-14 rounded-full bg-[#def7ec] flex items-center justify-center shrink-0">
-                <svg
-                  className="w-6 h-6 text-[#059669] stroke-[2.5]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    d="M5 13l4 4L19 7"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </div>
+          {/* Key Performance Indicators - Admin Dashboard Style Scrollable Track */}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between flex-wrap gap-2 px-1">
               <div>
-                <span className="text-[13px] font-semibold text-[#059669]">
-                  Test Completed
-                </span>
-                <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                  {completedCount}
-                </h3>
-                <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                  Tests completed successfully
-                </p>
+                <h2 className="text-base font-bold text-[#1c1e21] tracking-tight">Key Performance Indicators</h2>
+                <p className="text-xs text-[#70747c]">Real-time analyzer metrics and test execution status</p>
               </div>
             </div>
 
-            {/* Card 2: Test Result Pending */}
-            <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-              <div className="w-14 h-14 rounded-full bg-[#e0edff] flex items-center justify-center shrink-0">
-                <svg
-                  className="w-6 h-6 text-[#2563eb] stroke-[2.2]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+            <div className="relative">
+              {canScrollLeft && (
+                <button
+                  type="button"
+                  onClick={() => handleKpiScroll("left")}
+                  aria-label="Scroll left"
+                  className="absolute -left-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
                 >
-                  <path
-                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </div>
-              <div>
-                <span className="text-[13px] font-semibold text-[#2563eb]">
-                  Test Result Pending
-                </span>
-                <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                  {runningCount}
-                </h3>
-                <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                  Results pending verification
-                </p>
-              </div>
-            </div>
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+              )}
 
-            {/* Card 3: Test Overdue */}
-            <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-              <div className="w-14 h-14 rounded-full bg-[#fef3c7] flex items-center justify-center shrink-0">
-                <svg
-                  className="w-6 h-6 text-[#d97706] stroke-[2.2]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </div>
-              <div>
-                <span className="text-[13px] font-semibold text-[#d97706]">
-                  Test Overdue
-                </span>
-                <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                  {overdueCount}
-                </h3>
-                <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                  Tests past the expected time
-                </p>
-              </div>
-            </div>
+              <div
+                className={`absolute left-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-r from-[#f8fafd] to-transparent ${
+                  canScrollLeft ? "opacity-100" : "opacity-0"
+                }`}
+              />
 
-            {/* Card 4: Repeat Test Required */}
-            <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-              <div className="w-14 h-14 rounded-full bg-[#fee2e2] flex items-center justify-center shrink-0">
-                <svg
-                  className="w-6 h-6 text-[#dc2626] stroke-[2.2]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+              <div
+                ref={trackRef}
+                className="flex gap-[14px] overflow-x-auto scroll-smooth py-[6px] px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              >
+                {kpiCards.map((card) => (
+                  <div
+                    key={card.id}
+                    onClick={card.onClick}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        card.onClick?.();
+                      }
+                    }}
+                    style={{
+                      background: card.bg,
+                      border: card.isActive ? `2.5px solid ${card.valueColor}` : "2.5px solid transparent",
+                      boxShadow: card.isActive
+                        ? `0 0 0 1px ${card.valueColor}20, 0 6px 18px ${card.valueColor}28`
+                        : "0 2px 10px rgba(0,0,0,0.06)",
+                    }}
+                    className="flex-[0_0_206px] min-w-[206px] rounded-[12px] p-[14px_16px] flex flex-col gap-[10px] cursor-pointer transition-all duration-200 select-none hover:-translate-y-[2px] hover:shadow-[0_6px_20px_rgba(0,0,0,0.10)]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div
+                        style={{ background: card.iconBg }}
+                        className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm"
+                      >
+                        {card.icon}
+                      </div>
+                      {card.tag && (
+                        <span
+                          style={{ color: card.valueColor }}
+                          className="text-[11px] font-bold px-[7px] py-[2px] rounded-full tracking-[-0.2px] bg-white/60 shadow-sm inline-flex items-center gap-1"
+                        >
+                          <span>{card.tag}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div
+                      style={{ color: card.valueColor }}
+                      className="text-[26px] font-extrabold leading-[1.05] tracking-[-0.6px]"
+                    >
+                      {card.value}
+                    </div>
+
+                    <div className="flex flex-col gap-[2px] min-w-0">
+                      <span
+                        style={{ color: card.valueColor }}
+                        className="text-[12.5px] font-bold tracking-tight truncate"
+                      >
+                        {card.label}
+                      </span>
+                      <span
+                        style={{ color: card.valueColor, opacity: 0.75 }}
+                        className="text-[11px] font-medium truncate"
+                      >
+                        {card.subLabel}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div
+                className={`absolute right-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-l from-[#f8fafd] to-transparent ${
+                  canScrollRight ? "opacity-100" : "opacity-0"
+                }`}
+              />
+
+              {canScrollRight && (
+                <button
+                  type="button"
+                  onClick={() => handleKpiScroll("right")}
+                  aria-label="Scroll right"
+                  className="absolute -right-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
                 >
-                  <path
-                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </div>
-              <div>
-                <span className="text-[13px] font-semibold text-[#dc2626]">
-                  Repeat Test Required
-                </span>
-                <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                  {flaggedCount}
-                </h3>
-                <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                  Tests need to be repeated
-                </p>
-              </div>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              )}
             </div>
-          </section>
+          </div>
 
           {/* BEGIN: MainContainer */}
           <section
@@ -2189,26 +2810,6 @@ export default function TestingSamples() {
                 className="flex flex-wrap items-center gap-3 w-full md:w-auto"
                 data-purpose="search-and-filter-group"
               >
-                {/* Barcode Quick Run Input */}
-                <form
-                  onSubmit={handleQuickRun}
-                  className="relative flex items-center"
-                >
-                  <input
-                    type="text"
-                    value={quickInputBarcode}
-                    onChange={(e) => setQuickInputBarcode(e.target.value)}
-                    placeholder="Scan / Type Barcode..."
-                    className="w-48 pl-3 pr-14 py-2.5 bg-white text-sm font-mono text-slate-800 placeholder-slate-400 border border-slate-300 rounded-lg focus:outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500 transition-colors"
-                  />
-                  <button
-                    type="submit"
-                    className="absolute right-1.5 px-3 py-1 bg-[#00875A] hover:bg-[#00744E] text-white text-xs font-semibold rounded-md shadow-2xs transition-colors cursor-pointer"
-                  >
-                    Validate
-                  </button>
-                </form>
-
                 {/* Search Input Container */}
                 <div
                   className="relative flex-1 md:w-72"
@@ -2258,6 +2859,10 @@ export default function TestingSamples() {
                     </button>
                   )}
                 </div>
+
+
+
+
 
                 {/* Filter Button */}
                 <div className="relative shrink-0">
@@ -2369,33 +2974,13 @@ export default function TestingSamples() {
                     </div>
                   )}
                 </div>
-
-                {/* Refresh Button */}
-                <button
-                  type="button"
-                  onClick={fetchRealData}
-                  disabled={isLoading}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
-                  title="Reload testing samples from database"
-                >
-                  <svg
-                    className={`w-4 h-4 text-slate-600 ${isLoading ? "animate-spin" : ""}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                    />
-                  </svg>
-                  <span className="hidden sm:inline">Refresh</span>
-                </button>
               </div>
             </header>
             {/* END: HeaderSection */}
+
+
+
+
 
             {/* BEGIN: TableContent */}
             <div
@@ -2417,14 +3002,11 @@ export default function TestingSamples() {
                     <th className="py-5 px-6 font-bold" scope="col">
                       TEST PROCEDURE
                     </th>
+                    <th className="py-5 px-6 font-bold min-w-[280px]" scope="col">
+                      PARAMETERS, UNITS &amp; REF. RANGE (DB)
+                    </th>
                     <th className="py-5 px-6 font-bold" scope="col">
                       ANALYZER BENCH
-                    </th>
-                    <th
-                      className="py-5 px-6 font-bold text-center"
-                      scope="col"
-                    >
-                      START / RUN TIME
                     </th>
                     <th
                       className="py-5 px-8 font-bold text-center"
@@ -2462,7 +3044,7 @@ export default function TestingSamples() {
                           <svg className="w-8 h-8 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                           </svg>
-                          <span className="font-medium text-slate-500">No testing samples found matching your search.</span>
+                          <span className="font-medium text-slate-500">{searchQuery ? "No testing samples found matching your search." : "No testing samples currently in queue."}</span>
                           {searchQuery && (
                             <button
                               onClick={() => setSearchQuery("")}
@@ -2475,40 +3057,122 @@ export default function TestingSamples() {
                       </td>
                     </tr>
                   ) : (
-                    filteredSamples.map((s) => (
-                      <tr
-                        key={s.id}
-                        onClick={() => handleOpenVerification(s)}
-                        className="hover:bg-slate-50/70 transition-colors cursor-pointer"
-                      >
-                        <td className="py-5 px-8 whitespace-nowrap">
-                          <span className="font-mono text-slate-900 text-sm font-semibold">
-                            {s.barcode || s.sampleId}
-                          </span>
-                        </td>
-                        <td className="py-5 px-6 whitespace-nowrap">
-                          <span className="font-semibold text-slate-900 block">
-                            {s.patientName}
-                          </span>
-                          <span className="text-[11px] text-slate-400 font-mono">
-                            {s.patientId}
-                          </span>
-                        </td>
-                        <td className="py-5 px-6 whitespace-nowrap">
-                          <span className="font-medium text-slate-800 block">
-                            {s.testName}
-                          </span>
-                          {s.testResult && (
-                            <span className="text-[11px] text-slate-500 block truncate max-w-xs">
-                              {s.testResult}
+                    filteredSamples.map((s) => {
+                      const isOverdue = isTestingSampleOverdue(s);
+                      return (
+                        <React.Fragment key={s.id}>
+                        <tr
+                          key={s.id}
+                          onClick={() => handleOpenEnterResults(s)}
+                          className={`transition-colors cursor-pointer ${
+                            isOverdue
+                              ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                              : "hover:bg-slate-50/70"
+                          }`}
+                        >
+                          <td className="py-5 px-8 whitespace-nowrap">
+                            <span className="font-mono text-slate-900 text-sm font-semibold">
+                              {s.barcode || s.sampleId}
                             </span>
-                          )}
-                        </td>
+                          </td>
+                          <td className="py-5 px-6 whitespace-nowrap">
+                            <span className="font-semibold text-slate-900 block">
+                              {s.patientName}
+                            </span>
+                            <span className="text-[11px] text-slate-400 font-mono">
+                              {s.patientId}
+                            </span>
+                          </td>
+                          <td className="py-5 px-6 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-900 block text-sm">
+                                {s.testName}
+                              </span>
+                              {isOverdue && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                  OVERDUE
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
+                              {s.sampleType && <span className="font-medium">{s.sampleType}</span>}
+                              {s.targetDate && (
+                                <span className={`font-semibold ${isOverdue ? "text-rose-700" : "text-slate-500"}`}>
+                                  · Target: {s.targetDate}
+                                </span>
+                              )}
+                            </div>
+                            {s.testResult && (
+                              <span className="text-[11px] text-slate-600 block truncate max-w-xs mt-1 font-mono bg-slate-50 px-2 py-0.5 rounded border border-slate-200/60">
+                                {s.testResult}
+                              </span>
+                            )}
+                          </td>
+
+                          {/* DEDICATED COLUMN: PARAMETERS, UNITS & REFERENCE RANGE (FROM DB) */}
+                          <td className="py-4 px-6 align-top">
+                            {s.parameters && s.parameters.length > 0 ? (
+                              <div className="flex flex-col gap-1.5 min-w-[260px]">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-600" />
+                                    <span>{s.parameters.length} Parameter{s.parameters.length !== 1 ? "s" : ""}</span>
+                                    {s.unit && <span className="text-indigo-500 font-mono font-medium">({s.unit})</span>}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setExpandedSampleId((prev) => (prev === s.id ? null : s.id));
+                                    }}
+                                    className="px-2 py-0.5 bg-white hover:bg-indigo-50 text-indigo-600 border border-indigo-200 hover:border-indigo-300 rounded text-[11px] font-semibold cursor-pointer inline-flex items-center gap-1 transition-all"
+                                  >
+                                    <span>{expandedSampleId === s.id ? "Hide Details" : "View Details"}</span>
+                                    <svg className={`w-3 h-3 transition-transform ${expandedSampleId === s.id ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                  </button>
+                                </div>
+
+                                {/* Preview top 2 parameters with unit and range */}
+                                <div className="space-y-1 bg-slate-50/80 p-2 rounded-lg border border-slate-200/80 text-[11px]">
+                                  {s.parameters.slice(0, 2).map((p, pIdx) => (
+                                    <div key={p.id || pIdx} className="flex items-center justify-between gap-2">
+                                      <span className="font-semibold text-slate-800 truncate max-w-[130px]">{p.parameter}</span>
+                                      <span className="font-mono font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200 text-[10px] shrink-0">
+                                        {p.referenceRange || "Normal"} {p.unit}
+                                      </span>
+                                    </div>
+                                  ))}
+                                  {s.parameters.length > 2 && (
+                                    <div className="text-[10px] text-slate-400 font-medium pt-0.5 text-right">
+                                      + {s.parameters.length - 2} more parameter{s.parameters.length - 2 !== 1 ? "s" : ""} in database
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ) : s.expectedRange ? (
+                              <div className="flex flex-col gap-1">
+                                <span className="text-xs font-semibold text-slate-800">{s.testName}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs">
+                                    <span className="text-[10px] uppercase font-sans text-emerald-600 font-semibold">Ref:</span>
+                                    {s.expectedRange}
+                                  </span>
+                                  {s.unit && (
+                                    <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200 font-mono">
+                                      {s.unit}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-slate-300 font-mono text-xs">—</span>
+                            )}
+                          </td>
+
                         <td className="py-5 px-6 text-slate-700 text-xs font-normal whitespace-nowrap">
                           {s.analyzerBench}
-                        </td>
-                        <td className="py-5 px-6 text-center text-slate-600 font-normal whitespace-nowrap">
-                          {s.startTime}
                         </td>
                         <td className="py-5 px-8 text-center whitespace-nowrap">
                           {s.status === "COMPLETED" ? (
@@ -2534,42 +3198,32 @@ export default function TestingSamples() {
                         </td>
                         <td className="py-5 px-4 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-2">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenVerification(s);
-                              }}
-                              className="px-3 py-1.5 bg-[#1e60d5] hover:bg-[#1952be] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                            >
-                              Verify Sample
-                            </button>
+                            {s.status !== "COMPLETED" && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenEnterResults(s);
+                                }}
+                                className="px-3 py-1.5 bg-[#00875A] hover:bg-[#00744E] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                              >
+                                Enter Results
+                              </button>
+                            )}
                             {s.status === "RUNNING" && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenEnterResults(s);
-                                  }}
-                                  className="px-3 py-1.5 bg-[#00875A] hover:bg-[#00744E] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                                >
-                                  Enter Result
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenMarkCompleted(s);
-                                  }}
-                                  className="px-3 py-1.5 bg-[#16a34a] hover:bg-[#15803d] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                                >
-                                  Mark Completed
-                                </button>
-                              </>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenMarkCompleted(s);
+                                }}
+                                className="px-3 py-1.5 bg-[#16a34a] hover:bg-[#15803d] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                              >
+                                Mark Completed
+                              </button>
                             )}
                             {s.status === "FLAGGED" && (
-                              <div className="flex items-center justify-center gap-2">
+                              <>
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -2590,42 +3244,19 @@ export default function TestingSamples() {
                                 >
                                   Mark Completed
                                 </button>
-                              </div>
+                              </>
                             )}
                             {s.status === "COMPLETED" && (
-                              <div className="flex items-center justify-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenEnterResults(s);
-                                  }}
-                                  className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#15803d] border border-emerald-200 text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                                >
-                                  Edit Result
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenMarkCompleted(s);
-                                  }}
-                                  className="px-2.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                                >
-                                  Review
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    navigate("/doctor/lab/report-generation");
-                                  }}
-                                  className="px-2.5 py-1.5 bg-[#0b57d0] hover:bg-[#094bb5] text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
-                                  title="Go to Report Generation"
-                                >
-                                  Go to Report →
-                                </button>
-                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenEnterResults(s);
+                                }}
+                                className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#15803d] border border-emerald-200 text-xs font-semibold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                              >
+                                Edit Results
+                              </button>
                             )}
                             {s.status === "CALIBRATING" && (
                               <button
@@ -2642,9 +3273,223 @@ export default function TestingSamples() {
                           </div>
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
+
+                        {/* EXPANDABLE INLINE PARAMETER TABLE FOR EACH SAMPLE */}
+                        {expandedSampleId === s.id && s.parameters && s.parameters.length > 0 && (
+                          <tr key={`${s.id}-expanded`} className="bg-slate-50/95 border-b border-indigo-100 animate-fadeIn">
+                            <td colSpan={7} className="p-4 px-8">
+                              <section
+                                className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs"
+                                data-purpose="test-parameters-table"
+                              >
+                                {/* Section Top Header */}
+                                <div className="px-6 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-white">
+                                  <div className="flex items-center gap-2.5">
+                                    <h3 className="text-sm font-bold text-slate-900 tracking-tight">
+                                      Test Parameters & Observations
+                                    </h3>
+                                    <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-teal-50 text-teal-700 border border-teal-200">
+                                      {s.parameters.length} Parameter{s.parameters.length !== 1 ? "s" : ""}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <p className="text-xs text-slate-500 hidden sm:block">
+                                      Enter observation or select quick options. Abnormal flags are evaluated in real time.
+                                    </p>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEnterResults(s)}
+                                      className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-md text-xs font-bold cursor-pointer transition-colors shadow-2xs"
+                                    >
+                                      Open Enter Results Modal
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-left border-collapse text-sm">
+                                    {/* Table Header matching Enter Results */}
+                                    <thead>
+                                      <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-bold tracking-wider text-slate-600 uppercase">
+                                        <th className="py-3 px-5 font-bold w-[26%] min-w-[180px]" scope="col">
+                                          PARAMETER
+                                        </th>
+                                        <th className="py-3 px-5 font-bold w-[34%] min-w-[260px]" scope="col">
+                                          OBSERVED RESULT
+                                        </th>
+                                        <th className="py-3 px-4 font-bold text-center w-[12%] min-w-[90px]" scope="col">
+                                          UNIT
+                                        </th>
+                                        <th className="py-3 px-4 font-bold text-center w-[16%] min-w-[130px]" scope="col">
+                                          REFERENCE RANGE
+                                        </th>
+                                        <th className="py-3 px-4 font-bold text-center w-[12%] min-w-[110px]" scope="col">
+                                          ALERT / FLAG
+                                        </th>
+                                      </tr>
+                                    </thead>
+                                    {/* Table Body */}
+                                    <tbody className="divide-y divide-slate-100 text-[13px] text-slate-800">
+                                      {s.parameters.map((param, pIdx) => (
+                                        <tr
+                                          key={param.id || pIdx}
+                                          className="hover:bg-slate-50/60 transition-colors"
+                                        >
+                                          {/* Parameter Name */}
+                                          <td className="py-3.5 px-5 text-slate-900 font-semibold align-top">
+                                            <div className="flex items-start gap-2 pt-1">
+                                              <span className="text-[11px] font-mono text-slate-400 font-bold shrink-0 mt-0.5">
+                                                {pIdx + 1}.
+                                              </span>
+                                              <div>
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                  <span className="block leading-snug">{param.parameter}</span>
+                                                  {param.gender && param.gender !== "All" && (
+                                                    <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                                      {param.gender}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                {param.resultComment && (
+                                                  <span className="text-[11px] text-slate-400 block mt-0.5 italic">
+                                                    {param.resultComment}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </div>
+                                          </td>
+
+                                          {/* Observed Result Input & Quick Option Pills */}
+                                          <td className="py-3 px-5 align-top">
+                                            <div className="space-y-1.5">
+                                              <input
+                                                type={param.inputType === "numeric" ? "text" : "text"}
+                                                inputMode={param.inputType === "numeric" ? "decimal" : undefined}
+                                                value={param.result}
+                                                onChange={(e) =>
+                                                  handleInlineParameterResultChange(
+                                                    s.id,
+                                                    param.id,
+                                                    e.target.value
+                                                  )
+                                                }
+                                                placeholder={
+                                                  param.inputType === "numeric"
+                                                    ? "Enter numeric value..."
+                                                    : param.options && param.options.length > 0
+                                                    ? "Select option below or type result..."
+                                                    : "Enter observation..."
+                                                }
+                                                className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-[13px] font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 transition-all shadow-2xs font-mono"
+                                              />
+
+                                              {/* Quick-Pill Buttons (for qualitative tests) */}
+                                              {param.options && param.options.length > 0 && (
+                                                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                                                  {param.options.map((opt) => {
+                                                    const isSelected = (param.result || "").trim().toLowerCase() === opt.toLowerCase();
+                                                    const isAbnormalOpt = [
+                                                      "positive",
+                                                      "reactive",
+                                                      "present",
+                                                      "trace",
+                                                      "1+",
+                                                      "2+",
+                                                      "3+",
+                                                      "4+",
+                                                      "turbid",
+                                                      "cloudy"
+                                                    ].some((m) => opt.toLowerCase().includes(m));
+
+                                                    return (
+                                                      <button
+                                                        key={opt}
+                                                        type="button"
+                                                        onClick={() => handleInlineParameterResultChange(s.id, param.id, opt)}
+                                                        className={`px-2.5 py-0.5 rounded text-[11px] font-semibold transition-all cursor-pointer border ${
+                                                          isSelected
+                                                            ? isAbnormalOpt
+                                                              ? "bg-rose-50 text-rose-700 border-rose-300 shadow-2xs font-bold ring-1 ring-rose-400"
+                                                              : "bg-teal-50 text-teal-700 border-teal-300 shadow-2xs font-bold ring-1 ring-teal-400"
+                                                            : "bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200"
+                                                        }`}
+                                                      >
+                                                        {opt}
+                                                      </button>
+                                                    );
+                                                  })}
+                                                </div>
+                                              )}
+                                            </div>
+                                          </td>
+
+                                          {/* Unit */}
+                                          <td className="py-3.5 px-4 text-center text-xs font-semibold text-slate-600 align-top pt-4">
+                                            {param.unit ? (
+                                              <span className="px-2 py-0.5 rounded bg-slate-50 border border-slate-200/80 inline-block">
+                                                {param.unit}
+                                              </span>
+                                            ) : (
+                                              <span className="text-slate-300">—</span>
+                                            )}
+                                          </td>
+
+                                          {/* Reference Range */}
+                                          <td className="py-3.5 px-4 text-center text-xs font-mono text-slate-700 align-top pt-4">
+                                            {param.referenceRange ? (
+                                              <span className="px-2 py-0.5 rounded bg-slate-50 border border-slate-200/80 inline-block font-semibold">
+                                                {param.referenceRange}
+                                              </span>
+                                            ) : (
+                                              <span className="text-slate-300">—</span>
+                                            )}
+                                          </td>
+
+                                          {/* Alert / Flag Badge */}
+                                          <td className="py-3.5 px-4 text-center align-top pt-3.5">
+                                            {!param.result || param.result.trim() === "" ? (
+                                              <span className="text-slate-300 text-xs font-medium">—</span>
+                                            ) : param.abnormalFlag === "CRITICAL" ? (
+                                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300 animate-pulse">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-rose-600" />
+                                                Critical
+                                              </span>
+                                            ) : param.abnormalFlag === "HIGH" ? (
+                                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-300">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                                High ↑
+                                              </span>
+                                            ) : param.abnormalFlag === "LOW" ? (
+                                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-300">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                                Low ↓
+                                              </span>
+                                            ) : param.abnormalFlag === "BORDERLINE" ? (
+                                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-yellow-50 text-yellow-800 border border-yellow-300">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                                                Borderline
+                                              </span>
+                                            ) : (
+                                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                                Normal
+                                              </span>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </section>
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
+                      );
+                    })
+                    )}
+                  </tbody>
               </table>
             </div>
             {/* END: TableContent */}

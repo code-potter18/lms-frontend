@@ -1,12 +1,28 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { getUser, remove } from "@/utils/token";
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  CheckCircle2,
+  Clock,
+  Timer,
+  AlertTriangle,
+} from "lucide-react";
 import LabNav from "./labnav";
 import { labOrderApi, labOrderItemApi, LabOrderRecord, LabOrderItemRecord } from "@/api/labOrder.api";
 import { patientApi, PatientRecord } from "@/api/patient.api";
 import { UserProfileDropdown } from "@/components/ui/User_profile_dropdown";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
 import { LabNotificationBell } from "@/components/hms/LabNotificationBell";
+import {
+  calculateSampleStability,
+  resolveStabilityHours,
+  useCurrentTimeTicker,
+  compareBySampleStability,
+  SampleStabilityInfo,
+} from "@/utils/sampleStability";
 
 export interface TestItemDetail {
   id: string;
@@ -15,6 +31,8 @@ export interface TestItemDetail {
   sampleType: string;
   priority: string;
   barcode?: string;
+  targetDate?: string;
+  deadlineDate?: string;
 }
 
 export interface TestRecord {
@@ -27,6 +45,11 @@ export interface TestRecord {
   tests: string;
   date?: string;
   time?: string;
+  orderDateIso?: string;
+  orderDateTimeIso?: string;
+  orderTimestamp?: number;
+  targetDate?: string;
+  targetDateIso?: string;
   status: "PROCESSING" | "COMPLETED";
   dob: string;
   gender: string;
@@ -37,6 +60,11 @@ export interface TestRecord {
   testItems?: TestItemDetail[];
   barcode?: string;
   barcodeGenerated?: boolean;
+  isCollected?: boolean;
+  collectionTimeIso?: string;
+  collectionTime?: string;
+  stabilityHours?: number;
+  priority?: string;
 }
 
 const INITIAL_TESTS: TestRecord[] = [
@@ -50,14 +78,17 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "CBC, LFT",
     date: "10/04/26",
     time: "10:30 AM",
+    orderDateIso: "2026-04-10",
+    barcodeGenerated: false,
+    priority: "Normal",
+    targetDate: "12-04-2026",
+    targetDateIso: "2026-04-12",
     status: "PROCESSING",
     dob: "15/06/1985",
     gender: "Male",
     mobile: "9876543210",
     email: "ramesh.kumar@email.com",
     address: "21, Green Park, New Delhi",
-    avatarUrl:
-      "https://lh3.googleusercontent.com/aida-public/AB6AXuDZMXzSl6vglUzJD1gAtLBuVl-m0g78QhYN9DT2s4axXvsVF82ZoFg_e5GxLjiZDhnS_LCQBU1bXTcjI_IstH-1TKAp8NAkWDpDvk5la7NP5MMg7eM-ZWrolAkpPd_DNMuf3szKtBzWSI2V5QdexlZROSy6nTOMNHXQnoesquILMCgFS255HcumKzzzKill-Gw8swiaNe_Vz9PziNeTCel7jUe1uns_cHrWeeZvYPD1ZxYYXSwepHyeIg",
   },
   {
     id: "2",
@@ -69,14 +100,18 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "30/03/26",
     time: "11:30 AM",
+    orderDateIso: "2026-03-30",
+    collectionTimeIso: new Date(Date.now() - 150 * 60 * 1000).toISOString(),
+    stabilityHours: 2,
+    priority: "Normal",
+    targetDate: "01-04-2026",
+    targetDateIso: "2026-04-01",
     status: "COMPLETED",
     dob: "22/08/1992",
     gender: "Female",
     mobile: "9812345678",
     email: "priya.sharma@email.com",
     address: "45, Vasant Vihar, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "3",
@@ -88,14 +123,17 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "03/04/26",
     time: "10:45AM",
+    orderDateIso: "2026-04-03",
+    barcodeGenerated: false,
+    priority: "Stat",
+    targetDate: "05-04-2026",
+    targetDateIso: "2026-04-05",
     status: "PROCESSING",
     dob: "10/11/1980",
     gender: "Male",
     mobile: "9823456789",
     email: "praveen.singh@email.com",
     address: "12, Model Town, Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "4",
@@ -107,14 +145,17 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "05/04/26",
     time: "10:30 AM",
+    orderDateIso: "2026-04-05",
+    barcodeGenerated: false,
+    priority: "Urgent",
+    targetDate: "07-04-2026",
+    targetDateIso: "2026-04-07",
     status: "PROCESSING",
     dob: "04/02/1995",
     gender: "Female",
     mobile: "9834567890",
     email: "naziya.k@email.com",
     address: "88, Jamia Nagar, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "5",
@@ -126,14 +167,15 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "20/03/26",
     time: "12:15 AM",
+    orderDateIso: "2026-03-20",
+    targetDate: "22-03-2026",
+    targetDateIso: "2026-03-22",
     status: "COMPLETED",
     dob: "19/07/1978",
     gender: "Male",
     mobile: "9845678901",
     email: "baskar.m@email.com",
     address: "14, Lajpat Nagar, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "6",
@@ -145,14 +187,15 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "21/03/26",
     time: "01:16 PM",
+    orderDateIso: "2026-03-21",
+    targetDate: "23-03-2026",
+    targetDateIso: "2026-03-23",
     status: "COMPLETED",
     dob: "30/09/1988",
     gender: "Male",
     mobile: "9856789012",
     email: "ajay.verma@email.com",
     address: "56, Karol Bagh, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "7",
@@ -164,14 +207,15 @@ const INITIAL_TESTS: TestRecord[] = [
     tests: "KFT, Lipid Profile",
     date: "11/04/26",
     time: "10:30 AM",
+    orderDateIso: "2026-04-11",
+    targetDate: "13-04-2026",
+    targetDateIso: "2026-04-13",
     status: "PROCESSING",
     dob: "12/12/1975",
     gender: "Male",
     mobile: "9867890123",
     email: "gopal.das@email.com",
     address: "78, Rohini Sector 9, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150&auto=format&fit=crop&q=80",
   },
   {
     id: "8",
@@ -181,16 +225,71 @@ const INITIAL_TESTS: TestRecord[] = [
     requestedBy: "Dr. Verma",
     requestTime: "15 Apr 2026 09:00 AM",
     tests: "KFT, Lipid Profile",
+    date: "15/04/26",
+    time: "09:00 AM",
+    orderDateIso: "2026-04-15",
+    targetDate: "17-04-2026",
+    targetDateIso: "2026-04-17",
     status: "COMPLETED",
     dob: "05/05/1996",
     gender: "Female",
     mobile: "9878901234",
     email: "ramya.n@email.com",
     address: "33, Saket, New Delhi",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80",
   },
 ];
+
+// Helper to extract YYYY-MM-DD from a Date object in local time
+const toIsoDateString = (d: Date): string => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+// Helper to format Date as DD-MM-YYYY for display
+const formatPickedDisplayDate = (d: Date): string => {
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const year = d.getFullYear();
+  return `${day}-${month}-${year}`;
+};
+
+// Helper to normalize any date string to YYYY-MM-DD for comparison
+const normalizeToIsoDate = (value?: string | null): string | null => {
+  if (!value || value === "—") return null;
+  const str = String(value).trim();
+
+  // Format: YYYY-MM-DD
+  const ymdMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymdMatch) return `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
+
+  // Format: DD-MM-YYYY or DD/MM/YYYY
+  const dmy4Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy4Match) {
+    const day = dmy4Match[1].padStart(2, "0");
+    const month = dmy4Match[2].padStart(2, "0");
+    const year = dmy4Match[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // Format: DD/MM/YY or DD-MM-YY (e.g. "10/04/26")
+  const dmy2Match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2})$/);
+  if (dmy2Match) {
+    const day = dmy2Match[1].padStart(2, "0");
+    const month = dmy2Match[2].padStart(2, "0");
+    const year = `20${dmy2Match[3]}`;
+    return `${year}-${month}-${day}`;
+  }
+
+  // Format like "20 May 2024" or "05 Apr 2026 10:30 AM"
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) {
+    return toIsoDateString(parsed);
+  }
+
+  return null;
+};
 
 // Helper to calculate age from DOB string (e.g. 15/06/1985 -> 38)
 const calculateAge = (dobString?: string): number => {
@@ -206,6 +305,112 @@ const calculateAge = (dobString?: string): number => {
   return 38;
 };
 
+// Helper to extract patient initials for avatar placeholder
+const getPatientInitials = (name?: string): string => {
+  if (!name) return "P";
+  const clean = name.replace(/^Dr\.\s*/i, "").trim();
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "P";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
+
+/* target_date is a DATE column (serialised as UTC midnight), so it is read
+   from the string rather than through the local timezone. */
+const formatTargetDate = (value?: string | null): string => {
+  if (!value) return "—";
+  const iso = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    return `${iso[3]}-${iso[2]}-${iso[1]}`;
+  }
+  const d = new Date(value);
+  if (!Number.isNaN(d.getTime())) {
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    return `${day}-${month}-${d.getFullYear()}`;
+  }
+  return String(value);
+};
+
+const isTargetDateOverdue = (targetDateIso?: string, targetDateFormatted?: string, status?: string): boolean => {
+  if (status === "COMPLETED") return false;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const iso = targetDateIso || normalizeToIsoDate(targetDateFormatted);
+  if (!iso) return false;
+  return iso < todayIso;
+};
+
+export const isTestOverdue = (test?: TestRecord | null): boolean => {
+  if (!test) return false;
+  return isTargetDateOverdue(test.targetDateIso, test.targetDate, test.status);
+};
+
+export const getTestTimestamp = (t?: TestRecord | null): number => {
+  if (!t) return 0;
+  if (t.orderTimestamp && typeof t.orderTimestamp === "number") {
+    return t.orderTimestamp;
+  }
+  if (t.orderDateTimeIso) {
+    const d = new Date(t.orderDateTimeIso).getTime();
+    if (!isNaN(d)) return d;
+  }
+  if (t.orderDateIso) {
+    if (t.time) {
+      const combined = new Date(`${t.orderDateIso} ${t.time}`).getTime();
+      if (!isNaN(combined)) return combined;
+    }
+    const d = new Date(t.orderDateIso).getTime();
+    if (!isNaN(d)) return d;
+  }
+  if (t.date) {
+    const parts = t.date.split("/");
+    if (parts.length === 3) {
+      const day = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      let year = parseInt(parts[2], 10);
+      if (year < 100) year += 2000;
+      let hours = 0;
+      let minutes = 0;
+      if (t.time) {
+        const timeMatch = t.time.match(/(\d+):(\d+)\s*(AM|PM)?/i);
+        if (timeMatch) {
+          hours = parseInt(timeMatch[1], 10);
+          minutes = parseInt(timeMatch[2], 10);
+          const meridiem = timeMatch[3]?.toUpperCase();
+          if (meridiem === "PM" && hours < 12) hours += 12;
+          if (meridiem === "AM" && hours === 12) hours = 0;
+        }
+      }
+      const d = new Date(year, month, day, hours, minutes).getTime();
+      if (!isNaN(d)) return d;
+    }
+  }
+  if (t.requestTime) {
+    const d = new Date(t.requestTime).getTime();
+    if (!isNaN(d)) return d;
+  }
+  return 0;
+};
+
+export const compareTestRecords = (a: TestRecord, b: TestRecord): number => {
+  // 1. Status: PROCESSING on the top, COMPLETED at the bottom
+  const isProcA = a.status === "PROCESSING" ? 1 : 0;
+  const isProcB = b.status === "PROCESSING" ? 1 : 0;
+  if (isProcA !== isProcB) {
+    return isProcB - isProcA;
+  }
+
+  // 2. Based on recent date and time (most recent first)
+  const timeA = getTestTimestamp(a);
+  const timeB = getTestTimestamp(b);
+  if (timeA !== timeB) {
+    return timeB - timeA;
+  }
+
+  // 3. Fallback: by ID descending
+  return (b.id || b.requestId || "").localeCompare(a.id || a.requestId || "");
+};
+
 interface SampleBarcodeItem {
   id: string;
   testCode: string;
@@ -213,6 +418,8 @@ interface SampleBarcodeItem {
   sampleType: string;
   barcode: string;
   count: number;
+  targetDate?: string;
+  deadlineDate?: string;
 }
 
 const INITIAL_SAMPLES: SampleBarcodeItem[] = [
@@ -223,6 +430,8 @@ const INITIAL_SAMPLES: SampleBarcodeItem[] = [
     sampleType: "Whole Blood",
     barcode: "BC2405200001",
     count: 1,
+    targetDate: "22-05-2024",
+    deadlineDate: "22-05-2024",
   },
   {
     id: "lft",
@@ -231,6 +440,8 @@ const INITIAL_SAMPLES: SampleBarcodeItem[] = [
     sampleType: "Serum",
     barcode: "BC2405200002",
     count: 1,
+    targetDate: "22-05-2024",
+    deadlineDate: "22-05-2024",
   },
   {
     id: "kft",
@@ -239,13 +450,15 @@ const INITIAL_SAMPLES: SampleBarcodeItem[] = [
     sampleType: "Serum",
     barcode: "BC2405200003",
     count: 1,
+    targetDate: "22-05-2024",
+    deadlineDate: "22-05-2024",
   },
 ];
 
 const DEFAULT_TEST_ITEMS: TestItemDetail[] = [
-  { id: "cbc", testCode: "CBC", testName: "Complete Blood Count", sampleType: "Whole Blood", priority: "Normal" },
-  { id: "lft", testCode: "LFT", testName: "Liver Function Test", sampleType: "Serum", priority: "Normal" },
-  { id: "kft", testCode: "KFT", testName: "Kidney Function Test", sampleType: "Serum", priority: "Normal" },
+  { id: "cbc", testCode: "CBC", testName: "Complete Blood Count", sampleType: "Whole Blood", priority: "Normal", targetDate: "22-05-2024", deadlineDate: "22-05-2024" },
+  { id: "lft", testCode: "LFT", testName: "Liver Function Test", sampleType: "Serum", priority: "Normal", targetDate: "22-05-2024", deadlineDate: "22-05-2024" },
+  { id: "kft", testCode: "KFT", testName: "Kidney Function Test", sampleType: "Serum", priority: "Normal", targetDate: "22-05-2024", deadlineDate: "22-05-2024" },
 ];
 
 export default function LabDashboard() {
@@ -275,6 +488,56 @@ export default function LabDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "PROCESSING" | "COMPLETED">("ALL");
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
+  const [priorityFilter, setPriorityFilter] = useState<"ALL" | "DUE_SOON" | "EXPIRED">("ALL");
+  const currentTime = useCurrentTimeTicker(30000);
+
+  /* ---------- KPI Track Scroll (Admin Dashboard style) ---------- */
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollButtons = useCallback(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(maxScroll > 0 && el.scrollLeft < maxScroll - 4);
+  }, []);
+
+  const handleKpiScroll = (direction: "left" | "right") => {
+    const el = trackRef.current;
+    if (!el) return;
+    const scrollAmount = 320;
+    el.scrollBy({
+      left: direction === "left" ? -scrollAmount : scrollAmount,
+      behavior: "smooth",
+    });
+  };
+
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+
+    updateScrollButtons();
+
+    const handleScroll = () => {
+      updateScrollButtons();
+    };
+
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    window.addEventListener("resize", updateScrollButtons);
+
+    const ro = new ResizeObserver(() => {
+      updateScrollButtons();
+    });
+    ro.observe(el);
+
+    return () => {
+      el.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("resize", updateScrollButtons);
+      ro.disconnect();
+    };
+  }, [updateScrollButtons]);
 
   // Editable tests list populated with real backend lab orders
   const [testsList, setTestsList] = useState<TestRecord[]>(INITIAL_TESTS);
@@ -315,12 +578,20 @@ export default function LabDashboard() {
         });
 
         const mappedTests: TestRecord[] = orders.map((order, idx) => {
+          const pBio = order.patient_history?.patient_bio_data;
           const pId =
+            pBio?.patient_id ||
             order.patient_history?.patient_id ||
             order.patient_history_id ||
             `P000${120 + idx}`;
-          const patient = patientMap.get(pId);
-          const orderItems = orderItemsMap.get(order.lab_order_id) || [];
+          const patient =
+            pBio ||
+            patientMap.get(pId) ||
+            (order.patient_history?.patient_id
+              ? patientMap.get(order.patient_history.patient_id)
+              : undefined);
+          const orderItems =
+            orderItemsMap.get(order.lab_order_id) || order.lab_order_item || [];
 
           // Test names summary
           const testNames =
@@ -381,9 +652,21 @@ export default function LabDashboard() {
                 .join(" ")
             : pId || "Patient";
 
-          // Status: if backend says Completed -> COMPLETED, else PROCESSING
+          // Status: if backend says Completed or sample was collected/registered -> COMPLETED, else PROCESSING
+          const storedColTimeEarly =
+            typeof window !== "undefined"
+              ? localStorage.getItem(`collected_sample_time_${order.lab_order_id}`) ||
+                localStorage.getItem(`registered_sample_time_${order.lab_order_id}`)
+              : null;
+          const hasDbCollectionEarly = orderItems.some(
+            (oi) =>
+              (oi.sample_collection && oi.sample_collection.length > 0) ||
+              oi.item_status === "Collected" ||
+              oi.item_status === "Barcode Generated"
+          );
           const isCompleted =
-            order.order_status?.toUpperCase() === "COMPLETED";
+            order.order_status?.toUpperCase() === "COMPLETED" ||
+            Boolean(hasDbCollectionEarly || storedColTimeEarly);
 
           // Structured tests for alignment & barcode steps
           const structuredItems: TestItemDetail[] =
@@ -398,6 +681,8 @@ export default function LabDashboard() {
                       ? localStorage.getItem(`generated_barcode_item_${oi.lab_order_item_id}`) || undefined
                       : undefined);
 
+                  const formattedTargetDate = formatTargetDate(oi.target_date);
+
                   return {
                     id: oi.lab_order_item_id || oi.lab_test_id,
                     testCode:
@@ -410,6 +695,8 @@ export default function LabDashboard() {
                       oi.lab_test_master?.sample_type || "Whole Blood",
                     priority: oi.priority || order.priority || "Normal",
                     barcode: sampleBarcode,
+                    targetDate: formattedTargetDate,
+                    deadlineDate: formattedTargetDate,
                   };
                 })
               : [
@@ -419,8 +706,20 @@ export default function LabDashboard() {
                     testName: "Complete Blood Count",
                     sampleType: "Whole Blood",
                     priority: order.priority || "Normal",
+                    targetDate: "—",
+                    deadlineDate: "—",
                   },
                 ];
+
+          const itemTargetDates = Array.from(
+            new Set(
+              orderItems
+                .map((oi) => (oi.target_date ? formatTargetDate(oi.target_date) : null))
+                .filter((d): d is string => Boolean(d && d !== "—"))
+            )
+          );
+          const orderTargetDate =
+            itemTargetDates.length > 0 ? itemTargetDates.join(", ") : "—";
 
           const isBarcodeGenerated =
             structuredItems.some((it) => !!it.barcode) ||
@@ -432,6 +731,40 @@ export default function LabDashboard() {
             ) ||
             (typeof window !== "undefined" &&
               !!localStorage.getItem(`generated_barcode_${order.lab_order_id}`));
+
+          // Check if sample has been collected from patient
+          const storedColTime =
+            typeof window !== "undefined"
+              ? localStorage.getItem(`collected_sample_time_${order.lab_order_id}`) ||
+                localStorage.getItem(`registered_sample_time_${order.lab_order_id}`)
+              : null;
+          const hasDbCollection = orderItems.some(
+            (oi) =>
+              (oi.sample_collection && oi.sample_collection.length > 0) ||
+              oi.item_status === "Collected" ||
+              oi.item_status === "Barcode Generated"
+          );
+          const isCollected = Boolean(hasDbCollection || storedColTime || (isBarcodeGenerated && structuredItems.some(it => it.barcode)));
+
+          const colDateTime = isCollected
+            ? orderItems.find((oi) => oi.sample_collection?.[0]?.collection_datetime)
+                ?.sample_collection?.[0]?.collection_datetime ||
+              storedColTime ||
+              orderItems.find((oi) => oi.sample_collection?.[0]?.created_at)
+                ?.sample_collection?.[0]?.created_at ||
+              order.created_at ||
+              order.order_datetime
+            : undefined;
+
+          const colDate = colDateTime ? new Date(colDateTime) : null;
+          const colPriority = orderItems.find((oi) => oi.priority)?.priority || order.priority || "Normal";
+          const firstTest = orderItems[0];
+          const stabilityHours = resolveStabilityHours(
+            testNames,
+            firstTest?.lab_test_master?.sample_type,
+            firstTest?.lab_test_master?.tat_hours,
+            colPriority
+          );
 
           const firstBarcode =
             structuredItems.find((it) => it.barcode)?.barcode ||
@@ -449,6 +782,17 @@ export default function LabDashboard() {
             tests: testNames,
             date: formattedDate,
             time: formattedTime,
+            orderDateIso: toIsoDateString(dateObj),
+            orderDateTimeIso: dateObj.toISOString(),
+            orderTimestamp: dateObj.getTime(),
+            collectionTimeIso: isCollected && colDate && !isNaN(colDate.getTime()) ? colDate.toISOString() : undefined,
+            collectionTime: isCollected && colDate && !isNaN(colDate.getTime()) ? colDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true }) : undefined,
+            barcodeGenerated: isCollected,
+            isCollected,
+            stabilityHours,
+            priority: colPriority,
+            targetDate: orderTargetDate,
+            targetDateIso: itemTargetDates[0] ? normalizeToIsoDate(itemTargetDates[0]) || undefined : undefined,
             status: isCompleted ? "COMPLETED" : "PROCESSING",
             dob: patient?.patient_dob
               ? new Date(patient.patient_dob).toLocaleDateString("en-GB")
@@ -469,10 +813,11 @@ export default function LabDashboard() {
             avatarUrl: patient?.patient_photo_url || undefined,
             testItems: structuredItems,
             barcode: firstBarcode,
-            barcodeGenerated: isBarcodeGenerated,
+
           };
         });
 
+        mappedTests.sort(compareTestRecords);
         setTestsList(mappedTests);
       }
     } catch (err: any) {
@@ -509,7 +854,6 @@ export default function LabDashboard() {
     "lft",
     "kft",
   ]);
-  const [isExcludedSelected, setIsExcludedSelected] = useState<boolean>(false);
 
   // Step 3: Sample Barcode states
   const [sampleBarcodes, setSampleBarcodes] = useState<SampleBarcodeItem[]>(INITIAL_SAMPLES);
@@ -564,6 +908,8 @@ export default function LabDashboard() {
     if (selectedPatient) {
       const orderId = selectedPatient.id;
       const primaryBarcode = sampleBarcodes[0]?.barcode || `BC${selectedPatient.requestId.replace(/\D/g, "").slice(-6) || "2609"}0001`;
+      const nowIso = new Date().toISOString();
+      const nowTimeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
 
       setTestsList((prev) =>
         prev.map((t) =>
@@ -573,6 +919,9 @@ export default function LabDashboard() {
                 status: "COMPLETED",
                 barcode: primaryBarcode,
                 barcodeGenerated: true,
+                isCollected: true,
+                collectionTimeIso: nowIso,
+                collectionTime: nowTimeStr,
                 testItems: t.testItems?.map((ti, idx) => ({
                   ...ti,
                   barcode: sampleBarcodes[idx]?.barcode || primaryBarcode,
@@ -585,38 +934,59 @@ export default function LabDashboard() {
       // Save locally
       try {
         localStorage.setItem(`generated_barcode_${orderId}`, "true");
+        localStorage.setItem(`registered_sample_time_${orderId}`, nowIso);
+        localStorage.setItem(`collected_sample_time_${orderId}`, nowIso);
         sampleBarcodes.forEach((sb) => {
           localStorage.setItem(`generated_barcode_item_${sb.id}`, sb.barcode);
+          localStorage.setItem(`collected_sample_time_item_${sb.id}`, nowIso);
+          localStorage.setItem(`registered_sample_time_item_${sb.id}`, nowIso);
         });
       } catch {}
 
       // Persist to backend
       try {
-        await labOrderApi.update(orderId, { order_status: "Completed" });
+        await labOrderApi.update(orderId, { order_status: "Processing" });
       } catch (e) {
         console.warn("Could not persist status to backend API:", e);
       }
 
       if (sampleBarcodes.length > 0) {
         try {
-          const realItems = sampleBarcodes.filter(
+          let itemsToProcess: any[] = sampleBarcodes.filter(
             (sb) =>
               !sb.id.startsWith("cbc") &&
               !sb.id.startsWith("lft") &&
-              !sb.id.startsWith("kft") &&
-              !sb.id.startsWith("LOI_")
+              !sb.id.startsWith("kft")
           );
-          if (realItems.length > 0) {
+
+          // If sampleBarcodes were dummy IDs but this is a real order in backend:
+          if (itemsToProcess.length === 0 && orderId) {
+            try {
+              const orderRes = await labOrderApi.getById(orderId);
+              const dbItems = orderRes?.data?.data?.lab_order_item || [];
+              if (dbItems.length > 0) {
+                itemsToProcess = dbItems.map((oi: any, idx: number) => ({
+                  id: oi.lab_order_item_id,
+                  barcode: sampleBarcodes[idx]?.barcode || primaryBarcode,
+                  sampleType: oi.lab_test_master?.sample_type || "Whole Blood",
+                  count: 1,
+                }));
+              }
+            } catch {}
+          }
+
+          if (itemsToProcess.length > 0) {
             await labOrderItemApi.generateBarcode(
-              realItems.map((sb) => ({
+              itemsToProcess.map((sb) => ({
                 lab_order_item_id: sb.id,
                 barcode: sb.barcode,
                 sample_type: sb.sampleType,
+                collection_datetime: nowIso,
               }))
             );
           }
         } catch (err) {
-          console.warn("Could not save barcodes to backend:", err);
+          console.warn("Could not save barcodes and collection time to backend:", err);
         }
       }
 
@@ -639,7 +1009,10 @@ export default function LabDashboard() {
     address: "",
   });
 
-  const handleSelectPatient = (patient: TestRecord) => {
+  const [imageLoadError, setImageLoadError] = useState<boolean>(false);
+
+  const handleSelectPatient = async (patient: TestRecord) => {
+    setImageLoadError(false);
     setSelectedPatient(patient);
     setCurrentStep(1);
 
@@ -653,6 +1026,8 @@ export default function LabDashboard() {
           sampleType: ti.sampleType,
           barcode: `BC${patient.requestId.replace(/\D/g, "").slice(-6) || "2405"}${String(idx + 1).padStart(4, "0")}`,
           count: 1,
+          targetDate: ti.targetDate || ti.deadlineDate,
+          deadlineDate: ti.deadlineDate,
         }))
       );
     } else {
@@ -660,7 +1035,6 @@ export default function LabDashboard() {
       setSampleBarcodes(INITIAL_SAMPLES);
     }
 
-    setIsExcludedSelected(false);
     setPrintSuccessMessage(null);
     setPatientFormData({
       patientId: patient.patientId,
@@ -671,19 +1045,82 @@ export default function LabDashboard() {
       email: patient.email,
       address: patient.address,
     });
+
+    // Actively fetch real patient details and photo from backend
+    if (patient.patientId) {
+      try {
+        const res = await patientApi.getById(patient.patientId);
+        const data = (res?.data as any)?.data || res?.data;
+        if (data) {
+          const photoUrl = data.patient_photo_url || (data as any).photo || null;
+          if (photoUrl) {
+            setSelectedPatient((prev) => (prev ? { ...prev, avatarUrl: photoUrl } : null));
+          }
+          const realName = [data.patient_first_name, data.patient_middle_name, data.patient_last_name]
+            .filter(Boolean)
+            .join(" ");
+          setPatientFormData((prev) => ({
+            ...prev,
+            fullName: realName || prev.fullName,
+            dob: data.patient_dob ? new Date(data.patient_dob).toLocaleDateString("en-GB") : prev.dob,
+            gender: data.patient_gender || prev.gender,
+            mobile: data.patient_primary_mobile || prev.mobile,
+            email: data.patient_email || prev.email,
+            address:
+              data.current_address ||
+              data.Patient_address ||
+              [data.patient_area, data.patient_district, data.patient_state].filter(Boolean).join(", ") ||
+              prev.address,
+          }));
+        }
+      } catch {
+        // Keep current data if not found by custom ID
+      }
+    }
   };
 
   const handleBackToDashboard = () => {
     setSelectedPatient(null);
     setCurrentStep(1);
     setSelectedValidTests(["cbc", "lft", "kft"]);
-    setIsExcludedSelected(false);
     setSampleBarcodes(INITIAL_SAMPLES);
     setPrintSuccessMessage(null);
   };
 
+  const sampleStabilityMap = useMemo(() => {
+    const map = new Map<string, SampleStabilityInfo>();
+    testsList.forEach((t) => {
+      const isCol = Boolean(t.isCollected || (t.barcodeGenerated && t.collectionTimeIso));
+      const info = calculateSampleStability(
+        t.collectionTimeIso,
+        t.stabilityHours || 2,
+        t.status,
+        currentTime,
+        isCol
+      );
+      map.set(t.id, info);
+    });
+    return map;
+  }, [testsList, currentTime]);
+
+  const expiringSoonCount = useMemo(() => {
+    return testsList.filter((t) => {
+      if (t.status === "COMPLETED") return false;
+      const info = sampleStabilityMap.get(t.id);
+      return info?.isExpiringSoon;
+    }).length;
+  }, [testsList, sampleStabilityMap]);
+
+  const expiredStabilityCount = useMemo(() => {
+    return testsList.filter((t) => {
+      if (t.status === "COMPLETED") return false;
+      const info = sampleStabilityMap.get(t.id);
+      return info?.isExpired;
+    }).length;
+  }, [testsList, sampleStabilityMap]);
+
   const filteredTests = useMemo(() => {
-    return testsList.filter((test) => {
+    const list = testsList.filter((test) => {
       const matchesSearch =
         searchQuery.trim() === "" ||
         test.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -694,9 +1131,21 @@ export default function LabDashboard() {
       const matchesStatus =
         statusFilter === "ALL" || test.status === statusFilter;
 
-      return matchesSearch && matchesStatus;
+      const info = sampleStabilityMap.get(test.id);
+      const matchesPriority =
+        priorityFilter === "ALL"
+          ? true
+          : priorityFilter === "DUE_SOON"
+          ? (info?.isExpiringSoon || false)
+          : priorityFilter === "EXPIRED"
+          ? (info?.isExpired || false)
+          : true;
+
+      return matchesSearch && matchesStatus && matchesPriority;
     });
-  }, [testsList, searchQuery, statusFilter]);
+
+    return [...list].sort(compareTestRecords);
+  }, [testsList, searchQuery, statusFilter, priorityFilter]);
 
   const completedCount = useMemo(() => {
     return testsList.filter((t) => t.status === "COMPLETED").length;
@@ -707,25 +1156,66 @@ export default function LabDashboard() {
   }, [testsList]);
 
   const overdueCount = useMemo(() => {
-    const now = Date.now();
-    return testsList.filter((t) => {
-      if (t.status !== "PROCESSING") return false;
-      const orderDate = new Date(t.date || "").getTime();
-      return !isNaN(orderDate) && now - orderDate > 48 * 3600 * 1000;
-    }).length;
+    return testsList.filter((t) => isTestOverdue(t)).length;
   }, [testsList]);
 
   const repeatCount = useMemo(() => {
     return Math.max(0, Math.floor(testsList.length * 0.05));
   }, [testsList]);
 
+  /* ---------- KPI Cards configuration (Admin Dashboard style) ---------- */
+  const kpiCards = useMemo(
+    () => [
+      {
+        id: "total-requests",
+        label: "Total Requests",
+        subLabel: "Accession order queue",
+        value: testsList.length,
+        tag: "Total",
+        bg: "#D6E3FF",
+        valueColor: "#00488D",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <FileText className="w-[17px] h-[17px]" color="#00488D" />,
+        isActive: statusFilter === "ALL",
+        onClick: () => setStatusFilter("ALL"),
+      },
+      {
+        id: "sample-registered",
+        label: "Sample Registered",
+        subLabel: "Accessioned & barcoded",
+        value: completedCount,
+        tag: `${testsList.length > 0 ? Math.round((completedCount / testsList.length) * 100) : 0}%`,
+        bg: "rgba(0, 200, 150, 0.12)",
+        valueColor: "#00A87E",
+        iconBg: "rgba(255, 255, 255, 0.40)",
+        icon: <CheckCircle2 className="w-[17px] h-[17px]" color="#00A87E" />,
+        isActive: statusFilter === "COMPLETED",
+        onClick: () => setStatusFilter((prev) => (prev === "COMPLETED" ? "ALL" : "COMPLETED")),
+      },
+      {
+        id: "registration-pending",
+        label: "Registration Pending",
+        subLabel: "Awaiting sample registration",
+        value: pendingCount,
+        tag: "Pending",
+        bg: "rgba(255, 107, 53, 0.12)",
+        valueColor: "#7B3200",
+        iconBg: "#FFDBCB",
+        icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
+        isActive: statusFilter === "PROCESSING",
+        onClick: () => setStatusFilter((prev) => (prev === "PROCESSING" ? "ALL" : "PROCESSING")),
+      },
+    ],
+    [testsList.length, completedCount, pendingCount, statusFilter]
+  );
+
   return (
     <div className="min-h-screen flex bg-[#f8fafd] text-[#1e293b] antialiased selection:bg-blue-100 font-sans">
       {/* Global Lab Navigation Sidebar */}
       <LabNav
-        activeTab="Dashboard"
+        activeTab="Sample Registration"
         onTabChange={(tab) => {
-          if (tab === "Dashboard") {
+          if (tab === "Sample Registration") {
             handleBackToDashboard();
           }
         }}
@@ -750,7 +1240,7 @@ export default function LabDashboard() {
                     type="button"
                     onClick={handleBackToDashboard}
                     className="p-1.5 -ml-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
-                    title="Back to Dashboard"
+                    title="Back to Sample Registration"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
@@ -924,14 +1414,21 @@ export default function LabDashboard() {
 
                           {/* Patient Portrait Thumbnail */}
                           <div className="flex-shrink-0 ml-4">
-                            <img
-                              alt={selectedPatient.patientName}
-                              className="w-16 h-16 rounded-full object-cover ring-2 ring-[#0b57d0]/20 shadow-sm"
-                              src={
-                                selectedPatient.avatarUrl ||
-                                "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80"
-                              }
-                            />
+                            {selectedPatient.avatarUrl && !imageLoadError ? (
+                              <img
+                                alt={selectedPatient.patientName}
+                                className="w-16 h-16 rounded-full object-cover ring-2 ring-[#0b57d0]/20 shadow-sm"
+                                src={selectedPatient.avatarUrl}
+                                onError={() => setImageLoadError(true)}
+                              />
+                            ) : (
+                              <div
+                                className="w-16 h-16 rounded-full bg-[#E8F0FE] text-[#00488D] border border-blue-200/60 ring-2 ring-[#0b57d0]/20 shadow-sm flex items-center justify-center font-bold text-xl select-none"
+                                title={selectedPatient.patientName}
+                              >
+                                {getPatientInitials(selectedPatient.patientName)}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </section>
@@ -1151,9 +1648,16 @@ export default function LabDashboard() {
                           <span className="block text-xs font-bold uppercase tracking-wider text-slate-500">
                             Request ID
                           </span>
-                          <span className="mt-1.5 block text-xl font-bold text-slate-900">
-                            {selectedPatient.requestId}
-                          </span>
+                          <div className="mt-1.5 flex items-center gap-2">
+                            <span className="text-xl font-bold text-slate-900">
+                              {selectedPatient.requestId}
+                            </span>
+                            {selectedPatient && isTargetDateOverdue(selectedPatient.targetDateIso, selectedPatient.targetDate, selectedPatient.status) && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                OVERDUE
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </section>
@@ -1191,7 +1695,7 @@ export default function LabDashboard() {
                         <table className="w-full text-left border-collapse">
                           <thead>
                             <tr className="border-b border-slate-200 bg-[#f8fafc]/80 text-[13px] font-bold text-slate-600 uppercase tracking-wider">
-                              <th className="py-4 px-6 w-28" scope="col">
+                              <th className="py-4 px-6 w-20" scope="col">
                                 <span className="sr-only">Select</span>
                                 <input
                                   type="checkbox"
@@ -1204,17 +1708,17 @@ export default function LabDashboard() {
                                   className="h-5 w-5 rounded bg-[#1d6bf3] border-slate-300 text-[#1d6bf3] focus:ring-0 focus:ring-offset-0 cursor-pointer"
                                 />
                               </th>
-                              <th className="py-4 px-6 w-1/3" scope="col">
+                              <th className="py-4 px-6" scope="col">
                                 Test Name
                               </th>
-                              <th className="py-4 px-6 w-1/4" scope="col">
+                              <th className="py-4 px-6" scope="col">
                                 Sample Type
                               </th>
-                              <th className="py-4 px-6 w-1/4" scope="col">
+                              <th className="py-4 px-6 w-32" scope="col">
                                 Priority
                               </th>
-                              <th className="py-4 px-6 text-center w-28" scope="col">
-                                Status
+                              <th className="py-4 px-6" scope="col">
+                                Target Date
                               </th>
                             </tr>
                           </thead>
@@ -1222,112 +1726,68 @@ export default function LabDashboard() {
                             {(selectedPatient?.testItems && selectedPatient.testItems.length > 0
                               ? selectedPatient.testItems
                               : DEFAULT_TEST_ITEMS
-                            ).map((testItem) => (
-                              <tr key={testItem.id} className="hover:bg-slate-50/50 transition-colors">
-                                <td className="py-4 px-6">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedValidTests.includes(testItem.id)}
-                                    onChange={() => handleToggleValidTest(testItem.id)}
-                                    className="h-5 w-5 rounded bg-[#1d6bf3] border-slate-300 text-[#1d6bf3] focus:ring-0 focus:ring-offset-0 cursor-pointer"
-                                  />
-                                </td>
-                                <td className="py-4 px-6 font-medium text-slate-800">
-                                  {testItem.testName}
-                                </td>
-                                <td className="py-4 px-6 text-slate-700">{testItem.sampleType}</td>
-                                <td className="py-4 px-6 text-slate-700">{testItem.priority}</td>
-                                <td className="py-4 px-6 text-center">
-                                  <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-semibold bg-emerald-100/70 text-emerald-800">
-                                    READY
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
+                            ).map((testItem) => {
+                              const isItemOverdue = isTargetDateOverdue(undefined, testItem.targetDate || testItem.deadlineDate, selectedPatient?.status);
+                              return (
+                                <tr
+                                  key={testItem.id}
+                                  className={`transition-colors ${
+                                    isItemOverdue
+                                      ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                                      : "hover:bg-slate-50/50"
+                                  }`}
+                                >
+                                  <td className="py-4 px-6">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedValidTests.includes(testItem.id)}
+                                      onChange={() => handleToggleValidTest(testItem.id)}
+                                      className="h-5 w-5 rounded bg-[#1d6bf3] border-slate-300 text-[#1d6bf3] focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                                    />
+                                  </td>
+                                  <td className="py-4 px-6 font-medium text-slate-800">
+                                    <div className="flex items-center gap-2">
+                                      <span>{testItem.testName}</span>
+                                      {isItemOverdue && (
+                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                          OVERDUE
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="py-4 px-6 text-slate-700">{testItem.sampleType}</td>
+                                  <td className="py-4 px-6 text-slate-700">{testItem.priority}</td>
+                                  <td className="py-4 px-6 text-slate-700 font-medium whitespace-nowrap">
+                                    {(testItem.targetDate || testItem.deadlineDate) &&
+                                    (testItem.targetDate || testItem.deadlineDate) !== "—" ? (
+                                      <div className="flex flex-col gap-0.5">
+                                        <div className={`flex items-center gap-1.5 ${isItemOverdue ? "text-rose-700 font-bold" : "text-slate-700"}`}>
+                                          <svg className={`w-4 h-4 shrink-0 ${isItemOverdue ? "text-rose-600" : "text-slate-400"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <rect height="18" rx="2" ry="2" width="18" x="3" y="4" strokeWidth="2" />
+                                            <line x1="16" x2="16" y1="2" y2="6" strokeWidth="2" />
+                                            <line x1="8" x2="8" y1="2" y2="6" strokeWidth="2" />
+                                            <line x1="3" x2="21" y1="10" y2="10" strokeWidth="2" />
+                                          </svg>
+                                          <span>{testItem.targetDate || testItem.deadlineDate}</span>
+                                        </div>
+                                        {isItemOverdue && (
+                                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 w-fit">
+                                            Overdue
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
                     </section>
                     {/* END: ValidTestsSection */}
-
-                    {/* BEGIN: ExcludedTestsSection */}
-                    <section className="space-y-3 pt-2" data-purpose="excluded-tests-group">
-                      {/* Header & Description */}
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-red-600">
-                            <svg
-                              className="w-6 h-6 stroke-red-600 fill-none stroke-[2]"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
-                          </span>
-                          <h2 className="text-xl font-bold text-red-600 tracking-tight">
-                            Excluded Tests (Requires Action)
-                          </h2>
-                        </div>
-                        <p className="mt-1 text-sm text-slate-500">
-                          The following tests cannot be performed due to clinical conflicts or missing requirements.
-                        </p>
-                      </div>
-
-                      {/* Excluded Tests Table */}
-                      <div className="border border-slate-200/90 rounded-xl overflow-hidden bg-white shadow-xs">
-                        <table className="w-full text-left border-collapse">
-                          <thead>
-                            <tr className="border-b border-slate-200 bg-[#f8fafc]/80 text-[13px] font-bold text-slate-600 uppercase tracking-wider">
-                              <th className="py-4 px-6 w-28" scope="col">
-                                Select
-                              </th>
-                              <th className="py-4 px-6 w-1/3" scope="col">
-                                Test Name
-                              </th>
-                              <th className="py-4 px-6 w-1/2" scope="col">
-                                Reason For Exclusion
-                              </th>
-                              <th className="py-4 px-6 text-center w-28" scope="col">
-                                Status
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 text-sm font-normal text-slate-800">
-                            {/* Row 1: Glucose - Fasting */}
-                            <tr className="hover:bg-slate-50/50 transition-colors">
-                              <td className="py-5 px-6">
-                                <input
-                                  type="checkbox"
-                                  checked={isExcludedSelected}
-                                  onChange={() => setIsExcludedSelected(!isExcludedSelected)}
-                                  className="h-5 w-5 rounded border border-slate-400/80 text-[#1d6bf3] focus:ring-0 focus:ring-offset-0 cursor-pointer"
-                                />
-                              </td>
-                              <td className="py-5 px-6 font-medium text-slate-800">
-                                Glucose - Fasting
-                              </td>
-                              <td className="py-5 px-6">
-                                <div className="font-bold text-red-600">
-                                  Fasting Requirement Mismatch
-                                </div>
-                                <div className="text-xs text-slate-600 mt-0.5">
-                                  Conflict: Sample taken Post-Fasting
-                                </div>
-                              </td>
-                              <td className="py-5 px-6 text-center">
-                                <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-bold tracking-tight bg-red-100 text-red-700">
-                                  EXCLUDED
-                                </span>
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </section>
-                    {/* END: ExcludedTestsSection */}
 
                     {/* BEGIN: BottomActionBar */}
                     <footer
@@ -1435,24 +1895,57 @@ export default function LabDashboard() {
                         <table className="w-full text-left border-collapse">
                           <thead>
                             <tr className="bg-slate-50/80 border-y border-slate-200/80 text-[11px] font-semibold tracking-wider text-slate-500 uppercase">
-                              <th className="py-3.5 px-6 font-semibold w-1/5">TEST CODE</th>
+                              <th className="py-3.5 px-6 font-semibold w-1/6">TEST CODE</th>
                               <th className="py-3.5 px-6 font-semibold w-1/4">TEST NAME</th>
-                              <th className="py-3.5 px-6 font-semibold w-1/4">SAMPLE TYPE</th>
+                              <th className="py-3.5 px-6 font-semibold w-1/6">SAMPLE TYPE</th>
+                              <th className="py-3.5 px-6 font-semibold w-1/5">TARGET DATE</th>
                               <th className="py-3.5 px-6 font-semibold">BARCODE</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-sm">
-                            {sampleBarcodes.map((item) => (
-                              <tr key={item.id} className="hover:bg-slate-50/40 transition-colors">
-                                <td className="py-4 px-6 font-semibold text-slate-900">
-                                  {item.testCode}
-                                </td>
-                                <td className="py-4 px-6 text-slate-600">
-                                  {item.testName}
-                                </td>
-                                <td className="py-4 px-6 text-slate-600">
-                                  {item.sampleType}
-                                </td>
+                            {sampleBarcodes.map((item) => {
+                              const isBarcodeOverdue = isTargetDateOverdue(undefined, item.targetDate || item.deadlineDate, selectedPatient?.status);
+                              return (
+                                <tr
+                                  key={item.id}
+                                  className={`transition-colors ${
+                                    isBarcodeOverdue
+                                      ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                                      : "hover:bg-slate-50/40"
+                                  }`}
+                                >
+                                  <td className="py-4 px-6 font-semibold text-slate-900">
+                                    <div className="flex items-center gap-2">
+                                      <span>{item.testCode}</span>
+                                      {isBarcodeOverdue && (
+                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                          OVERDUE
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="py-4 px-6 text-slate-600">
+                                    {item.testName}
+                                  </td>
+                                  <td className="py-4 px-6 text-slate-600">
+                                    {item.sampleType}
+                                  </td>
+                                  <td className="py-4 px-6 text-slate-700 font-medium whitespace-nowrap">
+                                    {(item.targetDate || item.deadlineDate) && (item.targetDate || item.deadlineDate) !== "—" ? (
+                                      <div className="flex flex-col gap-0.5">
+                                        <span className={isBarcodeOverdue ? "text-rose-700 font-bold" : "text-slate-700"}>
+                                          {item.targetDate || item.deadlineDate}
+                                        </span>
+                                        {isBarcodeOverdue && (
+                                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 w-fit">
+                                            Overdue
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
                                 <td className="py-4 px-6">
                                   <div className="flex items-center gap-3">
                                     <input
@@ -1520,7 +2013,8 @@ export default function LabDashboard() {
                                   </div>
                                 </td>
                               </tr>
-                            ))}
+                            );
+                          })}
                           </tbody>
                         </table>
                       </div>
@@ -1579,150 +2073,147 @@ export default function LabDashboard() {
           <>
             {/* TopNavbar */}
             <header
-              className="h-20 bg-white border-b border-slate-100 px-10 flex items-center justify-end sticky top-0 z-10"
+              className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-8 py-4 flex items-center justify-between"
               data-purpose="dashboard-header"
             >
-              <div className="flex items-center gap-4">
-                {/* Lab Notification Bell with Live Alerts */}
-                <LabNotificationBell size="md" />
-
-                {/* Role Label & Profile Avatar & Logout */}
-                <div className="flex items-center gap-3 pl-1">
-                  <UserProfileDropdown
-                    userName={displayName}
-                    userSubtext={displayRole}
-                    userAvatar={avatarUrl}
-                    onLogout={() => setLogoutOpen(true)}
-                    profilePath="/lab/profile"
-                    hideNotifications
-                  />
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-[#0b4a8b]">
+                  <svg className="w-5 h-5 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                  </svg>
                 </div>
+                <div>
+                  <h1 className="text-xl font-bold text-slate-900 tracking-tight">Sample Registration</h1>
+                  <p className="text-xs text-slate-500">Register patient specimens, manage samples & generate barcodes</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <LabNotificationBell size="md" />
+                <UserProfileDropdown
+                  userName={displayName}
+                  userSubtext={displayRole}
+                  userAvatar={avatarUrl}
+                  onLogout={() => setLogoutOpen(true)}
+                  profilePath="/lab/profile"
+                  hideNotifications
+                />
               </div>
             </header>
 
             {/* DashboardBody */}
             <main className="flex-1 p-8 lg:p-10 space-y-8 max-w-[1600px] w-full mx-auto">
-              {/* StatCardsRow */}
-              <section
-                className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5"
-                data-purpose="kpi-metric-cards"
-              >
-                {/* Card 1: Sample Registered */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#def7ec] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#059669] stroke-[2.5]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        d="M5 13l4 4L19 7"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
+              {/* Key Performance Indicators - Admin Dashboard Style Scrollable Track */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between flex-wrap gap-2 px-1">
                   <div>
-                    <span className="text-[13px] font-semibold text-[#059669]">
-                      Sample Registered
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      {completedCount}
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Samples registered successfully
-                    </p>
+                    <h2 className="text-base font-bold text-[#1c1e21] tracking-tight">Key Performance Indicators</h2>
+                    <p className="text-xs text-[#70747c]">Real-time sample accession & registration metrics</p>
                   </div>
                 </div>
 
-                {/* Card 2: Sample Registration Pending */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#e0edff] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#2563eb] stroke-[2.2]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+                <div className="relative">
+                  {canScrollLeft && (
+                    <button
+                      type="button"
+                      onClick={() => handleKpiScroll("left")}
+                      aria-label="Scroll left"
+                      className="absolute -left-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
                     >
-                      <path
-                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#2563eb]">
-                      Sample Registration Pending
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      {pendingCount}
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Awaiting sample registration
-                    </p>
-                  </div>
-                </div>
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  )}
 
-                {/* Card 3: Test Overdue */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#fef3c7] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#d97706] stroke-[2.2]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#d97706]">
-                      Test Overdue
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      {overdueCount}
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Tests past the expected time
-                    </p>
-                  </div>
-                </div>
+                  <div
+                    className={`absolute left-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-r from-[#F8FAFC] to-transparent ${
+                      canScrollLeft ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
 
-                {/* Card 4: Repeat Test Required */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.03)] flex items-center gap-5">
-                  <div className="w-14 h-14 rounded-full bg-[#fee2e2] flex items-center justify-center shrink-0">
-                    <svg
-                      className="w-6 h-6 text-[#dc2626] stroke-[2.2]"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+                  <div
+                    ref={trackRef}
+                    className="flex gap-[14px] overflow-x-auto scroll-smooth py-[6px] px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  >
+                    {kpiCards.map((card) => (
+                      <div
+                        key={card.id}
+                        onClick={card.onClick}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            card.onClick?.();
+                          }
+                        }}
+                        style={{
+                          background: card.bg,
+                          border: card.isActive ? `2.5px solid ${card.valueColor}` : "2.5px solid transparent",
+                          boxShadow: card.isActive
+                            ? `0 0 0 1px ${card.valueColor}20, 0 6px 18px ${card.valueColor}28`
+                            : "0 2px 10px rgba(0,0,0,0.06)",
+                        }}
+                        className="flex-[0_0_206px] min-w-[206px] rounded-[12px] p-[14px_16px] flex flex-col gap-[10px] cursor-pointer transition-all duration-200 select-none hover:-translate-y-[2px] hover:shadow-[0_6px_20px_rgba(0,0,0,0.10)]"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div
+                            style={{ background: card.iconBg }}
+                            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-sm"
+                          >
+                            {card.icon}
+                          </div>
+                          {card.tag && (
+                            <span
+                              style={{ color: card.valueColor }}
+                              className="text-[11px] font-bold px-[7px] py-[2px] rounded-full tracking-[-0.2px] bg-white/60 shadow-sm inline-flex items-center gap-1"
+                            >
+                              <span>{card.tag}</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <div
+                          style={{ color: card.valueColor }}
+                          className="text-[26px] font-extrabold leading-[1.05] tracking-[-0.6px]"
+                        >
+                          {card.value}
+                        </div>
+
+                        <div className="flex flex-col gap-[2px] min-w-0">
+                          <span
+                            style={{ color: card.valueColor }}
+                            className="text-[12.5px] font-bold tracking-tight truncate"
+                          >
+                            {card.label}
+                          </span>
+                          <span
+                            style={{ color: card.valueColor, opacity: 0.75 }}
+                            className="text-[11px] font-medium truncate"
+                          >
+                            {card.subLabel}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div
+                    className={`absolute right-0 top-0 bottom-2 w-12 pointer-events-none z-[2] transition-opacity duration-200 bg-gradient-to-l from-[#F8FAFC] to-transparent ${
+                      canScrollRight ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+
+                  {canScrollRight && (
+                    <button
+                      type="button"
+                      onClick={() => handleKpiScroll("right")}
+                      aria-label="Scroll right"
+                      className="absolute -right-3 top-[calc(50%-16px)] w-8 h-8 rounded-full bg-white border border-[#e6e7eb] shadow-[0_2px_8px_rgba(0,0,0,0.08)] flex items-center justify-center cursor-pointer z-10 transition-all duration-150 hover:bg-[#fafafa] hover:scale-105 text-[#1c1e21]"
                     >
-                      <path
-                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <span className="text-[13px] font-semibold text-[#dc2626]">
-                      Repeat Test Required
-                    </span>
-                    <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight mt-0.5">
-                      {repeatCount}
-                    </h3>
-                    <p className="text-[12px] text-slate-400 font-normal mt-0.5">
-                      Tests need to be repeated
-                    </p>
-                  </div>
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
-              </section>
+              </div>
 
               {/* BEGIN: MainContainer */}
               <section
@@ -1739,7 +2230,7 @@ export default function LabDashboard() {
                     className="text-2xl font-bold text-slate-800 tracking-tight"
                     data-purpose="page-title"
                   >
-                    Tests Details
+                    Sample Registration
                   </h1>
                   {/* Top Right Actions: Search and Filter */}
                   <div
@@ -1786,6 +2277,8 @@ export default function LabDashboard() {
                         </button>
                       )}
                     </div>
+
+
                     {/* Filter Button */}
                     <div className="relative shrink-0">
                       <button
@@ -1865,30 +2358,6 @@ export default function LabDashboard() {
                         </div>
                       )}
                     </div>
-
-                    {/* Refresh Button */}
-                    <button
-                      type="button"
-                      onClick={fetchRealData}
-                      disabled={isLoading}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
-                      title="Reload real lab orders from backend"
-                    >
-                      <svg
-                        className={`w-4 h-4 text-slate-600 ${isLoading ? "animate-spin" : ""}`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        />
-                      </svg>
-                      <span className="hidden sm:inline">Refresh</span>
-                    </button>
                   </div>
                 </header>
                 {/* END: HeaderSection */}
@@ -1912,6 +2381,8 @@ export default function LabDashboard() {
                   </div>
                 )}
 
+
+
                 {/* BEGIN: TableContent */}
                 <div
                   className="overflow-x-auto w-full"
@@ -1933,9 +2404,6 @@ export default function LabDashboard() {
                         <th className="py-5 px-6 font-bold" scope="col">
                           REQUESTED BY
                         </th>
-                        <th className="py-5 px-6 font-bold" scope="col">
-                          TESTS
-                        </th>
                         <th
                           className="py-5 px-6 font-bold leading-tight"
                           scope="col"
@@ -1943,6 +2411,9 @@ export default function LabDashboard() {
                           DATE
                           <br />
                           &amp; TIME
+                        </th>
+                        <th className="py-5 px-6 font-bold" scope="col">
+                          TARGET DATE
                         </th>
                         <th
                           className="py-5 px-8 font-bold text-center"
@@ -1975,48 +2446,76 @@ export default function LabDashboard() {
                           </td>
                         </tr>
                       ) : (
-                        filteredTests.map((test) => (
-                          <tr
-                            key={test.id}
-                            onClick={() => handleSelectPatient(test)}
-                            className="hover:bg-slate-50/60 transition-colors cursor-pointer"
-                            title={`Click to open registration details for ${test.patientName}`}
-                          >
-                            <td className="py-5 px-8 font-normal text-slate-600 whitespace-nowrap">
-                              {test.requestId}
-                            </td>
-                            <td className="py-5 px-6 font-bold text-slate-900 whitespace-nowrap">
-                              {test.patientName}
-                            </td>
-                            <td className="py-5 px-6 whitespace-nowrap">
-                              {test.requestedBy}
-                            </td>
-                            <td className="py-5 px-6 whitespace-nowrap">
-                              {test.tests}
-                            </td>
-                            <td className="py-5 px-6 leading-snug whitespace-nowrap">
-                              {test.date ? (
-                                <>
-                                  <div>{test.date}</div>
-                                  <div className="text-slate-600">
-                                    {test.time}
+                        filteredTests.map((test) => {
+                          const isOverdue = isTestOverdue(test);
+                          return (
+                            <tr
+                              key={test.id}
+                              onClick={() => handleSelectPatient(test)}
+                              className={`transition-colors cursor-pointer ${
+                                isOverdue
+                                  ? "bg-rose-50/40 hover:bg-rose-50/70 border-l-4 border-l-rose-500"
+                                  : "hover:bg-slate-50/60"
+                              }`}
+                              title={`Click to open registration details for ${test.patientName}`}
+                            >
+                              <td className="py-5 px-8 font-normal text-slate-600 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-slate-800">{test.requestId}</span>
+                                  {isOverdue && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white tracking-wide uppercase">
+                                      OVERDUE
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-5 px-6 font-bold text-slate-900 whitespace-nowrap">
+                                {test.patientName}
+                              </td>
+                              <td className="py-5 px-6 whitespace-nowrap">
+                                {test.requestedBy}
+                              </td>
+                              <td className="py-5 px-6 leading-snug whitespace-nowrap">
+                                {test.date ? (
+                                  <>
+                                    <div>{test.date}</div>
+                                    <div className="text-slate-600">
+                                      {test.time}
+                                    </div>
+                                  </>
+                                ) : null}
+                              </td>
+                              <td className="py-5 px-6 whitespace-nowrap font-semibold">
+                                {test.targetDate && test.targetDate !== "—" ? (
+                                  <div className="flex flex-col gap-0.5">
+                                    <div className={`flex items-center gap-1.5 ${isOverdue ? "text-rose-700 font-bold" : "text-slate-700"}`}>
+                                      <Clock className={`w-3.5 h-3.5 shrink-0 ${isOverdue ? "text-rose-600" : "text-slate-400"}`} />
+                                      <span>{test.targetDate}</span>
+                                    </div>
+                                    {isOverdue && (
+                                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 w-fit">
+                                        Overdue
+                                      </span>
+                                    )}
                                   </div>
-                                </>
-                              ) : null}
-                            </td>
-                            <td className="py-5 px-8 text-center whitespace-nowrap">
-                              {test.status === "PROCESSING" ? (
-                                <span className="inline-block px-4 py-1.5 rounded-full text-xs font-bold tracking-wider bg-[#faecc5] text-[#715e17]">
-                                  PROCESSING
-                                </span>
-                              ) : (
-                                <span className="inline-block px-4 py-1.5 rounded-full text-xs font-bold tracking-wider bg-[#bbf7d0] text-[#15803d]">
-                                  COMPLETED
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        ))
+                                ) : (
+                                  <span className="text-slate-400 font-normal">—</span>
+                                )}
+                              </td>
+                              <td className="py-5 px-8 text-center whitespace-nowrap">
+                                {test.status === "PROCESSING" ? (
+                                  <span className="inline-block px-4 py-1.5 rounded-full text-xs font-bold tracking-wider bg-[#faecc5] text-[#715e17]">
+                                    PROCESSING
+                                  </span>
+                                ) : (
+                                  <span className="inline-block px-4 py-1.5 rounded-full text-xs font-bold tracking-wider bg-[#bbf7d0] text-[#15803d]">
+                                    COMPLETED
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>

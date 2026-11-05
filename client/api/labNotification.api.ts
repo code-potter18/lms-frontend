@@ -291,8 +291,8 @@ export const labNotificationApi = {
     let remoteAlerts: LabNotificationItem[] = [];
 
     try {
-      const res = await API.get<{ success: boolean; data: any }>("/notifications/lab");
-      if (res.data?.success && res.data.data?.notifications?.length > 0) {
+      const res = await API.get<{ success: boolean; data: any }>("/notifications/lab").catch(() => null);
+      if (res?.data?.success && Array.isArray(res.data.data?.notifications) && res.data.data.notifications.length > 0) {
         remoteAlerts = res.data.data.notifications;
       }
     } catch {
@@ -327,7 +327,7 @@ export const labNotificationApi = {
   markAllAsRead: async (ids: string[]): Promise<void> => {
     markAllNotificationsAsReadInStorage(ids);
     try {
-      await API.put("/notifications/lab/read-all");
+      await API.put("/notifications/lab/read-all").catch(() => null);
     } catch {
       // ignore
     }

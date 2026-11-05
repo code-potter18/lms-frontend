@@ -1,5 +1,44 @@
 import API from "./axios";
 
+export interface LabTestParameterRecord {
+  id?: number;
+  lab_test_parameter_id: string;
+  lab_test_id: string;
+  parameter_name: string;
+  unit?: string | null;
+  ref_range_low?: number | string | null;
+  ref_range_high?: number | string | null;
+  ref_range_text?: string | null;
+  gender?: string | null;
+  age_min?: number | null;
+  age_max?: number | null;
+  sort_order?: number | null;
+  lab_test_master?: {
+    test_name?: string;
+    test_code?: string;
+    unit?: string | null;
+    reference_range?: string | null;
+    sample_type?: string | null;
+  };
+}
+
+export interface LabResultRecord {
+  id?: number;
+  lab_result_id: string;
+  sample_collection_id: string;
+  lab_order_item_id: string;
+  parameter_name: string;
+  result_value?: string | null;
+  abnormal_flag?: "NORMAL" | "LOW" | "HIGH" | "CRITICAL" | "BORDERLINE" | string | null;
+  result_comment?: string | null;
+  verified_by?: string | null;
+  verified_datetime?: string | null;
+  result_status?: string | null;
+  lab_test_parameter_id?: string | null;
+  lab_report_id?: string | null;
+  lab_test_parameter?: LabTestParameterRecord | null;
+}
+
 export interface LabOrderRecord {
   id: number;
   lab_order_id: string;
@@ -24,6 +63,21 @@ export interface LabOrderRecord {
     patient_id: string;
     visit_type?: string | null;
     visit_status?: string | null;
+    patient_bio_data?: {
+      patient_id: string;
+      patient_first_name?: string | null;
+      patient_middle_name?: string | null;
+      patient_last_name?: string | null;
+      patient_dob?: string | null;
+      patient_gender?: string | null;
+      patient_primary_mobile?: string | null;
+      patient_email?: string | null;
+      Patient_address?: string | null;
+      patient_photo_url?: string | null;
+      patient_area?: string | null;
+      patient_district?: string | null;
+      patient_state?: string | null;
+    } | null;
   } | null;
   employees?: {
     employee_id: string;
@@ -78,6 +132,7 @@ export interface LabOrderItemRecord {
     sample_type?: string | null;
     reference_range?: string | null;
     tat_hours?: number | string | null;
+    lab_test_parameter?: LabTestParameterRecord[];
   } | null;
   sample_collection?: {
     id?: number;
@@ -85,10 +140,13 @@ export interface LabOrderItemRecord {
     lab_order_item_id: string;
     barcode?: string | null;
     container_type?: string | null;
+    collection_datetime?: string | null;
     collection_status?: string | null;
     remarks?: string | null;
     collected_by?: string | null;
+    created_at?: string | null;
   }[];
+  lab_result?: LabResultRecord[];
 }
 
 export const labOrderApi = {
@@ -166,9 +224,47 @@ export const labOrderItemApi = {
       payload
     ),
 
-  generateBarcode: (items: { lab_order_item_id: string; barcode: string; sample_type?: string }[]) =>
+  generateBarcode: (items: { lab_order_item_id: string; barcode: string; sample_type?: string; collection_datetime?: string | Date }[]) =>
     API.post<{ success: boolean; message: string; data: any }>(
       "/lab-order-item/generate-barcode",
       { items }
+    ),
+};
+
+
+export const labResultApi = {
+  batchSave: (payload: {
+    lab_order_item_id: string;
+    sample_collection_id?: string;
+    barcode?: string;
+    sample_type?: string;
+    parameters: {
+      lab_test_parameter_id?: string;
+      parameter_name: string;
+      result_value: string;
+      abnormal_flag?: string;
+      result_status?: string;
+      result_comment?: string;
+      unit?: string;
+      reference_range?: string;
+    }[];
+    comments?: string;
+    markCompleted?: boolean;
+    verified_by?: string;
+    branch_id?: string;
+  }) =>
+    API.post<{ success: boolean; message: string; data: any }>(
+      "/lab-result/batch",
+      payload
+    ),
+
+  getByOrderItemId: (orderItemId: string) =>
+    API.get<{ success: boolean; data: LabResultRecord[] }>(
+      `/lab-result/order-item/${encodeURIComponent(orderItemId)}`
+    ),
+
+  getById: (id: string) =>
+    API.get<{ success: boolean; data: LabResultRecord }>(
+      `/lab-result/${encodeURIComponent(id)}`
     ),
 };
