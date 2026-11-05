@@ -252,6 +252,40 @@ const INITIAL_SAMPLES: SampleItem[] = [
   },
 ];
 
+const getSampleCollectedTimestamp = (s: SampleItem): number => {
+  if (s.collectionTimeIso) {
+    const t = new Date(s.collectionTimeIso).getTime();
+    if (!isNaN(t)) return t;
+  }
+  if (s.collectedOn) {
+    const t = new Date(s.collectedOn).getTime();
+    if (!isNaN(t)) return t;
+  }
+  if (s.collectionTime) {
+    const t = new Date(s.collectionTime).getTime();
+    if (!isNaN(t)) return t;
+  }
+  return 0;
+};
+
+const compareSampleItems = (a: SampleItem, b: SampleItem): number => {
+  // 1. Verified at the last
+  const isVerifiedA = a.status === "VERIFIED" ? 1 : 0;
+  const isVerifiedB = b.status === "VERIFIED" ? 1 : 0;
+  if (isVerifiedA !== isVerifiedB) {
+    return isVerifiedA - isVerifiedB;
+  }
+
+  // 2. Recent collected time at the top (descending: newest first)
+  const timeA = getSampleCollectedTimestamp(a);
+  const timeB = getSampleCollectedTimestamp(b);
+  if (timeA !== timeB) {
+    return timeB - timeA;
+  }
+
+  return (b.sampleId || b.id || "").localeCompare(a.sampleId || a.id || "");
+};
+
 export default function SampleVerification() {
   const navigate = useNavigate();
   const currentUser = getUser();
@@ -446,11 +480,36 @@ export default function SampleVerification() {
             item.specimen_type ||
             "Whole Blood (EDTA)";
 
-          const dateObj = item.created_at || parentOrder?.order_datetime;
-          const { fullString } = formatSampleDate(dateObj);
+          // Resolve exact collection time
+          // 1. Database sample_collection.collection_datetime
+          // 2. localStorage per-item collection time
+          // 3. localStorage per-order collection time / registered time
+          // 4. Database sample_collection.created_at
+          // 5. item.created_at || parentOrder?.order_datetime
+          const dbSc = item.sample_collection?.[0];
+          const storedItemColTime =
+            typeof window !== "undefined"
+              ? localStorage.getItem(`collected_sample_time_item_${item.lab_order_item_id}`) ||
+                localStorage.getItem(`collected_sample_time_${item.lab_order_id}`) ||
+                localStorage.getItem(`registered_sample_time_${item.lab_order_id}`)
+              : null;
+
+          const colDateTime =
+            dbSc?.collection_datetime ||
+            storedItemColTime ||
+            dbSc?.created_at ||
+            item.created_at ||
+            parentOrder?.order_datetime;
+
+          const { fullString } = formatSampleDate(colDateTime);
+          const colIso = colDateTime && !isNaN(new Date(colDateTime).getTime())
+            ? new Date(colDateTime).toISOString()
+            : undefined;
 
           // Barcode & sample identifier
-          const dateDigits = item.created_at
+          const dateDigits = colDateTime
+            ? new Date(colDateTime).toISOString().slice(2, 10).replace(/-/g, "")
+            : item.created_at
             ? new Date(item.created_at).toISOString().slice(2, 10).replace(/-/g, "")
             : "260908";
 
@@ -503,6 +562,7 @@ export default function SampleVerification() {
             sampleId,
             collectionId,
             collectedOn: fullString,
+            collectionTimeIso: colIso,
             barcode: resolvedBarcode,
             patientId: pId,
             patientName: pName,
@@ -522,6 +582,8 @@ export default function SampleVerification() {
             targetDateIso,
           };
         });
+
+        mappedSamples.sort(compareSampleItems);
 
         if (mappedSamples.length > 0) {
           setSamples(mappedSamples);
@@ -782,9 +844,7 @@ export default function SampleVerification() {
 
         return matchesSearch && matchesStatus;
       })
-      .sort((a, b) => {
-        return (b.sampleId || "").localeCompare(a.sampleId || "");
-      });
+      .sort(compareSampleItems);
   }, [samples, searchQuery, statusFilter]);
 
   const verifiedCount = useMemo(
@@ -803,7 +863,7 @@ export default function SampleVerification() {
     const now = new Date().getTime();
     return samples.filter((s) => {
       if (s.status !== "PENDING") return false;
-      const t = new Date(s.collectedOn).getTime();
+      const t = new Date(s.collectionTimeIso || s.collectedOn).getTime();
       return isNaN(t) || now - t > 4 * 3600 * 1000;
     }).length;
   }, [samples]);
@@ -3161,7 +3221,7 @@ export default function SampleVerification() {
                         />
                       </svg>
                       <span>
-                        {statusFilter === "ALL" ? "Filter" : statusFilter === "EXPIRING_SOON" ? "Expiring Soon" : statusFilter}
+                        {statusFilter === "ALL" ? "Filter" : (statusFilter as any) === "EXPIRING_SOON" ? "Expiring Soon" : statusFilter}
                       </span>
                     </button>
 
@@ -3393,8 +3453,17 @@ export default function SampleVerification() {
                                 )}
                               </div>
                             </td>
-                          <td className="py-5 px-6 text-center text-slate-600 font-normal whitespace-nowrap">
-                            {s.collectionTime}
+                          <td className="py-5 px-6 text-center whitespace-nowrap">
+                            <div className="inline-flex flex-col items-center">
+                              <span className="text-sm font-semibold text-slate-800">
+                                {s.collectionTime && s.collectionTime.includes(", ") ? s.collectionTime.split(", ")[1] : s.collectionTime}
+                              </span>
+                              {s.collectionTime && s.collectionTime.includes(", ") && (
+                                <span className="text-xs text-slate-400 font-medium">
+                                  {s.collectionTime.split(", ")[0]}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-5 px-8 text-center whitespace-nowrap">
                             {s.status === "VERIFIED" ? (

@@ -112,6 +112,7 @@ import TestingSamples from "./pages/doctor/lab/testingsamples";
 import ReportGeneration from "./pages/doctor/lab/reportgeneration";
 import ReportTransfer from "./pages/doctor/lab/reporttransfer";
 import LabProfile from "./pages/doctor/lab/labprofile";
+import LabMaster from "./pages/doctor/lab/labmaster";
 
 // ============================================================
 // HOOKS / AUTH
@@ -699,6 +700,15 @@ const App = () => (
                 element={
                   <ProtectedRoute>
                     <LabProfile />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/lab/master"
+                element={
+                  <ProtectedRoute>
+                    <LabMaster />
                   </ProtectedRoute>
                 }
               />

@@ -186,7 +186,6 @@ const ALL_LAB_KPI_IDS = [
   "order-completed",
   "order-in-progress",
   "order-pending",
-  "registration-pending",
   "verification-pending",
   "testing-pending",
   "report-pending",
@@ -233,7 +232,7 @@ export default function LabOrders() {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
             // Filter out tests-progress and any removed KPIs, ensure pending KPIs are included
-            const filteredSaved = parsed.filter((id) => id !== "tests-progress" && ALL_LAB_KPI_IDS.includes(id));
+            const filteredSaved = parsed.filter((id) => id !== "tests-progress" && id !== "registration-pending" && ALL_LAB_KPI_IDS.includes(id));
             const pendingIds = ALL_LAB_KPI_IDS.filter((id) => id.includes("pending"));
             const merged = Array.from(new Set([...filteredSaved, ...pendingIds]));
             return merged;
@@ -633,6 +632,9 @@ export default function LabOrders() {
 
     const allOrdersCount = orders.length;
     const allTestsCount = orders.reduce((a, o) => a + o.totalTests, 0);
+    const allCompletedOrdersCount = orders.filter((o) => o.orderStatus === "COMPLETED").length;
+    const allCompletedTestsCount = orders.reduce((a, o) => a + (o.orderStatus === "COMPLETED" ? o.totalTests : o.completedTests), 0);
+    const allCompletedOrderPct = allOrdersCount > 0 ? Math.round((allCompletedOrdersCount / allOrdersCount) * 100) : 0;
     const allRevenue = orders.reduce((a, o) => a + (o.revenue || 0), 0);
 
     const todayIso = format(new Date(), "yyyy-MM-dd");
@@ -795,6 +797,9 @@ export default function LabOrders() {
     return {
       allOrdersCount,
       allTestsCount,
+      allCompletedOrdersCount,
+      allCompletedTestsCount,
+      allCompletedOrderPct,
       allRevenue,
       total,
       completed,
@@ -898,16 +903,23 @@ export default function LabOrders() {
       },
       {
         id: "order-completed",
-        label: "Order Completed",
-        subLabel: "All tests completed & signed",
-        value: metrics.completed,
-        tag: `${metrics.orderPct}%`,
+        label: "Orders Completed",
+        subLabel: `${metrics.allCompletedTestsCount} tests completed`,
+        value: metrics.allCompletedOrdersCount,
+        tag: `${metrics.allCompletedOrderPct}%`,
         bg: "rgba(0, 200, 150, 0.12)",
         valueColor: "#00A87E",
         iconBg: "rgba(255, 255, 255, 0.40)",
         icon: <CheckCircle2 className="w-[17px] h-[17px]" color="#00A87E" />,
         isActive: activeTab === "COMPLETED",
-        onClick: () => setActiveTab((prev) => (prev === "COMPLETED" ? "ALL" : "COMPLETED")),
+        onClick: () => {
+          if (activeTab === "COMPLETED") {
+            setActiveTab("ALL");
+          } else {
+            setSelectedDate(null);
+            setActiveTab("COMPLETED");
+          }
+        },
       },
       {
         id: "order-in-progress",
@@ -934,17 +946,6 @@ export default function LabOrders() {
         icon: <FlaskConical className="w-[17px] h-[17px]" color="#4A5F83" />,
         isActive: activeTab === "PENDING",
         onClick: () => setActiveTab((prev) => (prev === "PENDING" ? "ALL" : "PENDING")),
-      },
-      {
-        id: "registration-pending",
-        label: "Registration Pending",
-        subLabel: "Awaiting sample registration",
-        value: metrics.registrationPending,
-        tag: "Pending",
-        bg: "rgba(255, 107, 53, 0.12)",
-        valueColor: "#7B3200",
-        iconBg: "#FFDBCB",
-        icon: <Clock className="w-[17px] h-[17px]" color="#7B3200" />,
       },
       {
         id: "verification-pending",
@@ -1515,8 +1516,8 @@ export default function LabOrders() {
                     <th className="py-3.5 px-5">Doctor</th>
                     <th className="py-3.5 px-5 whitespace-nowrap">Order Date</th>
                     <th className="py-3.5 px-5 min-w-[240px]">Test Completion</th>
-                    <th className="py-3.5 px-5">Status</th>
-                    <th className="py-3.5 px-5 text-right">Action</th>
+                    <th className="py-3.5 px-5 whitespace-nowrap">Status</th>
+                    <th className="py-3.5 px-5 text-right whitespace-nowrap">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-xs">
@@ -1566,7 +1567,7 @@ export default function LabOrders() {
                         onClick={() => { setSelectedOrder(o); setDrawerOpen(true); }}
                       >
                         {/* Order ID */}
-                        <td className="py-4 px-5">
+                        <td className="py-4 px-5 whitespace-nowrap">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-bold text-slate-900 group-hover:text-[#0b4a8b] block">{o.orderId}</span>
                             {isOverdue && (
@@ -1580,26 +1581,21 @@ export default function LabOrders() {
                           </div>
                         </td>
                         {/* Patient */}
-                        <td className="py-4 px-5">
+                        <td className="py-4 px-5 whitespace-nowrap">
                           <div className="flex items-center gap-2.5">
                             <div className="w-7 h-7 rounded-full bg-blue-50 text-[#0b4a8b] font-bold flex items-center justify-center shrink-0 text-[11px]">{o.patientName.charAt(0)}</div>
                             <div><span className="font-bold text-slate-900 block">{o.patientName}</span><span className="text-[11px] text-slate-400">{o.patientId}{o.patientGender ? ` · ${o.patientGender}` : ""}{o.patientAge ? ` · ${o.patientAge}y` : ""}</span></div>
                           </div>
                         </td>
                         {/* Doctor */}
-                        <td className="py-4 px-5"><span className="font-medium text-slate-800 block">{o.doctorName}</span><span className="text-[11px] text-slate-400">{o.doctorDepartment}</span></td>
-                        {/* Order Date & Target Date */}
+                        <td className="py-4 px-5 whitespace-nowrap"><span className="font-medium text-slate-800 block">{o.doctorName}</span><span className="text-[11px] text-slate-400">{o.doctorDepartment}</span></td>
+                        {/* Order Date */}
                         <td className="py-4 px-5 whitespace-nowrap">
                           <span className="font-semibold text-slate-800 block text-xs">{o.orderDateFormatted}</span>
                           {o.orderTimeFormatted && <span className="text-[11px] text-slate-400 block">{o.orderTimeFormatted}</span>}
-                          {o.targetDateFormatted && o.targetDateFormatted !== "—" && (
-                            <span className={`text-[11px] block mt-0.5 font-medium ${isOverdue ? "text-rose-700 font-bold" : "text-slate-500"}`}>
-                              Target: {o.targetDateFormatted}
-                            </span>
-                          )}
                         </td>
                         {/* Test Completion — the core feature */}
-                        <td className="py-4 px-5">
+                        <td className="py-4 px-5 min-w-[240px]">
                           <div className="space-y-1.5">
                             <div className="flex items-center justify-between">
                               <span className="font-bold text-slate-800 flex items-center gap-1.5"><span className={`w-1.5 h-1.5 rounded-full ${isCompleted ? "bg-emerald-500" : isInProgress ? "bg-amber-500 animate-pulse" : "bg-slate-400"}`} />{o.completedTests} of {o.totalTests} Tests Completed</span>
@@ -1607,7 +1603,7 @@ export default function LabOrders() {
                             </div>
                             <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${isCompleted ? "bg-emerald-500" : isInProgress ? "bg-amber-500" : "bg-slate-300"}`} style={{ width: `${o.completionPct}%` }} /></div>
                             <div className="flex flex-wrap gap-1 pt-0.5">
-                              {o.tests.slice(0, 3).map((t) => {
+                              {o.tests.slice(0, 2).map((t) => {
                                 const testOverdue = isTestOverdue(t, o.orderStatus);
                                 return (
                                   <span
@@ -1637,40 +1633,40 @@ export default function LabOrders() {
                                   </span>
                                 );
                               })}
-                              {o.tests.length > 3 && (
+                              {o.tests.length > 2 && (
                                 <span
                                   className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200 transition-colors"
-                                  title={o.tests.slice(3).map((t) => `${t.testCode} (${t.testName})`).join(", ")}
+                                  title={o.tests.slice(2).map((t) => `${t.testCode} (${t.testName})`).join(", ")}
                                 >
-                                  +{o.tests.length - 3} more
+                                  +{o.tests.length - 2} more
                                 </span>
                               )}
                             </div>
                           </div>
                         </td>
                         {/* Status */}
-                        <td className="py-4 px-5">
+                        <td className="py-4 px-5 whitespace-nowrap">
                           {isOverdue ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap bg-rose-100 text-rose-800 border border-rose-300">
                               <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse" />OVERDUE
                             </span>
                           ) : isCompleted ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap bg-emerald-100 text-emerald-800 border border-emerald-200">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />Completed
                             </span>
                           ) : isInProgress ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap bg-amber-100 text-amber-800 border border-amber-200">
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />In Progress
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap bg-slate-100 text-slate-700 border border-slate-200">
                               <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />Pending
                             </span>
                           )}
                         </td>
                         {/* Action */}
-                        <td className="py-4 px-5 text-right">
-                          <button type="button" onClick={(e) => { e.stopPropagation(); setSelectedOrder(o); setDrawerOpen(true); }} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:text-white hover:bg-[#0b4a8b] hover:border-[#0b4a8b] text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1">
+                        <td className="py-4 px-5 text-right whitespace-nowrap">
+                          <button type="button" onClick={(e) => { e.stopPropagation(); setSelectedOrder(o); setDrawerOpen(true); }} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:text-white hover:bg-[#0b4a8b] hover:border-[#0b4a8b] text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1 whitespace-nowrap">
                             Breakdown <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>
                           </button>
                         </td>

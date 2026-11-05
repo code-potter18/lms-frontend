@@ -10,6 +10,7 @@ export type LabTab =
   | "Testing Samples"
   | "Report Generation"
   | "Report Transfer"
+  | "Lab Master"
   | "Profile";
 
 export interface LabNavProps {
@@ -197,6 +198,33 @@ export default function LabNav({ activeTab, onTabChange }: LabNavProps) {
               />
             </svg>
             <span>Report Transfer</span>
+          </button>
+
+          {/* Lab Master */}
+          <button
+            type="button"
+            onClick={() => handleNavClick("Lab Master", "/lab/master")}
+            aria-current={activeTab === "Lab Master" ? "page" : undefined}
+            className={`w-full flex items-center gap-3.5 px-3.5 py-2.5 rounded-lg font-medium text-sm transition-colors text-left cursor-pointer ${
+              activeTab === "Lab Master"
+                ? "bg-[#0b4a8b] text-white shadow-sm"
+                : "text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            <svg
+              className={`w-5 h-5 shrink-0 ${activeTab === "Lab Master" ? "text-white" : "text-slate-500"}`}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              viewBox="0 0 24 24"
+            >
+              <path
+                d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span>Lab Master</span>
           </button>
         </nav>
       </div>

@@ -961,6 +961,7 @@ export const INITIAL_TESTING_SAMPLES: TestingSampleItem[] = [];
 export default function TestingSamples() {
   const navigate = useNavigate();
   const currentUser = useMemo(() => getUser(), []);
+  const currentUsername = currentUser?.username || "Lab Technician";
   const displayName = currentUser?.username || "Labtech";
   const displayRole =
     currentUser?.role_type === "LAB_TECHNICIAN"
@@ -1443,7 +1444,15 @@ export default function TestingSamples() {
           }
         }
 
-        const combinedSamples = [...mappedBackendSamples, ...cachedSamples];
+        const combinedSamples = [...mappedBackendSamples, ...cachedSamples].sort((a, b) => {
+          const isRunningA = a.status === "RUNNING" ? 1 : 0;
+          const isRunningB = b.status === "RUNNING" ? 1 : 0;
+          if (isRunningA !== isRunningB) return isRunningB - isRunningA;
+          const overdueA = isTestingSampleOverdue(a) ? 1 : 0;
+          const overdueB = isTestingSampleOverdue(b) ? 1 : 0;
+          if (overdueA !== overdueB) return overdueB - overdueA;
+          return (b.sampleId || b.id || "").localeCompare(a.sampleId || a.id || "");
+        });
         setSamples(combinedSamples);
         if (combinedSamples.length > 0) {
           setSelectedSample((prev) => {
@@ -1998,10 +2007,17 @@ export default function TestingSamples() {
     });
 
     return [...list].sort((a, b) => {
+      // 1. Show samples with RUNNING status at the top
+      const isRunningA = a.status === "RUNNING" ? 1 : 0;
+      const isRunningB = b.status === "RUNNING" ? 1 : 0;
+      if (isRunningA !== isRunningB) return isRunningB - isRunningA;
+
+      // 2. Overdue priority
       const overdueA = isTestingSampleOverdue(a) ? 1 : 0;
       const overdueB = isTestingSampleOverdue(b) ? 1 : 0;
       if (overdueA !== overdueB) return overdueB - overdueA;
-      return (b.sampleId || "").localeCompare(a.sampleId || "");
+
+      return (b.sampleId || b.id || "").localeCompare(a.sampleId || a.id || "");
     });
   }, [samples, searchQuery, statusFilter, priorityFilter]);
 

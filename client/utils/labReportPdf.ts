@@ -969,13 +969,12 @@ export function generateLabReportPdf(options: LabReportPdfOptions): {
       resultVal,
       rawUnit || "—",
       rawRange || "—",
-      p.status || "Normal",
     ];
   });
 
   autoTable(doc, {
     startY: 168,
-    head: [["PARAMETER", "RESULT", "UNIT", "REFERENCE RANGE", "STATUS"]],
+    head: [["PARAMETER", "RESULT", "UNIT", "REFERENCE RANGE"]],
     body: tableData,
     theme: "grid",
     headStyles: {
@@ -995,11 +994,10 @@ export function generateLabReportPdf(options: LabReportPdfOptions): {
       textColor: [17, 24, 39],
     },
     columnStyles: {
-      0: { halign: "left", fontStyle: "bold", cellWidth: 155 },
-      1: { halign: "center", fontStyle: "normal", cellWidth: 75 },
-      2: { halign: "center", fontStyle: "normal", cellWidth: 75 },
-      3: { halign: "center", fontStyle: "normal", cellWidth: 130 },
-      4: { halign: "center", fontStyle: "bold", cellWidth: 80 },
+      0: { halign: "left", fontStyle: "bold", cellWidth: 190 },
+      1: { halign: "center", fontStyle: "normal", cellWidth: 95 },
+      2: { halign: "center", fontStyle: "normal", cellWidth: 80 },
+      3: { halign: "center", fontStyle: "normal", cellWidth: 150 },
     },
     alternateRowStyles: {
       fillColor: [255, 255, 255],
@@ -1008,17 +1006,32 @@ export function generateLabReportPdf(options: LabReportPdfOptions): {
       if (data.section === "head" && data.column.index === 0) {
         data.cell.styles.halign = "left";
       }
-      if (data.section === "body" && data.column.index === 4) {
-        const raw = String(data.cell.raw || "").toLowerCase();
-        if (raw.includes("crit")) {
-          data.cell.styles.textColor = [185, 28, 28]; // red
+      if (data.section === "body" && data.column.index === 1) {
+        const param = options.parameters[data.row.index];
+        const statusStr = String(
+          param?.status ||
+          (param as any)?.abnormal_flag ||
+          (param as any)?.flag ||
+          ""
+        ).toLowerCase().trim();
+
+        if (statusStr.includes("crit")) {
+          // Critical: Red
+          data.cell.styles.textColor = [220, 38, 38];
           data.cell.styles.fontStyle = "bold";
-        } else if (raw.includes("abnormal") || raw.includes("high") || raw.includes("low")) {
-          data.cell.styles.textColor = [180, 83, 9]; // amber
+        } else if (
+          statusStr.includes("abnormal") ||
+          statusStr.includes("high") ||
+          statusStr.includes("low") ||
+          statusStr.includes("warn")
+        ) {
+          // Abnormal: Yellow
+          data.cell.styles.textColor = [202, 138, 4];
           data.cell.styles.fontStyle = "bold";
         } else {
+          // Normal: Black
           data.cell.styles.textColor = [0, 0, 0];
-          data.cell.styles.fontStyle = "bold";
+          data.cell.styles.fontStyle = "normal";
         }
       }
     },

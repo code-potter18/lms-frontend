@@ -123,6 +123,25 @@ const isReportOverdue = (r?: ReportItem | null): boolean => {
   return iso < todayIso;
 };
 
+const compareReportItems = (a: ReportItem, b: ReportItem): number => {
+  // 1. Show reports that are UNDER_REVIEW at the top
+  const isUnderReviewA = a.status === "UNDER_REVIEW" ? 1 : 0;
+  const isUnderReviewB = b.status === "UNDER_REVIEW" ? 1 : 0;
+  if (isUnderReviewA !== isUnderReviewB) {
+    return isUnderReviewB - isUnderReviewA;
+  }
+
+  // 2. Overdue priority
+  const overdueA = isReportOverdue(a) ? 1 : 0;
+  const overdueB = isReportOverdue(b) ? 1 : 0;
+  if (overdueA !== overdueB) {
+    return overdueB - overdueA;
+  }
+
+  // 3. Fallback: by ID descending / requestId descending
+  return (b.id || b.reportId || "").localeCompare(a.id || a.reportId || "");
+};
+
 export const DEFAULT_QC_PARAMETERS: QualityCheckParameter[] = [
   {
     id: "qc-cbc-1",
@@ -759,14 +778,14 @@ export default function ReportGeneration() {
                 };
               });
             }
-            if (orderItem?.lab_result && Array.isArray(orderItem.lab_result) && orderItem.lab_result.length > 0) {
-              return orderItem.lab_result.map((r: any) => {
+            if ((orderItem as any)?.lab_result && Array.isArray((orderItem as any).lab_result) && (orderItem as any).lab_result.length > 0) {
+              return (orderItem as any).lab_result.map((r: any) => {
                 let qcStatus: "Normal" | "Abnormal" | "Critical" = "Normal";
                 const flag = (r.abnormal_flag || "").toUpperCase();
                 if (flag === "CRITICAL") qcStatus = "Critical";
                 else if (flag === "HIGH" || flag === "LOW" || flag === "ABNORMAL") qcStatus = "Abnormal";
 
-                const matchedMasterParam = orderItem.lab_test_master?.lab_test_parameter?.find(
+                const matchedMasterParam = (orderItem as any)?.lab_test_master?.lab_test_parameter?.find(
                   (p: any) =>
                     (r.lab_test_parameter_id && p.lab_test_parameter_id === r.lab_test_parameter_id) ||
                     (p.parameter_name && p.parameter_name.toLowerCase().trim() === r.parameter_name.toLowerCase().trim())
@@ -775,7 +794,7 @@ export default function ReportGeneration() {
                 const resolvedUnit = (
                   r.lab_test_parameter?.unit ||
                   matchedMasterParam?.unit ||
-                  orderItem.lab_test_master?.unit ||
+                  (orderItem as any)?.lab_test_master?.unit ||
                   resolveStandardParameterUnit(r.parameter_name, testPanel) ||
                   ""
                 ).trim();
@@ -1312,6 +1331,7 @@ export default function ReportGeneration() {
       });
 
       if (completedOnlyReports.length > 0) {
+        completedOnlyReports.sort(compareReportItems);
         setReports(completedOnlyReports);
         setSelectedReport((prev) => {
           if (!prev) return completedOnlyReports[0];
@@ -1395,7 +1415,7 @@ export default function ReportGeneration() {
 
   const handleApproveAllParameters = () => {
     setCurrentParameters((prev) =>
-      prev.map((p) => ({ ...p, approved: false })),
+      prev.map((p) => ({ ...p, approved: true })),
     );
     toast({
       title: "All Parameters Approved",
@@ -1914,7 +1934,7 @@ export default function ReportGeneration() {
         statusFilter === "ALL" || rep.status === statusFilter;
 
       return matchesSearch && matchesStatus;
-    });
+    }).sort(compareReportItems);
   }, [reports, searchQuery, statusFilter]);
 
   const generatedCount = useMemo(
@@ -2216,37 +2236,42 @@ export default function ReportGeneration() {
                       >
                         REFERENCE RANGE
                       </th>
-                      <th
-                        className="py-2.5 px-4 text-center font-bold border border-black"
-                        scope="col"
-                      >
-                        STATUS
-                      </th>
                     </tr>
                   </thead>
                   <tbody className="text-gray-900 font-medium">
-                    {(selectedReport.parameters && selectedReport.parameters.length > 0 ? selectedReport.parameters : DEFAULT_QC_PARAMETERS).map((p, idx) => (
-                      <tr
-                        key={idx}
-                        className="hover:bg-slate-50/50 border border-black"
-                      >
-                        <td className="py-2 px-4 font-semibold text-gray-900 border border-black">
-                          {p.parameter}
-                        </td>
-                        <td className="py-2 px-4 text-center font-medium font-mono border border-black">
-                          {p.result}
-                        </td>
-                        <td className="py-2 px-4 text-center border border-black">
-                          {p.unit || resolveStandardParameterUnit(p.parameter, selectedReport.testPanel) || "—"}
-                        </td>
-                        <td className="py-2 px-4 text-center border border-black">
-                          {p.referenceRange || resolveStandardParameterRefRange(p.parameter, selectedReport.patientAgeGender, selectedReport.testPanel) || "—"}
-                        </td>
-                        <td className="py-2 px-4 text-center font-bold text-black tracking-wide border border-black">
-                          {p.status}
-                        </td>
-                      </tr>
-                    ))}
+                    {(selectedReport.parameters && selectedReport.parameters.length > 0 ? selectedReport.parameters : DEFAULT_QC_PARAMETERS).map((p, idx) => {
+                      const statusLower = String(p.status || "").toLowerCase();
+                      const isCritical = statusLower.includes("crit");
+                      const isAbnormal = !isCritical && (statusLower.includes("abnormal") || statusLower.includes("high") || statusLower.includes("low") || statusLower.includes("warn"));
+
+                      return (
+                        <tr
+                          key={idx}
+                          className="hover:bg-slate-50/50 border border-black"
+                        >
+                          <td className="py-2 px-4 font-semibold text-gray-900 border border-black">
+                            {p.parameter}
+                          </td>
+                          <td
+                            className={`py-2 px-4 text-center font-mono border border-black ${
+                              isCritical
+                                ? "text-red-600 font-bold"
+                                : isAbnormal
+                                ? "text-[#ca8a04] font-bold"
+                                : "text-black font-medium"
+                            }`}
+                          >
+                            {p.result}
+                          </td>
+                          <td className="py-2 px-4 text-center border border-black">
+                            {p.unit || resolveStandardParameterUnit(p.parameter, selectedReport.testPanel) || "—"}
+                          </td>
+                          <td className="py-2 px-4 text-center border border-black">
+                            {p.referenceRange || resolveStandardParameterRefRange(p.parameter, selectedReport.patientAgeGender, selectedReport.testPanel) || "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </section>

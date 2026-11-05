@@ -48,4 +48,21 @@ export const labTestMasterApi = {
     API.get<{ success: boolean; data: LabTestParameterRecord[] }>(
       "/lab-test-master/parameters",
     ),
+
+  create: (data: any) =>
+    API.post<{ success: boolean; data: LabTestMasterRecord }>(
+      "/lab-test-master",
+      data,
+    ),
+
+  update: (id: string, data: any) =>
+    API.put<{ success: boolean; data: LabTestMasterRecord }>(
+      `/lab-test-master/${id}`,
+      data,
+    ),
+
+  delete: (id: string) =>
+    API.delete<{ success: boolean; data: any }>(
+      `/lab-test-master/${id}`,
+    ),
 };

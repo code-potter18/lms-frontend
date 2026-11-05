@@ -224,7 +224,7 @@ export const labOrderItemApi = {
       payload
     ),
 
-  generateBarcode: (items: { lab_order_item_id: string; barcode: string; sample_type?: string }[]) =>
+  generateBarcode: (items: { lab_order_item_id: string; barcode: string; sample_type?: string; collection_datetime?: string | Date }[]) =>
     API.post<{ success: boolean; message: string; data: any }>(
       "/lab-order-item/generate-barcode",
       { items }

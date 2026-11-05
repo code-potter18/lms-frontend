@@ -98,7 +98,6 @@ export interface RegimenProtocolItem {
   patient_dose_unit: string | null;
   administration_detail: string | null;
   previous_toxicity: string | null;
-  generic_name?: string | null;
   remarks: string | null;
   medicine_master: { medicine_name: string | null } | null;
   chemotherapy_protocol_dilutions?: RegimenProtocolDilution[] | null;

@@ -59,6 +59,7 @@ export interface TransferItem {
   parameters?: DiagnosticParameter[];
   targetDate?: string;
   targetDateIso?: string;
+  transferTimestamp?: number;
 }
 
 const DEFAULT_CBC_PARAMETERS: DiagnosticParameter[] = [
@@ -247,6 +248,65 @@ function formatReportDate(dateVal?: string | Date | null): string {
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+function getStatusRank(status: string): number {
+  switch (status) {
+    case "QUEUED":
+      return 1;
+    case "FAILED":
+      return 2;
+    case "SENT":
+      return 3;
+    case "DELIVERED":
+      return 4;
+    default:
+      return 2;
+  }
+}
+
+function getTransferTimestamp(t?: TransferItem | null): number {
+  if (!t) return 0;
+  if (t.transferTimestamp && typeof t.transferTimestamp === "number") {
+    return t.transferTimestamp;
+  }
+  if (t.reportedOn) {
+    const d = new Date(t.reportedOn).getTime();
+    if (!isNaN(d)) return d;
+  }
+  if (t.collectedOn) {
+    const d = new Date(t.collectedOn).getTime();
+    if (!isNaN(d)) return d;
+  }
+  if (
+    t.dispatchedAt &&
+    t.dispatchedAt !== "Queued" &&
+    t.dispatchedAt !== "Dispatched" &&
+    t.dispatchedAt !== "Just now"
+  ) {
+    const d = new Date(t.dispatchedAt).getTime();
+    if (!isNaN(d)) return d;
+  }
+  return 0;
+}
+
+export function compareTransferItems(a: TransferItem, b: TransferItem): number {
+  // 1. Status: QUEUED at the top (rank 1), DELIVERED at the bottom (rank 4)
+  const rankA = getStatusRank(a.status);
+  const rankB = getStatusRank(b.status);
+  if (rankA !== rankB) {
+    return rankA - rankB;
+  }
+
+  // 2. Most recent date and time at the top
+  const timeA = getTransferTimestamp(a);
+  const timeB = getTransferTimestamp(b);
+  if (timeA !== timeB) {
+    return timeB - timeA;
+  }
+
+  // 3. Fallback: by ID descending
+  return (b.id || b.reportId || "").localeCompare(a.id || a.reportId || "");
+}
+
 export default function ReportTransfer() {
   const navigate = useNavigate();
   const currentUser = getUser();
@@ -399,6 +459,10 @@ export default function ReportTransfer() {
           parameters: parsedMeta?.parameters && parsedMeta.parameters.length > 0 ? parsedMeta.parameters : DEFAULT_CBC_PARAMETERS,
           targetDate,
           targetDateIso,
+          transferTimestamp: (() => {
+            const tStr = rep.generated_datetime || rep.created_at || (orderItem as any)?.created_at || order?.order_datetime;
+            return tStr ? new Date(tStr).getTime() : Date.now();
+          })(),
         });
       });
 
@@ -480,6 +544,10 @@ export default function ReportTransfer() {
           parameters: DEFAULT_CBC_PARAMETERS,
           targetDate,
           targetDateIso,
+          transferTimestamp: (() => {
+            const tStr = (item as any)?.updated_at || (item as any)?.created_at || parentOrder?.order_datetime;
+            return tStr ? new Date(tStr).getTime() : Date.now();
+          })(),
         });
       });
 
@@ -568,6 +636,7 @@ export default function ReportTransfer() {
       });
 
       if (generatedOnlyTransfers.length > 0) {
+        generatedOnlyTransfers.sort(compareTransferItems);
         setTransfers(generatedOnlyTransfers);
         setSelectedTransfer((prev) => {
           if (!prev) return generatedOnlyTransfers[0];
@@ -797,7 +866,7 @@ export default function ReportTransfer() {
         statusFilter === "ALL" || t.status === statusFilter;
 
       return matchesSearch && matchesStatus;
-    });
+    }).sort(compareTransferItems);
   }, [transfers, searchQuery, statusFilter]);
 
   const deliveredCount = useMemo(
@@ -1112,37 +1181,42 @@ export default function ReportTransfer() {
                       >
                         REFERENCE RANGE
                       </th>
-                      <th
-                        className="py-2.5 px-4 text-center font-bold border border-black"
-                        scope="col"
-                      >
-                        STATUS
-                      </th>
                     </tr>
                   </thead>
                   <tbody className="text-gray-900 font-medium">
-                    {activeParameters.map((p, idx) => (
-                      <tr
-                        key={idx}
-                        className="hover:bg-slate-50/50 border border-black"
-                      >
-                        <td className="py-2 px-4 font-semibold text-gray-900 border border-black">
-                          {p.parameter}
-                        </td>
-                        <td className="py-2 px-4 text-center font-medium font-mono border border-black">
-                          {p.result}
-                        </td>
-                        <td className="py-2 px-4 text-center border border-black">
-                          {p.unit || resolveStandardParameterUnit(p.parameter, selectedTransfer.testProfile) || "—"}
-                        </td>
-                        <td className="py-2 px-4 text-center border border-black">
-                          {p.referenceRange || resolveStandardParameterRefRange(p.parameter, selectedTransfer.patientAgeGender, selectedTransfer.testProfile) || "—"}
-                        </td>
-                        <td className="py-2 px-4 text-center font-bold text-black tracking-wide border border-black">
-                          {p.status}
-                        </td>
-                      </tr>
-                    ))}
+                    {activeParameters.map((p, idx) => {
+                      const statusLower = String(p.status || "").toLowerCase();
+                      const isCritical = statusLower.includes("crit");
+                      const isAbnormal = !isCritical && (statusLower.includes("abnormal") || statusLower.includes("high") || statusLower.includes("low") || statusLower.includes("warn"));
+
+                      return (
+                        <tr
+                          key={idx}
+                          className="hover:bg-slate-50/50 border border-black"
+                        >
+                          <td className="py-2 px-4 font-semibold text-gray-900 border border-black">
+                            {p.parameter}
+                          </td>
+                          <td
+                            className={`py-2 px-4 text-center font-mono border border-black ${
+                              isCritical
+                                ? "text-red-600 font-bold"
+                                : isAbnormal
+                                ? "text-[#ca8a04] font-bold"
+                                : "text-black font-medium"
+                            }`}
+                          >
+                            {p.result}
+                          </td>
+                          <td className="py-2 px-4 text-center border border-black">
+                            {p.unit || resolveStandardParameterUnit(p.parameter, selectedTransfer.testProfile) || "—"}
+                          </td>
+                          <td className="py-2 px-4 text-center border border-black">
+                            {p.referenceRange || resolveStandardParameterRefRange(p.parameter, selectedTransfer.patientAgeGender, selectedTransfer.testProfile) || "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </section>

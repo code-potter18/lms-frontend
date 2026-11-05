@@ -46,6 +46,8 @@ export interface TestRecord {
   date?: string;
   time?: string;
   orderDateIso?: string;
+  orderDateTimeIso?: string;
+  orderTimestamp?: number;
   targetDate?: string;
   targetDateIso?: string;
   status: "PROCESSING" | "COMPLETED";
@@ -343,6 +345,72 @@ export const isTestOverdue = (test?: TestRecord | null): boolean => {
   return isTargetDateOverdue(test.targetDateIso, test.targetDate, test.status);
 };
 
+export const getTestTimestamp = (t?: TestRecord | null): number => {
+  if (!t) return 0;
+  if (t.orderTimestamp && typeof t.orderTimestamp === "number") {
+    return t.orderTimestamp;
+  }
+  if (t.orderDateTimeIso) {
+    const d = new Date(t.orderDateTimeIso).getTime();
+    if (!isNaN(d)) return d;
+  }
+  if (t.orderDateIso) {
+    if (t.time) {
+      const combined = new Date(`${t.orderDateIso} ${t.time}`).getTime();
+      if (!isNaN(combined)) return combined;
+    }
+    const d = new Date(t.orderDateIso).getTime();
+    if (!isNaN(d)) return d;
+  }
+  if (t.date) {
+    const parts = t.date.split("/");
+    if (parts.length === 3) {
+      const day = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      let year = parseInt(parts[2], 10);
+      if (year < 100) year += 2000;
+      let hours = 0;
+      let minutes = 0;
+      if (t.time) {
+        const timeMatch = t.time.match(/(\d+):(\d+)\s*(AM|PM)?/i);
+        if (timeMatch) {
+          hours = parseInt(timeMatch[1], 10);
+          minutes = parseInt(timeMatch[2], 10);
+          const meridiem = timeMatch[3]?.toUpperCase();
+          if (meridiem === "PM" && hours < 12) hours += 12;
+          if (meridiem === "AM" && hours === 12) hours = 0;
+        }
+      }
+      const d = new Date(year, month, day, hours, minutes).getTime();
+      if (!isNaN(d)) return d;
+    }
+  }
+  if (t.requestTime) {
+    const d = new Date(t.requestTime).getTime();
+    if (!isNaN(d)) return d;
+  }
+  return 0;
+};
+
+export const compareTestRecords = (a: TestRecord, b: TestRecord): number => {
+  // 1. Status: PROCESSING on the top, COMPLETED at the bottom
+  const isProcA = a.status === "PROCESSING" ? 1 : 0;
+  const isProcB = b.status === "PROCESSING" ? 1 : 0;
+  if (isProcA !== isProcB) {
+    return isProcB - isProcA;
+  }
+
+  // 2. Based on recent date and time (most recent first)
+  const timeA = getTestTimestamp(a);
+  const timeB = getTestTimestamp(b);
+  if (timeA !== timeB) {
+    return timeB - timeA;
+  }
+
+  // 3. Fallback: by ID descending
+  return (b.id || b.requestId || "").localeCompare(a.id || a.requestId || "");
+};
+
 interface SampleBarcodeItem {
   id: string;
   testCode: string;
@@ -584,9 +652,21 @@ export default function LabDashboard() {
                 .join(" ")
             : pId || "Patient";
 
-          // Status: if backend says Completed -> COMPLETED, else PROCESSING
+          // Status: if backend says Completed or sample was collected/registered -> COMPLETED, else PROCESSING
+          const storedColTimeEarly =
+            typeof window !== "undefined"
+              ? localStorage.getItem(`collected_sample_time_${order.lab_order_id}`) ||
+                localStorage.getItem(`registered_sample_time_${order.lab_order_id}`)
+              : null;
+          const hasDbCollectionEarly = orderItems.some(
+            (oi) =>
+              (oi.sample_collection && oi.sample_collection.length > 0) ||
+              oi.item_status === "Collected" ||
+              oi.item_status === "Barcode Generated"
+          );
           const isCompleted =
-            order.order_status?.toUpperCase() === "COMPLETED";
+            order.order_status?.toUpperCase() === "COMPLETED" ||
+            Boolean(hasDbCollectionEarly || storedColTimeEarly);
 
           // Structured tests for alignment & barcode steps
           const structuredItems: TestItemDetail[] =
@@ -703,6 +783,8 @@ export default function LabDashboard() {
             date: formattedDate,
             time: formattedTime,
             orderDateIso: toIsoDateString(dateObj),
+            orderDateTimeIso: dateObj.toISOString(),
+            orderTimestamp: dateObj.getTime(),
             collectionTimeIso: isCollected && colDate && !isNaN(colDate.getTime()) ? colDate.toISOString() : undefined,
             collectionTime: isCollected && colDate && !isNaN(colDate.getTime()) ? colDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true }) : undefined,
             barcodeGenerated: isCollected,
@@ -735,6 +817,7 @@ export default function LabDashboard() {
           };
         });
 
+        mappedTests.sort(compareTestRecords);
         setTestsList(mappedTests);
       }
     } catch (err: any) {
@@ -855,6 +938,8 @@ export default function LabDashboard() {
         localStorage.setItem(`collected_sample_time_${orderId}`, nowIso);
         sampleBarcodes.forEach((sb) => {
           localStorage.setItem(`generated_barcode_item_${sb.id}`, sb.barcode);
+          localStorage.setItem(`collected_sample_time_item_${sb.id}`, nowIso);
+          localStorage.setItem(`registered_sample_time_item_${sb.id}`, nowIso);
         });
       } catch {}
 
@@ -867,24 +952,41 @@ export default function LabDashboard() {
 
       if (sampleBarcodes.length > 0) {
         try {
-          const realItems = sampleBarcodes.filter(
+          let itemsToProcess: any[] = sampleBarcodes.filter(
             (sb) =>
               !sb.id.startsWith("cbc") &&
               !sb.id.startsWith("lft") &&
-              !sb.id.startsWith("kft") &&
-              !sb.id.startsWith("LOI_")
+              !sb.id.startsWith("kft")
           );
-          if (realItems.length > 0) {
+
+          // If sampleBarcodes were dummy IDs but this is a real order in backend:
+          if (itemsToProcess.length === 0 && orderId) {
+            try {
+              const orderRes = await labOrderApi.getById(orderId);
+              const dbItems = orderRes?.data?.data?.lab_order_item || [];
+              if (dbItems.length > 0) {
+                itemsToProcess = dbItems.map((oi: any, idx: number) => ({
+                  id: oi.lab_order_item_id,
+                  barcode: sampleBarcodes[idx]?.barcode || primaryBarcode,
+                  sampleType: oi.lab_test_master?.sample_type || "Whole Blood",
+                  count: 1,
+                }));
+              }
+            } catch {}
+          }
+
+          if (itemsToProcess.length > 0) {
             await labOrderItemApi.generateBarcode(
-              realItems.map((sb) => ({
+              itemsToProcess.map((sb) => ({
                 lab_order_item_id: sb.id,
                 barcode: sb.barcode,
                 sample_type: sb.sampleType,
+                collection_datetime: nowIso,
               }))
             );
           }
         } catch (err) {
-          console.warn("Could not save barcodes to backend:", err);
+          console.warn("Could not save barcodes and collection time to backend:", err);
         }
       }
 
@@ -1042,12 +1144,7 @@ export default function LabDashboard() {
       return matchesSearch && matchesStatus && matchesPriority;
     });
 
-    return [...list].sort((a, b) => {
-      const isOverdueA = isTestOverdue(a) ? 1 : 0;
-      const isOverdueB = isTestOverdue(b) ? 1 : 0;
-      if (isOverdueA !== isOverdueB) return isOverdueB - isOverdueA;
-      return (b.id || "").localeCompare(a.id || "");
-    });
+    return [...list].sort(compareTestRecords);
   }, [testsList, searchQuery, statusFilter, priorityFilter]);
 
   const completedCount = useMemo(() => {
